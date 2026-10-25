@@ -1,0 +1,35 @@
+# Workbox spec workflow: the single workflow source for this repository.
+# CLAUDE.md and the other pointer files are generated from here (`hyperfide spec render`).
+
+[meta]
+name            = "Workbox Workflow"
+active_feature  = "workbox"
+source_of_truth = "spec/ (kvx). Generated files are pointers; regenerate, never hand-edit."
+
+[mode]
+name = "parallel"
+
+[limits]
+max_in_progress = 6
+
+[agents]
+driver = "claude"
+max    = 6
+ttl    = 3600
+
+[principle]
+vertical_first  = "Each wave delivers a runnable end-to-end capability: engine, in-box runner, wb command, surface and test together. A layer without its consumer in the same wave is not done."
+task_driven     = "Work is driven by spec/workbox/spec.kvx. Take the lowest-wave eligible task whose requires are done, set it in_progress, do it, mark it, move on."
+no_false_success = "Never mark a task done that did not meet its acceptance criteria. Tests run real sandboxes on the real host primitives; a green test driven by a fake is not done."
+plain_js        = "Plain JavaScript, Node 22 ESM, JSDoc for types, node --test for tests. No TypeScript, no bundler, no transpile step."
+minimal_deps    = "Zero runtime dependencies in protocol, runner and wb (they run inside the box on the mounted runtime). Other packages take declared, pinned dependencies only."
+evidence        = "Evidence is revision, command, exit code, log path. Qualification entries are at most six lines."
+publish         = "After every completed task: format, one build, one verify_cmd, then commit from the repository root with a message that describes the real change."
+
+[loop]
+step_1 = "Read spec/workbox/spec.kvx: [meta] status, [req.*], the [task.*] list with status, wave and requires."
+step_2 = "Select the lowest-wave pending task whose every requires is done; set status = in_progress."
+step_3 = "Implement the whole task against every referenced acceptance criterion with real code paths."
+step_4 = "Qualify: format touched files, run the task verify_cmd once; at most two task-scoped repair cycles."
+step_5 = "Record anything unrelated or pre-existing in spec/workbox/qualification.kvx; never chase it."
+step_6 = "Mark done only after verify_cmd passes; commit and push."

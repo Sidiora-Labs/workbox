@@ -1,0 +1,11 @@
+{
+  "name": "@workbox/cli",
+  "version": "0.1.0-dev",
+  "description": "Operator command line: doctor, rootfs, runtime, sandboxes, serve.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22.13.0" },
+  "exports": { ".": "./src/index.js" },
+  "files": ["src"],
+  "scripts": { "test": "node --test test/" }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "workbox",
+  "version": "0.1.0-dev",
+  "private": true,
+  "description": "CLI-native agent sandbox: bubblewrap + cgroup v2 isolation, an in-box runner, the wb toolkit, and REST/WS, SDK, MCP and CLI surfaces.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@12.8.1",
+  "scripts": {
+    "test": "pnpm -r --workspace-concurrency=1 run test",
+    "lint": "eslint .",
+    "fmt": "prettier --write \"packages/**/*.{js,json,md}\" \"*.md\"",
+    "fmt:check": "prettier --check \"packages/**/*.{js,json,md}\""
+  },
+  "devDependencies": {
+    "@eslint/js": "9.18.0",
+    "eslint": "9.18.0",
+    "prettier": "3.4.2"
+  }
+}

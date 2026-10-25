@@ -1,0 +1,11 @@
+{
+  "name": "@workbox/mcp",
+  "version": "0.1.0-dev",
+  "description": "MCP server exposing sandbox lifecycle and exec over the SDK.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22.13.0" },
+  "exports": { ".": "./src/index.js" },
+  "files": ["src"],
+  "scripts": { "test": "node --test test/" }
+}

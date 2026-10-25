@@ -1,0 +1,367 @@
+# workbox — a production sandbox for AI agents whose primary interface is the shell.
+# Requirements, decisions, design, then the task list in dependency waves.
+
+[meta]
+feature     = "workbox"
+name        = "Workbox: CLI-native agent sandbox"
+version     = "0.1.0-dev"
+status      = "in_progress"
+review_date = "2026-10-25"
+intro       = "Workbox gives an agent a persistent, isolated Linux environment it controls entirely through commands. Isolation is bubblewrap inside a range-mapped user namespace with cgroup v2 limits and a private overlay over a shared read-only rootfs. Inside the box a small runner owns durable sessions and the wb toolkit covers what the box cannot do alone: asks to a human, brokered secrets, evidence, checkpoints, events, leases, network policy and toolchain presets. The host exposes lifecycle and exec over REST, WebSocket, a JS SDK, an MCP server and an operator CLI, in the operation shape Hyperfide uses for its Railway and Blaxel providers."
+
+[decisions]
+d_1  = "RULED by the owner on 2026-10-25: isolation is bubblewrap inside a range-mapped user namespace with cgroup v2 limits. No Docker or microVM dependency at runtime; Docker is used only to build the base rootfs."
+d_2  = "RULED by the owner on 2026-10-25: plain JavaScript on Node 22 ESM with JSDoc types and node --test. No TypeScript, no bundler."
+d_3  = "RULED by the owner on 2026-10-25: one pnpm monorepo: protocol, core, runner, wb, server, sdk, mcp, cli."
+d_4  = "RULED by the owner on 2026-10-25: the agent's primary interface is the shell. The harness gets exec plus lifecycle; the MCP server mirrors only that. Everything else is a command the agent discovers with --help."
+d_5  = "RULED by the owner on 2026-10-25: the base rootfs is minimal Debian. Toolchains arrive through `wb preset <name>` bundles that record preparation manifests."
+d_6  = "RULED by the owner on 2026-10-25: wb v1 brokered commands are ask, secret, run, checkpoint, event, lease, session, net, preset and status/help/tools. Web search, key-value memory and model calls are excluded from v1."
+d_7  = "Flagged (proceeding on the recommendation): every sandbox shares one subordinate uid range (base 200000, 65536 ids) and the rootfs is uid-shifted on disk once at build time. Per-sandbox ranges through idmapped mounts are a later hardening task."
+d_8  = "Flagged (proceeding on the recommendation): the in-box runner is a Node process. Measured RSS per sandbox is recorded by task 4.3; density beyond that is a later optimisation."
+d_9  = "Flagged (proceeding on the recommendation): bubblewrap 0.9 on this host lacks --overlay, so the launch chain mounts the overlay inside the user namespace before exec'ing bwrap. No overlay mount state exists on the host."
+d_10 = "Flagged (proceeding on the recommendation): no_new_privs is set for every sandbox process and the bounding set equals the granted capability set, so setuid binaries and file capabilities cannot raise privilege inside the box. sudo does not work for non-root slots."
+d_11 = "Flagged (proceeding on the recommendation): egress rules are nftables installed from the host into the sandbox network namespace before CAP_NET_ADMIN is dropped. Domain allowlists are enforced by the host proxy and only bind proxy-aware clients; non-proxy traffic in allowlist mode is dropped."
+d_12 = "Flagged (proceeding on the recommendation): the runtime (Node 22, protocol, runner, wb) is installed once on the host and bind-mounted read-only at /opt/workbox in every sandbox; the rootfs itself carries no JavaScript runtime. Only wb is on the agent's PATH."
+
+[req.1]
+title = "Isolation"
+story = "As an operator, I need every sandbox to be a namespaced, capability-limited, resource-bounded process tree on a private writable overlay, so that an agent with root inside the box cannot touch the host, other sandboxes or the shared rootfs."
+ac_1 = "A sandbox SHALL run in its own pid, net, ipc, uts, mount and cgroup namespaces inside a user namespace that maps inner uids and gids 0..65535 to the configured subordinate range; inner uid 0 SHALL equal the host base uid and files written inside SHALL appear on the host owned by the mapped range."
+ac_2 = "Every sandbox process SHALL carry exactly the 14-capability default profile (chown, dac_override, fowner, fsetid, kill, setgid, setuid, setpcap, net_bind_service, net_raw, sys_chroot, mknod, audit_write, setfcap) as effective, permitted and bounding sets, with NoNewPrivs set; mount(2) SHALL fail with EPERM inside the box."
+ac_3 = "cgroup v2 limits memory.max, memory.swap.max, cpu.max and pids.max SHALL be applied to the sandbox cgroup before any sandbox process executes; a process exceeding memory.max SHALL be OOM-killed inside the sandbox; destroy SHALL use cgroup.kill and wait for cgroup.procs to be empty."
+ac_4 = "Writes SHALL land only in the sandbox upper directory; the base rootfs SHALL be byte-identical after a sandbox exits; no overlay or bind mount belonging to the sandbox SHALL remain in the host mount table after exit."
+ac_5 = "A sandbox created with network mode none SHALL have only the loopback interface."
+ac_6 = "A seccomp filter SHALL deny the Docker default denylist (including mount, umount2, pivot_root, setns, unshare, keyctl, add_key, request_key, kexec_load, open_by_handle_at, ptrace of non-descendants, bpf, perf_event_open, userfaultfd) with EPERM, and ordinary toolchain operations SHALL be unaffected."
+
+[req.2]
+title = "Lifecycle and durability"
+story = "As a control plane, I need sandbox state that survives daemon restarts and never lies about what is alive, so that reconciliation can reattach to running work instead of duplicating or destroying it."
+ac_1 = "Sandbox desired state SHALL follow REQUESTED, PROVISIONING, BOOTSTRAPPING, READY, DRAINING, DELETING, DELETED with a QUARANTINED branch; observed health SHALL be a separate field in HEALTHY, SUSPECT, UNKNOWN, ABSENT; every transition SHALL be recorded with a timestamp and reason; an illegal transition SHALL be rejected with a machine-readable code."
+ac_2 = "Each launch SHALL issue a boot_id and a single-use boot nonce delivered through the runtime directory, never through argv or environment; the first host connection SHALL consume the nonce; a second presentation of the same nonce SHALL be refused and the sandbox marked QUARANTINED."
+ac_3 = "After the supervising process is killed and restarted, every running sandbox SHALL be rediscovered from its store record and cgroup, its runner socket reconnected, and its sessions listed without loss; a sandbox whose cgroup is empty SHALL be observed ABSENT and never re-launched implicitly."
+ac_4 = "Destroy SHALL kill the cgroup, wait for it to empty, remove the upper, work and run directories, and record DELETED only after the cgroup directory is removed; a destroy that cannot confirm absence SHALL leave the record in DELETING with the failure reason."
+ac_5 = "All records SHALL persist in a SQLite store under the Workbox root with WAL mode; an audit log of host actions SHALL be appended as NDJSON lines each carrying the SHA-256 of the previous line."
+
+[req.3]
+title = "Sessions and exec"
+story = "As a harness, I need durable named sessions inside the box that survive my disconnects, so that long-running agents and builds keep running while I reattach to their output."
+ac_1 = "The runner SHALL start a session from argv, cwd, env, uid and an optional name, emit output events with a per-session sequence number, and emit an exit event with code and signal; sessions SHALL continue when the host connection drops."
+ac_2 = "Attach SHALL replay retained output from a requested sequence within an 8 MiB ring and then stream live; when the requested sequence is no longer retained the reply SHALL state the gap explicitly."
+ac_3 = "Input, signal, detach and stop SHALL be supported; detach SHALL not terminate the process; stop SHALL send SIGTERM and escalate to SIGKILL after the configured grace."
+ac_4 = "An exec helper SHALL run a command to completion with a timeout and bounded capture and SHALL report truncation explicitly; a timed-out command SHALL be stopped through the same escalation."
+ac_5 = "A PTY session SHALL present a tty to the child and support resize; the operator CLI SHALL open an interactive shell through it."
+
+[req.4]
+title = "The wb toolkit"
+story = "As an agent inside the box, I need one command family that covers what the box cannot do alone, each discoverable with --help and scriptable with --json, so that I never need a fixed tool schema."
+ac_1 = "wb SHALL be on PATH; every subcommand SHALL accept --help and --json; `wb tools` SHALL list every subcommand with a one-line summary; `wb status` SHALL report sandbox id, boot id, limits, current usage and network mode."
+ac_2 = "`wb run -- <cmd>` SHALL execute the command, stream its output to the terminal, and record an evidence envelope with argv, cwd, exit code, signal, start and end time, duration, sampled peak RSS, stdout and stderr SHA-256 and a log artifact reference; the full log SHALL be stored as a content-addressed artifact through the shared outbox and the host SHALL verify the digest before accepting it."
+ac_3 = "`wb session start|list|attach|input|stop` SHALL expose req.3 to the agent."
+ac_4 = "`wb ask raise|status|list|wait` SHALL support kinds question, decision, permission and secret; wait SHALL block until an answer or the timeout; answers SHALL arrive only through the host API."
+ac_5 = "`wb secret exec <ref>... -- <cmd>` SHALL inject the referenced values into the child's environment only; `wb secret list` SHALL show references only; secret values SHALL never appear in the store, audit, spool, evidence or sandbox filesystem; a reference outside the sandbox's policy SHALL be refused."
+ac_6 = "`wb event emit`, `wb lease status|renew`, `wb checkpoint create|list`, `wb artifact put|get|list` and `wb net policy|test` SHALL be implemented against the broker with audit records."
+ac_7 = "`wb preset list|install <name>` SHALL install the web, python, rust, go, system and agents bundles and write a preparation manifest with tool versions and digests to /var/lib/workbox-preset/<name>.json, mirrored to the host store."
+
+[req.5]
+title = "Network policy"
+story = "As an operator, I need sandboxes to reach the internet for packages while being unable to reach my host, my network or anything I did not allow, so that a compromised agent is contained."
+ac_1 = "Network modes SHALL be none, egress and allowlist; egress SHALL permit public destinations and DNS and SHALL deny RFC1918, link-local, multicast and the gateway address except the proxy and DNS ports."
+ac_2 = "allowlist mode SHALL drop every destination except the host proxy; the proxy SHALL enforce the sandbox's host allowlist on CONNECT and absolute-URI requests, answer 403 on denial and write an audit event."
+ac_3 = "Rules SHALL be installed from the host into the sandbox network namespace before the sandbox payload starts and SHALL not be modifiable from inside the box."
+
+[req.6]
+title = "Harness surfaces"
+story = "As a control plane or a developer, I need REST and WebSocket, a typed SDK, an MCP server and an operator CLI that all expose the same lifecycle and exec, so that any harness can drive sandboxes."
+ac_1 = "The server SHALL expose sandbox create, list with cursor, get, delete and drain; exec; files read, write and list; sessions over WebSocket; evidence and artifacts; checkpoints; asks; events; with bearer authentication, scoped keys, 401 and 403 responses and JSON schema validation returning 400 with field paths."
+ac_2 = "Inventory SHALL return a cursor and a complete flag; inspect SHALL return desired state, observed health and last observation time separately; a reconcile endpoint SHALL trigger req.2 ac_3."
+ac_3 = "The server SHALL emit structured JSON logs, serve Prometheus metrics at /metrics, liveness at /healthz and readiness at /readyz, and append the req.2 ac_5 audit log for every mutating request."
+ac_4 = "The SDK SHALL cover every route with streaming for sessions; the MCP server SHALL expose sandbox_create, sandbox_list, sandbox_exec and sandbox_destroy and nothing else; the CLI SHALL perform operator tasks against a local engine or a remote server."
+
+[req.7]
+title = "Preparation, deployment and documentation"
+story = "As an operator, I need to build the rootfs and runtime reproducibly, deploy the daemon as a service, verify host prerequisites, and read documentation that matches the system, so that Workbox can be stood up and audited."
+ac_1 = "`workbox rootfs build minimal` SHALL build the Dockerfile, export the filesystem, shift ownership into the subordinate range preserving setuid and setgid bits, and write a manifest with a content digest; rebuilding from identical inputs SHALL yield the identical digest."
+ac_2 = "`workbox runtime install` SHALL install Node 22 from a checksummed tarball plus protocol, runner and wb with a manifest, and sandboxes SHALL mount it read-only at /opt/workbox with only wb on PATH."
+ac_3 = "A systemd unit, a server Dockerfile and an install script SHALL be provided; `workbox doctor` SHALL report every host prerequisite with pass or fail and a remedy."
+ac_4 = "docs/ SHALL contain the architecture, the security model with its stated limits, the wb reference generated from `wb tools --json`, and the mapping to the Hyperfide provider contract."
+ac_5 = "An end-to-end test SHALL create 20 concurrent sandboxes through the SDK and record create-to-ready p50 and p95 and per-sandbox RSS into docs/measurements.md."
+
+[design]
+overview = "Eight packages. protocol: NDJSON framing and envelopes shared by host, runner and wb. core: the engine (config, store, audit, cgroups, rootfs and runtime builders, launch chain, netns and proxy, seccomp, sandbox state machine, manager, per-sandbox supervisor, broker). runner: the in-box supervisor, PID 2 under bwrap, serving a unix socket at /run/workbox/runner.sock for both wb and the host. wb: the agent CLI. server, sdk, mcp, cli: the harness surfaces over core."
+launch_chain = "sh (writes its pid into the sandbox cgroup) -> unshare --user --mount --map-users --map-groups --setuid 0 --setgid 0 -> sh (mounts the overlay) -> bwrap (namespaces, binds, caps) -> setpriv (no_new_privs, bounding set) -> /opt/workbox/bin/init.sh -> node runner. The host then attaches slirp4netns and installs nftables rules in the sandbox netns, then signals the runner to proceed."
+transport = "One unix socket per sandbox in the bind-mounted run directory. The host connects to the runner; both sides send requests, responses and events multiplexed by id over NDJSON. wb connects to the same socket locally. Brokered calls from wb travel wb -> runner -> host and are policy-checked and audited on the host."
+artifacts = "wb writes large payloads into the shared outbox under the run directory and sends only path, size and digest; the host opens with O_NOFOLLOW, requires a regular file owned by the mapped range, verifies the digest while streaming into the content-addressed store, then unlinks."
+rootfs_runtime = "The rootfs is Debian bookworm-slim plus bash, coreutils, curl, git, ca-certificates, procps and util-linux, exported from Docker and uid-shifted. The runtime directory holds Node 22, protocol, runner and wb and is bind-mounted read-only at /opt/workbox."
+hyperfide = "The server's operations map to Hyperfide's provider contract: capabilities, prepare (rootfs and runtime build), ensureSandbox (create with idempotency key), inspect, inventory, bootstrap (boot identity and readiness), startSupervisor (sessions), attach/listSessions/signal, captureBase/restoreBase (checkpoints), destroy and reconcile."
+
+[documentation]
+mode      = "manual"
+status    = "pending"
+audiences = ["operator", "developer", "agent"]
+targets   = ["README.md", "docs/**"]
+
+[tasks]
+heading = "Implementation Plan: workbox"
+
+# ── Wave 0: foundation ───────────────────────────────────────────────────────
+
+[task.0.1]
+title      = "Workspace scaffold and spec"
+status     = "done"
+wave       = 0
+requires   = []
+touches    = ["package.json", "pnpm-workspace.yaml", "eslint.config.js", "README.md", "spec/**", "packages/*/package.json", "packages/*/src/index.js"]
+verify_cmd = "pnpm install --frozen-lockfile && pnpm lint && hyperfide spec lint --root /root/workbox"
+do_1       = "Create the pnpm workspace with eight packages, eslint flat config, prettier, editorconfig and README."
+do_2       = "Write spec/workflow.kvx and spec/workbox/spec.kvx with requirements, decisions, design and the waved task list."
+reqs       = []
+
+[task.0.2]
+title      = "Protocol package"
+status     = "pending"
+wave       = 0
+requires   = ["0.1"]
+touches    = ["packages/protocol/**"]
+verify_cmd = "node --test packages/protocol/test/"
+do_1       = "Implement NDJSON framing with a bounded line length, request/response/event envelopes with ids and correlation, typed error codes, and a Peer class that multiplexes requests in both directions over any duplex stream with timeouts and cancellation."
+do_2       = "Define the message catalogue: runner.hello, runner.ready, session.*, fs.*, broker.* with validators written by hand (no dependencies)."
+do_3       = "Tests cover framing edge cases, oversized lines, interleaved bidirectional requests, timeouts and peer close."
+reqs       = ["3.1", "3.2"]
+
+[task.0.3]
+title      = "Core foundation: config, logger, errors, store, audit"
+status     = "pending"
+wave       = 0
+requires   = ["0.2"]
+touches    = ["packages/core/src/config.js", "packages/core/src/log.js", "packages/core/src/errors.js", "packages/core/src/ids.js", "packages/core/src/store.js", "packages/core/src/audit.js", "packages/core/test/store.test.js", "packages/core/test/audit.test.js"]
+verify_cmd = "node --test packages/core/test/store.test.js packages/core/test/audit.test.js"
+do_1       = "Config resolves the Workbox root (default /var/lib/workbox, WORKBOX_ROOT override), subordinate uid base and size, cgroup root, defaults for limits and network mode."
+do_2       = "Store uses node:sqlite in WAL mode with migrations and tables for sandboxes, transitions, boots, sessions, events, evidence, artifacts, leases, asks, preset manifests and secret policy; every write is a transaction."
+do_3       = "Audit appends NDJSON lines with a SHA-256 chain and a verify function; the logger writes structured JSON with level and component."
+reqs       = ["2.1", "2.5"]
+
+[task.0.4]
+title      = "Host doctor and cgroup v2 management"
+status     = "pending"
+wave       = 0
+requires   = ["0.3"]
+touches    = ["packages/core/src/host/doctor.js", "packages/core/src/host/cgroup.js", "packages/core/test/doctor.test.js", "packages/core/test/cgroup.test.js"]
+verify_cmd = "node --test packages/core/test/doctor.test.js packages/core/test/cgroup.test.js"
+do_1       = "Doctor probes: root or CAP_SYS_ADMIN, bwrap version, unshare with --map-users and newuidmap, subordinate ranges for the daemon user, unprivileged userns, overlayfs in a userns, cgroup v2 controllers, slirp4netns, nft, docker for builds; each probe returns pass or fail with a remedy."
+do_2       = "Cgroup module creates the workbox parent with delegated controllers, creates per-sandbox groups, writes memory, cpu and pids limits, reads usage, kills via cgroup.kill, waits for emptiness and removes the directory."
+do_3       = "Tests create a real cgroup, place a process, assert limits in the files, kill and remove."
+reqs       = ["1.3", "7.3"]
+
+# ── Wave 1: a sandbox runs ───────────────────────────────────────────────────
+
+[task.1.1]
+title      = "Rootfs build with uid shift"
+status     = "pending"
+wave       = 1
+requires   = ["0.3"]
+touches    = ["rootfs/minimal/Dockerfile", "packages/core/src/host/rootfs.js", "packages/core/test/rootfs.test.js"]
+verify_cmd = "node --test packages/core/test/rootfs.test.js"
+do_1       = "Dockerfile: debian:bookworm-slim plus bash, coreutils, curl, git, ca-certificates, procps, util-linux, less, nano, a /etc/profile.d/workbox.sh that prepends /opt/workbox/bin to PATH, and /var/lib/workbox-preset."
+do_2       = "rootfs.js builds the image with docker build, exports with docker create and docker export, extracts with tar preserving ownership, then shifts every inode's uid and gid by the base while restoring setuid and setgid bits, and writes manifest.json with a sorted content digest of paths, modes, owners and file hashes."
+do_3       = "The test builds the real rootfs into a temporary Workbox root, checks shifted ownership, setuid preservation on /usr/bin/passwd, and digest stability on rebuild."
+reqs       = ["7.1"]
+
+[task.1.2]
+title      = "Runtime install"
+status     = "pending"
+wave       = 1
+requires   = ["0.3"]
+touches    = ["packages/core/src/host/runtime.js", "packages/core/test/runtime.test.js", "packages/runner/bin/init.sh", "packages/wb/bin/wb"]
+verify_cmd = "node --test packages/core/test/runtime.test.js"
+do_1       = "runtime.js installs the Node 22 tarball from a URL or local path after verifying its SHA-256 against SHASUMS256.txt, copies packages/protocol, packages/runner and packages/wb into lib/ with relative node_modules links, writes bin/wb and bin/init.sh wrappers, and manifest.json with versions and digests."
+do_2       = "The test installs from the locally cached tarball into a temporary root and asserts the layout, executable bits and manifest."
+reqs       = ["7.2"]
+
+[task.1.3]
+title      = "Launch chain, runner boot and supervisor attach"
+status     = "pending"
+wave       = 1
+requires   = ["0.4", "1.1", "1.2"]
+touches    = ["packages/core/src/host/launch.js", "packages/core/src/sandbox/supervisor.js", "packages/core/src/sandbox/state.js", "packages/runner/src/**", "packages/runner/bin/init.sh", "packages/core/test/launch.test.js"]
+verify_cmd = "node --test packages/core/test/launch.test.js"
+do_1       = "launch.js builds the argv chain from the design and the sandbox profile, prepares upper, work and run directories owned by the base uid, writes boot.json with boot_id and nonce into the run directory, and spawns with a pidfile and captured stderr."
+do_2       = "runner: init.sh execs setpriv then node; the runner serves /run/workbox/runner.sock, answers runner.hello with the boot identity, waits for the host go signal, and reports runner.ready with capability checks (uid map, caps, no_new_privs, mounts)."
+do_3       = "supervisor.js connects, consumes the nonce, refuses a second presentation, drives transitions PROVISIONING -> BOOTSTRAPPING -> READY, polls cgroup health, and destroys via cgroup.kill with directory cleanup."
+do_4       = "Tests: a sandbox boots and reports ready with the expected uid map, caps, NoNewPrivs and mount(2) EPERM; memory.max is enforced by an allocation that gets OOM-killed; no sandbox mounts remain on the host after destroy; the rootfs digest is unchanged."
+reqs       = ["1.1", "1.2", "1.3", "1.4", "1.5", "2.2", "2.4"]
+
+[task.1.4]
+title      = "Durable sessions and exec"
+status     = "pending"
+wave       = 1
+requires   = ["1.3"]
+touches    = ["packages/runner/src/sessions.js", "packages/runner/src/spool.js", "packages/core/src/sandbox/exec.js", "packages/core/test/sessions.test.js"]
+verify_cmd = "node --test packages/core/test/sessions.test.js"
+do_1       = "Sessions: start with argv, cwd, env, uid, name; per-session 8 MiB ring spool with sequence numbers; attach from seq with explicit gap; input, signal, detach, stop with TERM then KILL after grace; list."
+do_2       = "exec.js runs to completion with timeout and bounded capture and a truncated flag."
+do_3       = "Tests: output ordering, attach replay, gap reporting after overflow, survival across host disconnect and reconnect, stop escalation, exec timeout."
+reqs       = ["3.1", "3.2", "3.3", "3.4"]
+
+[task.1.5]
+title      = "wb base: status, tools, session, run with evidence"
+status     = "pending"
+wave       = 1
+requires   = ["1.4"]
+touches    = ["packages/wb/src/**", "packages/core/src/broker/status.js", "packages/core/src/broker/evidence.js", "packages/core/src/broker/artifacts.js", "packages/core/src/broker/outbox.js", "packages/core/test/wb.test.js"]
+verify_cmd = "node --test packages/core/test/wb.test.js"
+do_1       = "wb command framework: subcommand registry, --help and --json everywhere, exit codes, NDJSON client to the runner socket."
+do_2       = "wb status, wb tools, wb help, wb session start|list|attach|input|stop, wb run with the evidence envelope, outbox artifact hand-off and digest verification on the host."
+do_3       = "Tests run wb inside a real sandbox and assert every acceptance clause of req.4 ac_1 to ac_3."
+reqs       = ["4.1", "4.2", "4.3"]
+
+[task.1.6]
+title      = "Manager, reconcile and operator CLI"
+status     = "pending"
+wave       = 1
+requires   = ["1.5"]
+touches    = ["packages/core/src/sandbox/manager.js", "packages/core/src/index.js", "packages/cli/src/**", "packages/cli/test/cli.test.js"]
+verify_cmd = "node --test packages/cli/test/cli.test.js"
+do_1       = "manager.js: create, list, get, destroy, drain, reconcile on start (rediscover from store and cgroup, reconnect runner, mark ABSENT when the cgroup is empty), event fan-out."
+do_2       = "CLI: workbox doctor, rootfs build|list, runtime install|list, sandbox create|ls|inspect|rm|exec|shell|events; local engine mode."
+do_3       = "Tests: create through the CLI, kill the manager process, restart, assert the sandbox is rediscovered with sessions intact, then destroy and assert DELETED."
+reqs       = ["2.1", "2.3", "2.4", "6.4"]
+
+# ── Wave 2: network, hardening, broker, presets, pty ─────────────────────────
+
+[task.2.1]
+title      = "Network namespaces, egress policy and proxy"
+status     = "pending"
+wave       = 2
+requires   = ["1.6"]
+touches    = ["packages/core/src/host/netns.js", "packages/core/src/host/proxy.js", "packages/core/src/host/nft.js", "packages/core/src/broker/net.js", "packages/wb/src/commands/net.js", "packages/core/test/network.test.js"]
+verify_cmd = "node --test packages/core/test/network.test.js"
+do_1       = "netns.js attaches slirp4netns to the sandbox pid with a tap device, waits for readiness, and tears it down with the sandbox; nft.js renders and installs the ruleset for egress and allowlist modes via nsenter before the go signal."
+do_2       = "proxy.js is an HTTP CONNECT and absolute-URI forward proxy bound to the gateway-reachable address with per-sandbox allowlists, 403 on denial and audit events; the sandbox environment receives HTTP_PROXY, HTTPS_PROXY and NO_PROXY."
+do_3       = "wb net policy|test; tests cover none, egress and allowlist against a host listener and the proxy, deny of RFC1918 and the gateway, and that nft cannot be changed from inside."
+reqs       = ["5.1", "5.2", "5.3", "4.6"]
+
+[task.2.2]
+title      = "Seccomp filter"
+status     = "pending"
+wave       = 2
+requires   = ["1.6"]
+touches    = ["packages/core/src/host/seccomp.js", "packages/core/src/host/launch.js", "packages/core/test/seccomp.test.js"]
+verify_cmd = "node --test packages/core/test/seccomp.test.js"
+do_1       = "seccomp.js assembles a classic BPF program for x86_64: validate arch, deny the x32 ABI, return EPERM for the denylist, allow otherwise; the program is passed to bwrap --seccomp through an inherited fd."
+do_2       = "Tests: denied syscalls fail with EPERM inside a real sandbox, apt-style operations (fork, exec, chown, setuid, socket, epoll, io_uring absent) still work, and the filter is reported in /proc/self/status."
+reqs       = ["1.6"]
+
+[task.2.3]
+title      = "Broker: asks, secrets, events, leases, checkpoints, artifacts"
+status     = "pending"
+wave       = 2
+requires   = ["1.6"]
+touches    = ["packages/core/src/broker/**", "packages/core/src/secrets.js", "packages/wb/src/commands/ask.js", "packages/wb/src/commands/secret.js", "packages/wb/src/commands/event.js", "packages/wb/src/commands/lease.js", "packages/wb/src/commands/checkpoint.js", "packages/wb/src/commands/artifact.js", "packages/core/test/broker.test.js"]
+verify_cmd = "node --test packages/core/test/broker.test.js"
+do_1       = "Asks: raise with kind and payload, status, list, wait with timeout; answers through the manager API; channel plugins stdout and webhook; audit."
+do_2       = "Secrets: host-side provider reading a 0600 JSON file or environment; per-sandbox policy of allowed refs; secret exec resolves refs and the runner injects them only into the child env; redaction of registered values in spool and audit."
+do_3       = "Events with sequence and causation; leases issued per sandbox with TTL, renew and status including the derived offline deadline; checkpoints as tar of upper plus envelope JSON with digest, list and restore into a new sandbox; artifact put via outbox, get and list."
+do_4       = "Tests exercise each command inside a real sandbox and assert the negative cases: refused ref, value absent from store, audit and spool, second nonce refused, lease expiry."
+reqs       = ["4.4", "4.5", "4.6", "2.2"]
+
+[task.2.4]
+title      = "Presets"
+status     = "pending"
+wave       = 2
+requires   = ["2.1"]
+touches    = ["packages/wb/src/presets/**", "packages/wb/src/commands/preset.js", "packages/core/src/broker/presets.js", "packages/core/test/presets.test.js"]
+verify_cmd = "node --test packages/core/test/presets.test.js"
+do_1       = "Preset recipes as data: web (Node 22, pnpm, bun, Chromium with Playwright deps), python (3.12, uv), rust (rustup stable), go (latest stable tarball), system (build-essential, clang, cmake, pkg-config), agents (Claude Code and Codex CLIs plus the hyperfide binary when provided); each step is an argv with a verification command and version capture."
+do_2       = "wb preset list|install writes /var/lib/workbox-preset/<name>.json with versions and digests and mirrors it to the host store through the broker."
+do_3       = "The test installs python in a real sandbox with egress and asserts the manifest and that uv and python3 run."
+reqs       = ["4.7"]
+
+[task.2.5]
+title      = "PTY sessions and interactive shell"
+status     = "pending"
+wave       = 2
+requires   = ["1.6"]
+touches    = ["packages/runner/src/pty.js", "packages/runner/src/sessions.js", "packages/core/src/host/runtime.js", "packages/cli/src/commands/shell.js", "packages/core/test/pty.test.js"]
+verify_cmd = "node --test packages/core/test/pty.test.js"
+do_1       = "Add node-pty to the runtime bundle with its prebuilt binary verified against the rootfs glibc; sessions accept pty with rows and cols and support resize."
+do_2       = "workbox shell opens an interactive PTY session with raw mode and resize forwarding; tests assert isatty inside and resize propagation."
+reqs       = ["3.5"]
+
+# ── Wave 3: harness surfaces ─────────────────────────────────────────────────
+
+[task.3.1]
+title      = "REST and WebSocket server"
+status     = "pending"
+wave       = 3
+requires   = ["2.3"]
+touches    = ["packages/server/**"]
+verify_cmd = "node --test packages/server/test/"
+do_1       = "Fastify server with JSON schemas for every route, bearer auth with scoped keys from a config file, request ids, structured logs, audit of mutations, Prometheus metrics, /healthz and /readyz, graceful shutdown."
+do_2       = "Routes: sandboxes CRUD with cursor inventory and complete flag, inspect, drain, reconcile; exec; files; sessions over WebSocket; evidence and artifacts; checkpoints; asks list and answer; events stream."
+do_3       = "Tests run the server against a real engine and cover auth failures, schema 400s, lifecycle, exec, a WebSocket session and an ask answer round trip."
+reqs       = ["6.1", "6.2", "6.3"]
+
+[task.3.2]
+title      = "SDK"
+status     = "pending"
+wave       = 3
+requires   = ["3.1"]
+touches    = ["packages/sdk/**"]
+verify_cmd = "node --test packages/sdk/test/"
+do_1       = "WorkboxClient with typed JSDoc, retries with jitter on 5xx and network errors for idempotent calls, AbortSignal support, Sandbox handle with exec, sessions (async iterator of events), files, evidence, checkpoints, asks."
+do_2       = "Tests exercise every route against a real server."
+reqs       = ["6.4"]
+
+[task.3.3]
+title      = "MCP server"
+status     = "pending"
+wave       = 3
+requires   = ["3.2"]
+touches    = ["packages/mcp/**"]
+verify_cmd = "node --test packages/mcp/test/"
+do_1       = "stdio MCP server exposing sandbox_create, sandbox_list, sandbox_exec and sandbox_destroy over the SDK with concise descriptions and bounded output."
+do_2       = "Tests spawn the server, list tools and run exec in a real sandbox."
+reqs       = ["6.4"]
+
+[task.3.4]
+title      = "CLI remote mode and serve"
+status     = "pending"
+wave       = 3
+requires   = ["3.2"]
+touches    = ["packages/cli/**"]
+verify_cmd = "node --test packages/cli/test/remote.test.js"
+do_1       = "workbox serve starts the server with a config file; every sandbox command accepts --server and --token and routes through the SDK."
+do_2       = "Tests cover serve plus a remote create, exec and rm."
+reqs       = ["6.4"]
+
+# ── Wave 4: deploy, docs, measurement ────────────────────────────────────────
+
+[task.4.1]
+title      = "Deployment assets"
+status     = "pending"
+wave       = 4
+requires   = ["3.4"]
+touches    = ["deploy/**", "packages/cli/src/commands/doctor.js"]
+verify_cmd = "bash deploy/check.sh"
+do_1       = "systemd unit with hardening directives compatible with the launch chain, a server Dockerfile that is documented as needing privileged mode, install.sh that creates the Workbox root, subordinate ranges and the cgroup parent, and deploy/check.sh that validates the unit and Dockerfile syntax and runs workbox doctor."
+reqs       = ["7.3"]
+
+[task.4.2]
+title      = "Documentation"
+status     = "pending"
+wave       = 4
+requires   = ["3.3", "2.4", "2.5"]
+touches    = ["docs/**", "README.md"]
+verify_cmd = "node docs/check.mjs"
+do_1       = "docs/architecture.md, docs/security.md with limits, docs/wb.md generated from wb tools --json by docs/gen-wb.mjs, docs/hyperfide-provider.md mapping each provider operation to an endpoint, docs/operations.md; docs/check.mjs asserts the generated reference is current and every link resolves."
+reqs       = ["7.4"]
+
+[task.4.3]
+title      = "End-to-end and density measurement"
+status     = "pending"
+wave       = 4
+requires   = ["3.3", "2.1", "2.2"]
+touches    = ["test/e2e/**", "docs/measurements.md"]
+verify_cmd = "node --test test/e2e/"
+do_1       = "e2e: through the SDK create a sandbox, run wb run, raise and answer an ask, create and restore a checkpoint, destroy; then create 20 sandboxes concurrently and record create-to-ready p50 and p95 and runner RSS per sandbox into docs/measurements.md."
+reqs       = ["7.5"]

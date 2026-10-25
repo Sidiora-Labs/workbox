@@ -1,0 +1,68 @@
+# -------------------------------------------------------------------
+# Dependencies
+# -------------------------------------------------------------------
+node_modules/
+jspm_packages/
+bower_components/
+.pnpm-store/
+
+# -------------------------------------------------------------------
+# Environment Secrets (NEVER commit these)
+# -------------------------------------------------------------------
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+
+# -------------------------------------------------------------------
+# Production Build Outputs
+# -------------------------------------------------------------------
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+.svelte-kit/
+.vitepress/dist/
+
+# -------------------------------------------------------------------
+# Logs and Debugging
+# -------------------------------------------------------------------
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# -------------------------------------------------------------------
+# Testing and Coverage
+# -------------------------------------------------------------------
+coverage/
+.nyc_output/
+
+# -------------------------------------------------------------------
+# Linters, Compilers, and Tool Caches
+# -------------------------------------------------------------------
+.eslintcache
+.stylelintcache
+.cache/
+.parcel-cache/
+.turbo/
+*.tsbuildinfo
+.node_repl_history
+
+# -------------------------------------------------------------------
+# System and IDE Files (Optional - often better suited for global gitignore)
+# -------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Hyperfide / Codify local index
+.codegraph/
