@@ -89,3 +89,14 @@ Workbox gives an agent a persistent, isolated Linux environment it controls enti
 4. docs/ SHALL contain the architecture, the security model with its stated limits, the wb reference generated from `wb tools --json`, and the mapping to the Hyperfide provider contract.
 5. An end-to-end test SHALL create 20 concurrent sandboxes through the SDK and record create-to-ready p50 and p95 and per-sandbox RSS into docs/measurements.md.
 
+## Requirement 8: Test layers and code quality
+
+**User Story:** As the owner, I need every module proven at unit, integration and end-to-end level with a gate that cannot be skipped, so that done means tested and the code stays at a strict quality bar.
+
+### Acceptance Criteria
+
+1. Every file under packages/<p>/src/ SHALL have a unit test at packages/<p>/test/unit/<same relative path>.test.js; scripts/check-tests.mjs SHALL fail when any module lacks one or when a test file lives outside test/unit, test/integration or test/helpers.
+2. Every package with real code SHALL have at least one integration test under test/integration/ that exercises its modules together against real processes, sockets or files, never fakes; once the server package is real, test/e2e SHALL hold end-to-end tests that drive user-facing flows through the public surfaces.
+3. pnpm test:coverage SHALL run every test with Node's coverage and fail below 90 percent lines, 80 percent branches and 90 percent functions over packages/*/src.
+4. pnpm lint SHALL pass with the strict rule set (eqeqeq, prefer-const, no-shadow, complexity 20, max-depth 4, max-params 5 and the rest of eslint.config.js) and every exported symbol SHALL carry a JSDoc comment.
+

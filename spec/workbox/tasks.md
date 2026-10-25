@@ -23,6 +23,10 @@
     - Cgroup module creates the workbox parent with delegated controllers, creates per-sandbox groups, writes memory, cpu and pids limits, reads usage, kills via cgroup.kill, waits for emptiness and removes the directory.
     - Tests create a real cgroup, place a process, assert limits in the files, kill and remove.
     - _Requirements: 1.3, 7.3_
+  - [x] 0.5 Quality gates: 1:1 test mapping, coverage thresholds, strict lint
+    - scripts/check-tests.mjs enforces req.8 ac_1 and ac_2; package.json gains test, test:coverage and check:tests scripts with the thresholds of req.8 ac_3.
+    - eslint.config.js carries the strict rule set; the protocol package is restructured into test/unit (one file per module, including envelope, errors, methods, peer and index) and test/integration (the peer over a real unix socket).
+    - _Requirements: 8.1, 8.2, 8.3, 8.4_
   - [ ] 1.1 Rootfs build with uid shift
     - Dockerfile: debian:bookworm-slim plus bash, coreutils, curl, git, ca-certificates, procps, util-linux, less, nano, a /etc/profile.d/workbox.sh that prepends /opt/workbox/bin to PATH, and /var/lib/workbox-preset.
     - rootfs.js builds the image with docker build, exports with docker create and docker export, extracts with tar preserving ownership, then shifts every inode's uid and gid by the base while restoring setuid and setgid bits, and writes manifest.json with a sorted content digest of paths, modes, owners and file hashes.
@@ -109,7 +113,7 @@
 ```json
 {
   "waves": [
-    { "id": 0,  "tasks": ["0.1", "0.2", "0.3", "0.4"] },
+    { "id": 0,  "tasks": ["0.1", "0.2", "0.3", "0.4", "0.5"] },
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
     { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5"] },
     { "id": 3,  "tasks": ["3.1", "3.2", "3.3", "3.4"] },

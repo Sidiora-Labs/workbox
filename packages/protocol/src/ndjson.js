@@ -7,7 +7,7 @@ export const DEFAULT_MAX_LINE_BYTES = 8 * 1024 * 1024;
  * @returns {Buffer} the JSON encoding followed by a newline
  */
 export function encodeFrame(value) {
-  return Buffer.from(JSON.stringify(value) + '\n', 'utf8');
+  return Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
 }
 
 /**

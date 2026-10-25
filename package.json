@@ -10,10 +10,12 @@
   },
   "packageManager": "pnpm@12.8.1",
   "scripts": {
-    "test": "pnpm -r --workspace-concurrency=1 run test",
+    "test": "node scripts/check-tests.mjs && node --test \"packages/*/test/**/*.test.js\" \"test/e2e/*.test.js\"",
+    "test:coverage": "node scripts/check-tests.mjs && node --test --experimental-test-coverage --test-coverage-include=\"packages/*/src/**/*.js\" --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90 \"packages/*/test/**/*.test.js\"",
+    "check:tests": "node scripts/check-tests.mjs",
     "lint": "eslint .",
-    "fmt": "prettier --write \"packages/**/*.{js,json,md}\" \"*.md\"",
-    "fmt:check": "prettier --check \"packages/**/*.{js,json,md}\""
+    "fmt": "prettier --write \"packages/**/*.{js,json,md}\" \"scripts/*.mjs\" \"*.md\"",
+    "fmt:check": "prettier --check \"packages/**/*.{js,json,md}\" \"scripts/*.mjs\""
   },
   "devDependencies": {
     "@eslint/js": "9.18.0",

@@ -100,7 +100,10 @@ export class Peer extends EventEmitter {
         entry.reject(new ProtocolError(Codes.CANCELLED, `${method} cancelled`));
       };
       if (opts.signal) {
-        if (opts.signal.aborted) return onAbort();
+        if (opts.signal.aborted) {
+          onAbort();
+          return;
+        }
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
       if (timeoutMs > 0) {
@@ -258,7 +261,7 @@ export class Peer extends EventEmitter {
 function summarize(x) {
   try {
     const s = JSON.stringify(x);
-    return s.length > 200 ? s.slice(0, 200) + '…' : s;
+    return s.length > 200 ? `${s.slice(0, 200)}…` : s;
   } catch {
     return String(x);
   }

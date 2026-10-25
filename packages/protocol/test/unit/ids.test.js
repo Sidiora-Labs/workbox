@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { newId, isId, idTime } from '../src/ids.js';
+import { newId, isId, idTime } from '../../src/ids.js';
 
 test('ids are 26 chars, unique and time-ordered', () => {
   const t0 = 1_700_000_000_000;

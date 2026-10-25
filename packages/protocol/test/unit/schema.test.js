@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { v, validate, assertValid } from '../src/schema.js';
-import { validateParams, Methods, methodNames } from '../src/methods.js';
-import { Codes } from '../src/errors.js';
+import { v, validate, assertValid } from '../../src/schema.js';
+import { validateParams, Methods, methodNames } from '../../src/methods.js';
+import { Codes } from '../../src/errors.js';
 
 test('validate reports every error with its path', () => {
   const s = v.object(
@@ -82,4 +82,40 @@ test('method catalogue validates params and rejects unknown methods', () => {
   );
   for (const name of methodNames())
     assert.ok(Methods[name].doc.length > 10, `${name} has a doc line`);
+});
+
+test('every kind rejects the wrong primitive type', () => {
+  const cases = [
+    [v.string(), 1, 'must be a string'],
+    [v.integer(), 'x', 'must be a number'],
+    [v.number(), NaN, 'must be a number'],
+    [v.boolean(), 'true', 'must be a boolean'],
+    [v.array(v.any()), {}, 'must be an array'],
+    [v.object({}), [], 'must be an object'],
+    [v.record(v.any()), [], 'must be an object'],
+    [{ kind: 'mystery' }, 1, 'unknown schema kind mystery'],
+  ];
+  for (const [schema, value, message] of cases) {
+    const r = validate(schema, value);
+    assert.equal(r.ok, false);
+    assert.equal(r.errors[0].message, message);
+  }
+  assert.ok(validate(v.any(), { anything: [1, null] }).ok);
+  assert.equal(
+    validate(v.array(v.integer(), { min: 2 }), [1]).errors[0].message,
+    'must have at least 2 items',
+  );
+  assert.equal(
+    validate(v.string({ max: 1 }), 'ab').errors[0].message,
+    'must have at most 1 characters',
+  );
+  assert.equal(validate(v.integer({ max: 1 }), 2).errors[0].message, 'must be <= 1');
+  assert.equal(
+    validate(v.object({ a: v.string() }, { additional: true }), { a: 'x', b: 1 }).ok,
+    true,
+  );
+  assert.equal(
+    validate(v.record(v.string(), { max: 1 }), { a: 'x', b: 'y' }).errors[0].message,
+    'must have at most 1 keys',
+  );
 });

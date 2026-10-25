@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { once } from 'node:events';
-import { Peer } from '../src/peer.js';
-import { ProtocolError, Codes } from '../src/errors.js';
-import { encodeFrame } from '../src/ndjson.js';
+import { Peer } from '../../src/peer.js';
+import { ProtocolError, Codes } from '../../src/errors.js';
+import { encodeFrame } from '../../src/ndjson.js';
 
 /** Build a connected pair of Peers over a unix socket. */
 async function pair(opts = {}) {
@@ -36,7 +36,9 @@ test('requests flow both ways and interleave', async () => {
   try {
     b.handle('echo', async (p) => p);
     b.handle('slow', async (p) => {
-      await new Promise((r) => setTimeout(r, p.ms));
+      await new Promise((r) => {
+        setTimeout(r, p.ms);
+      });
       return { done: p.ms };
     });
     a.handle('ping', () => 'pong');
@@ -107,18 +109,20 @@ test('timeouts reject, cancel the handler and ignore late responses', async () =
     b.handle(
       'hang',
       (_p, ctx) =>
-        new Promise((resolve) =>
+        new Promise((resolve) => {
           ctx.signal.addEventListener('abort', () => {
             aborted = true;
             resolve('late');
-          }),
-        ),
+          });
+        }),
     );
     await assert.rejects(
       a.request('hang', {}, { timeoutMs: 50 }),
       (e) => e.code === Codes.TIMEOUT && e.data.timeoutMs === 50,
     );
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => {
+      setTimeout(r, 30);
+    });
     assert.equal(aborted, true);
     assert.equal(a.pending.size, 0);
     const ac = new AbortController();
@@ -153,7 +157,9 @@ test('malformed and oversized input is fatal for the receiving peer only', async
     const errors = [];
     b.on('protocolError', (e) => errors.push(e.code));
     raw.write(encodeFrame({ t: 'bogus' }));
-    await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => {
+      setTimeout(r, 20);
+    });
     assert.deepEqual(errors, [Codes.PARSE]);
     assert.equal(b.closed, false);
     raw.write(Buffer.alloc(2048, 0x61));

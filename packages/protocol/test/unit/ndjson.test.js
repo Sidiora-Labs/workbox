@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LineDecoder, encodeFrame } from '../src/ndjson.js';
-import { Codes } from '../src/errors.js';
+import { LineDecoder, encodeFrame } from '../../src/ndjson.js';
+import { Codes } from '../../src/errors.js';
 
 test('encodeFrame produces one JSON line', () => {
   const buf = encodeFrame({ a: 1, b: 'x' });

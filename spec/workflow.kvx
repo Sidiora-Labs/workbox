@@ -24,6 +24,8 @@ no_false_success = "Never mark a task done that did not meet its acceptance crit
 plain_js        = "Plain JavaScript, Node 22 ESM, JSDoc for types, node --test for tests. No TypeScript, no bundler, no transpile step."
 minimal_deps    = "Zero runtime dependencies in protocol, runner and wb (they run inside the box on the mounted runtime). Other packages take declared, pinned dependencies only."
 evidence        = "Evidence is revision, command, exit code, log path. Qualification entries are at most six lines."
+one_to_one_tests = "Every source module ships with its unit test at test/unit/<same path>.test.js, every package with real code ships integration tests, and every user-facing flow ships an e2e test. scripts/check-tests.mjs enforces the mapping and pnpm test:coverage enforces 90/80/90 line, branch and function thresholds. A module without its tests is not done."
+quality         = "Strict, high-quality code: eslint strict rules pass, prettier formatting, JSDoc on every export, no dead code, errors carry stable codes, no silent catches."
 publish         = "After every completed task: format, one build, one verify_cmd, then commit from the repository root with a message that describes the real change."
 
 [loop]
