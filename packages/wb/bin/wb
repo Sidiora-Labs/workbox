@@ -1,0 +1,3 @@
+#!/bin/sh
+# wb: the agent's command inside a Workbox sandbox. Runs on the read-only runtime at /opt/workbox.
+exec /opt/workbox/node/bin/node --disable-warning=ExperimentalWarning /opt/workbox/lib/wb/src/main.js "$@"

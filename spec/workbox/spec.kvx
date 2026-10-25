@@ -188,7 +188,7 @@ reqs       = ["7.1"]
 
 [task.1.2]
 title      = "Runtime install"
-status     = "in_progress"
+status     = "done"
 wave       = 1
 requires   = ["0.3"]
 touches    = ["packages/core/src/host/runtime.js", "packages/core/test/integration/runtime.test.js", "packages/runner/bin/init.sh", "packages/wb/bin/wb"]
