@@ -144,6 +144,11 @@ test('runtime packages with external dependencies are refused and downloads are 
       (e) => e.code === 'E_UNAVAILABLE' && e.data.status === 404,
     );
     assert.equal(fs.existsSync(path.join(dir, 'cache/node-v0.0.0-linux-x64.tar.xz.part')), false);
+    assert.deepEqual(mgr.isFresh(), {
+      fresh: false,
+      current: null,
+      stale: ['protocol', 'runner', 'wb'],
+    });
     const served = new RuntimeManager({
       paths: { runtime: path.join(dir, 'runtime') },
       cacheDir: path.join(dir, 'cache'),

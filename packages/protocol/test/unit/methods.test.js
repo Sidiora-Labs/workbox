@@ -27,11 +27,13 @@ test('catalogue is complete, documented and frozen', () => {
 
 test('validateParams enforces each method schema', () => {
   assert.deepEqual(validateParams('runner.status'), {});
-  assert.deepEqual(validateParams('runner.hello', { nonce: 'a'.repeat(32) }), {
-    nonce: 'a'.repeat(32),
-  });
+  assert.deepEqual(validateParams('runner.hello', { protocol: 1 }), { protocol: 1 });
   assert.throws(
-    () => validateParams('runner.hello', { nonce: 'short' }),
+    () => validateParams('runner.hello', { protocol: 0 }),
+    (e) => e.code === Codes.INVALID_PARAMS,
+  );
+  assert.throws(
+    () => validateParams('runner.hello', { protocol: 1, role: 'admin' }),
     (e) => e.code === Codes.INVALID_PARAMS,
   );
   assert.throws(

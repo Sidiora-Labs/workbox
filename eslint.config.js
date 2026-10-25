@@ -65,5 +65,9 @@ export default [
       complexity: ['error', 20],
     },
   },
+  {
+    files: ['**/test/**/*.js', 'test/**/*.js'],
+    rules: { 'no-promise-executor-return': 'off' },
+  },
   { ignores: ['**/node_modules/**', '**/dist/**', '.codegraph/**', 'rootfs/**'] },
 ];

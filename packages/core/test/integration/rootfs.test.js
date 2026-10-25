@@ -51,7 +51,11 @@ test('build minimal: exported, uid-shifted, setuid preserved, digest stable on r
       fs.readFileSync(path.join(root, 'etc/profile.d/workbox.sh'), 'utf8'),
       'export PATH="/opt/workbox/bin:$PATH"\n',
     );
-    assert.equal(fs.readFileSync(path.join(root, 'etc/hostname'), 'utf8'), '', 'docker-managed files export empty and are provided at launch');
+    assert.equal(
+      fs.readFileSync(path.join(root, 'etc/hostname'), 'utf8'),
+      '',
+      'docker-managed files export empty and are provided at launch',
+    );
     assert.equal(fs.existsSync(path.join(root, 'var/lib/apt/lists/debian.org')), false);
 
     await assert.rejects(mgr.build('minimal'), (e) => e.code === 'E_CONFLICT');

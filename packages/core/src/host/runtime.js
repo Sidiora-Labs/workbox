@@ -186,6 +186,30 @@ export class RuntimeManager {
     }
   }
 
+  /**
+   * True when the current runtime carries exactly the repo's protocol, runner and wb packages.
+   * @returns {{fresh: boolean, current: RuntimeManifest|null, stale: string[]}}
+   */
+  isFresh() {
+    const current = this.current();
+    if (!current) return { fresh: false, current: null, stale: [...RUNTIME_PACKAGES] };
+    const stale = this._collectPackages()
+      .filter((p) => current.packages[p.name]?.digest !== p.digest)
+      .map((p) => p.name);
+    return { fresh: stale.length === 0, current, stale };
+  }
+
+  /**
+   * Install a new runtime version when the in-box packages changed, otherwise return the current one.
+   * @param {Parameters<RuntimeManager['install']>[0]} [opts]
+   */
+  async ensureFresh(opts = {}) {
+    const state = this.isFresh();
+    if (state.fresh) return state.current;
+    this.log.info('runtime stale, reinstalling', { stale: state.stale });
+    return this.install({ ...opts, force: true });
+  }
+
   /** Atomically point `current` at a version. @param {string} version */
   setCurrent(version) {
     if (!this.get(version)) throw E.notFound(`runtime ${version} is not installed`, { version });

@@ -188,7 +188,11 @@ importers:
 
   packages/protocol: {}
 
-  packages/runner: {}
+  packages/runner:
+    dependencies:
+      '@workbox/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/sdk: {}
 

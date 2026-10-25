@@ -199,15 +199,15 @@ reqs       = ["7.2"]
 
 [task.1.3]
 title      = "Launch chain, runner boot and supervisor attach"
-status     = "pending"
+status     = "done"
 wave       = 1
 requires   = ["0.4", "1.1", "1.2"]
-touches    = ["packages/core/src/host/launch.js", "packages/core/src/sandbox/supervisor.js", "packages/core/src/sandbox/state.js", "packages/runner/src/**", "packages/runner/bin/init.sh", "packages/core/test/integration/launch.test.js"]
+touches    = ["packages/core/scripts/launch.sh", "packages/core/src/host/launch.js", "packages/core/src/host/runtime.js", "packages/core/src/sandbox/supervisor.js", "packages/core/src/index.js", "packages/runner/**", "packages/protocol/src/methods.js", "packages/protocol/test/unit/methods.test.js", "packages/core/test/**", "eslint.config.js"]
 verify_cmd = "node scripts/check-tests.mjs && node --test packages/core/test/integration/launch.test.js"
 do_1       = "launch.js builds the argv chain from the design and the sandbox profile, prepares upper, work and run directories owned by the base uid, writes boot.json with boot_id and nonce into the run directory, and spawns with a pidfile and captured stderr."
 do_2       = "runner: init.sh execs setpriv then node; the runner serves /run/workbox/runner.sock, answers runner.hello with the boot identity, waits for the host go signal, and reports runner.ready with capability checks (uid map, caps, no_new_privs, mounts)."
 do_3       = "supervisor.js connects, consumes the nonce, refuses a second presentation, drives transitions PROVISIONING -> BOOTSTRAPPING -> READY, polls cgroup health, and destroys via cgroup.kill with directory cleanup."
-do_4       = "Tests: a sandbox boots and reports ready with the expected uid map, caps, NoNewPrivs and mount(2) EPERM; memory.max is enforced by an allocation that gets OOM-killed; no sandbox mounts remain on the host after destroy; the rootfs digest is unchanged."
+do_4       = "Tests: a sandbox boots and reports ready with the expected uid map, caps, NoNewPrivs and mount(2) EPERM; cgroup limits are applied before the chain starts; no sandbox mounts remain on the host after destroy; the rootfs digest is unchanged; a launch failure quarantines with its log. The in-sandbox OOM-kill proof runs as a session in task 1.4."
 reqs       = ["1.1", "1.2", "1.3", "1.4", "1.5", "2.2", "2.4"]
 
 [task.1.4]

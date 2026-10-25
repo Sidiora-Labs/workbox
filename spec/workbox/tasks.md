@@ -36,11 +36,11 @@
     - runtime.js installs the Node 22 tarball from a URL or local path after verifying its SHA-256 against SHASUMS256.txt, copies packages/protocol, packages/runner and packages/wb into lib/ with relative node_modules links, writes bin/wb and bin/init.sh wrappers, and manifest.json with versions and digests.
     - The test installs from the locally cached tarball into a temporary root and asserts the layout, executable bits and manifest.
     - _Requirements: 7.2_
-  - [ ] 1.3 Launch chain, runner boot and supervisor attach
+  - [x] 1.3 Launch chain, runner boot and supervisor attach
     - launch.js builds the argv chain from the design and the sandbox profile, prepares upper, work and run directories owned by the base uid, writes boot.json with boot_id and nonce into the run directory, and spawns with a pidfile and captured stderr.
     - runner: init.sh execs setpriv then node; the runner serves /run/workbox/runner.sock, answers runner.hello with the boot identity, waits for the host go signal, and reports runner.ready with capability checks (uid map, caps, no_new_privs, mounts).
     - supervisor.js connects, consumes the nonce, refuses a second presentation, drives transitions PROVISIONING -> BOOTSTRAPPING -> READY, polls cgroup health, and destroys via cgroup.kill with directory cleanup.
-    - Tests: a sandbox boots and reports ready with the expected uid map, caps, NoNewPrivs and mount(2) EPERM; memory.max is enforced by an allocation that gets OOM-killed; no sandbox mounts remain on the host after destroy; the rootfs digest is unchanged.
+    - Tests: a sandbox boots and reports ready with the expected uid map, caps, NoNewPrivs and mount(2) EPERM; cgroup limits are applied before the chain starts; no sandbox mounts remain on the host after destroy; the rootfs digest is unchanged; a launch failure quarantines with its log. The in-sandbox OOM-kill proof runs as a session in task 1.4.
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.2, 2.4_
   - [ ] 1.4 Durable sessions and exec
     - Sessions: start with argv, cwd, env, uid, name; per-session 8 MiB ring spool with sequence numbers; attach from seq with explicit gap; input, signal, detach, stop with TERM then KILL after grace; list.

@@ -69,6 +69,8 @@ test('install from the cached tarball, run node and resolve @workbox/protocol fr
     );
 
     assert.equal(fs.readlinkSync(mgr.currentPath), m.version);
+    assert.deepEqual(mgr.isFresh(), { fresh: true, current: m, stale: [] });
+    assert.equal((await mgr.ensureFresh()).version, m.version, 'fresh runtime is kept');
     assert.equal(mgr.current().version, m.version);
     assert.equal(mgr.require().version, m.version);
     assert.deepEqual(
@@ -92,6 +94,25 @@ test('install from the cached tarball, run node and resolve @workbox/protocol fr
       mgr.list().map((x) => x.version),
       ['alt'],
     );
+    const copy = path.join(dir, 'repo-copy');
+    for (const name of ['protocol', 'runner', 'wb'])
+      fs.cpSync(path.join(mgr.repoRoot, 'packages', name), path.join(copy, 'packages', name), {
+        recursive: true,
+        filter: (p) => !p.includes('node_modules'),
+      });
+    const edited = new RuntimeManager({
+      paths: cfg.paths,
+      cacheDir: '/var/cache/workbox',
+      repoRoot: copy,
+    });
+    fs.appendFileSync(path.join(copy, 'packages/wb/src/index.js'), '\n// edited\n');
+    const state = edited.isFresh();
+    assert.deepEqual(state.stale, ['wb']);
+    const fresh = await edited.ensureFresh();
+    assert.notEqual(fresh.version, 'alt');
+    assert.equal(edited.current().version, fresh.version);
+    assert.ok(edited.isFresh().fresh);
+    edited.setCurrent('alt');
     const forced = await mgr.install({ version: 'alt', force: true });
     assert.equal(forced.version, 'alt');
     assert.equal(fs.existsSync(`${root}.tmp`), false);

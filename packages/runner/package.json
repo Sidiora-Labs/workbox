@@ -4,8 +4,22 @@
   "description": "In-box supervisor: durable sessions, spool, broker relay. Runs inside every sandbox on the mounted runtime.",
   "type": "module",
   "license": "UNLICENSED",
-  "engines": { "node": ">=22.13.0" },
-  "exports": { ".": "./src/index.js" },
-  "files": ["src"],
-  "scripts": { "test": "node --test 'test/**/*.test.js'" }
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "dependencies": {
+    "@workbox/protocol": "workspace:*"
+  },
+  "bin": {
+    "workbox-runner": "./src/main.js"
+  }
 }

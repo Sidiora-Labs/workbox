@@ -20,10 +20,10 @@ const signalName = v.string({ pattern: /^SIG[A-Z0-9]{2,8}$/ });
 export const Methods = Object.freeze({
   // ── host → runner ──
   'runner.hello': {
-    doc: 'Present the boot nonce; the runner answers with its boot identity.',
+    doc: 'Open the control channel; the runner answers with its boot identity and, once per boot, the boot nonce.',
     params: v.object(
-      { nonce: v.string({ min: 16, max: 128 }), protocol: v.optional(v.integer({ min: 1 })) },
-      { required: ['nonce'] },
+      { protocol: v.integer({ min: 1 }), role: v.optional(v.enum(['host', 'local'])) },
+      { required: ['protocol'] },
     ),
   },
   'runner.go': {
