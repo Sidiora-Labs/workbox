@@ -139,11 +139,11 @@ reqs       = ["3.1", "3.2"]
 
 [task.0.3]
 title      = "Core foundation: config, logger, errors, store, audit"
-status     = "pending"
+status     = "done"
 wave       = 0
 requires   = ["0.2"]
-touches    = ["packages/core/src/config.js", "packages/core/src/log.js", "packages/core/src/errors.js", "packages/core/src/ids.js", "packages/core/src/store.js", "packages/core/src/audit.js", "packages/core/test/unit/**", "packages/core/test/integration/store-audit.test.js"]
-verify_cmd = "node scripts/check-tests.mjs && node --test 'packages/core/test/unit/*.test.js' 'packages/core/test/integration/store-audit.test.js'"
+touches    = ["packages/core/src/config.js", "packages/core/src/log.js", "packages/core/src/errors.js", "packages/core/src/redact.js", "packages/core/src/store.js", "packages/core/src/sandbox/state.js", "packages/core/src/index.js", "packages/core/src/audit.js", "packages/core/test/unit/**", "packages/core/test/integration/store-audit.test.js"]
+verify_cmd = "node scripts/check-tests.mjs && node --test 'packages/core/test/unit/**/*.test.js' packages/core/test/integration/store-audit.test.js"
 do_1       = "Config resolves the Workbox root (default /var/lib/workbox, WORKBOX_ROOT override), subordinate uid base and size, cgroup root, defaults for limits and network mode."
 do_2       = "Store uses node:sqlite in WAL mode with migrations and tables for sandboxes, transitions, boots, sessions, events, evidence, artifacts, leases, asks, preset manifests and secret policy; every write is a transaction."
 do_3       = "Audit appends NDJSON lines with a SHA-256 chain and a verify function; the logger writes structured JSON with level and component."

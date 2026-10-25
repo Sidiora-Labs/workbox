@@ -4,8 +4,19 @@
   "description": "Sandbox engine: launch chain, cgroups, rootfs and runtime management, lifecycle store, supervisor and broker.",
   "type": "module",
   "license": "UNLICENSED",
-  "engines": { "node": ">=22.13.0" },
-  "exports": { ".": "./src/index.js" },
-  "files": ["src"],
-  "scripts": { "test": "node --test 'test/**/*.test.js'" }
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "dependencies": {
+    "@workbox/protocol": "workspace:*"
+  }
 }

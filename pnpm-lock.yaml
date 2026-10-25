@@ -178,7 +178,11 @@ importers:
 
   packages/cli: {}
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      '@workbox/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/mcp: {}
 
