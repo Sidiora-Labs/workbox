@@ -13,12 +13,12 @@
     - Define the message catalogue: runner.hello, runner.ready, session.*, fs.*, broker.* with validators written by hand (no dependencies).
     - Tests cover framing edge cases, oversized lines, interleaved bidirectional requests, timeouts and peer close.
     - _Requirements: 3.1, 3.2_
-  - [-] 0.3 Core foundation: config, logger, errors, store, audit
+  - [x] 0.3 Core foundation: config, logger, errors, store, audit
     - Config resolves the Workbox root (default /var/lib/workbox, WORKBOX_ROOT override), subordinate uid base and size, cgroup root, defaults for limits and network mode.
     - Store uses node:sqlite in WAL mode with migrations and tables for sandboxes, transitions, boots, sessions, events, evidence, artifacts, leases, asks, preset manifests and secret policy; every write is a transaction.
     - Audit appends NDJSON lines with a SHA-256 chain and a verify function; the logger writes structured JSON with level and component.
     - _Requirements: 2.1, 2.5_
-  - [ ] 0.4 Host doctor and cgroup v2 management
+  - [x] 0.4 Host doctor and cgroup v2 management
     - Doctor probes: root or CAP_SYS_ADMIN, bwrap version, unshare with --map-users and newuidmap, subordinate ranges for the daemon user, unprivileged userns, overlayfs in a userns, cgroup v2 controllers, slirp4netns, nft, docker for builds; each probe returns pass or fail with a remedy.
     - Cgroup module creates the workbox parent with delegated controllers, creates per-sandbox groups, writes memory, cpu and pids limits, reads usage, kills via cgroup.kill, waits for emptiness and removes the directory.
     - Tests create a real cgroup, place a process, assert limits in the files, kill and remove.

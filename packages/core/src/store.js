@@ -630,16 +630,14 @@ export class Store {
       )
       .all(...params, limit + 1);
     const complete = rows.length <= limit;
-    const items = rows
-      .slice(0, limit)
-      .map((r) => ({
-        sha256: r.sha256,
-        name: r.name,
-        kind: r.kind,
-        size: r.size,
-        contentType: r.content_type,
-        createdAt: r.created_at,
-      }));
+    const items = rows.slice(0, limit).map((r) => ({
+      sha256: r.sha256,
+      name: r.name,
+      kind: r.kind,
+      size: r.size,
+      contentType: r.content_type,
+      createdAt: r.created_at,
+    }));
     const last = items[items.length - 1];
     return {
       items,
@@ -690,15 +688,13 @@ export class Store {
       )
       .all(...params, limit + 1);
     const complete = rows.length <= limit;
-    const items = rows
-      .slice(0, limit)
-      .map((r) => ({
-        id: r.id,
-        sandboxId: r.sandbox_id,
-        envelope: JSON.parse(r.envelope),
-        logSha256: r.log_sha256,
-        createdAt: r.created_at,
-      }));
+    const items = rows.slice(0, limit).map((r) => ({
+      id: r.id,
+      sandboxId: r.sandbox_id,
+      envelope: JSON.parse(r.envelope),
+      logSha256: r.log_sha256,
+      createdAt: r.created_at,
+    }));
     return { items, cursor: complete ? null : items[items.length - 1].id, complete };
   }
 

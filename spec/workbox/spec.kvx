@@ -151,7 +151,7 @@ reqs       = ["2.1", "2.5"]
 
 [task.0.4]
 title      = "Host doctor and cgroup v2 management"
-status     = "pending"
+status     = "done"
 wave       = 0
 requires   = ["0.3"]
 touches    = ["packages/core/src/host/doctor.js", "packages/core/src/host/cgroup.js", "packages/core/test/unit/host/**", "packages/core/test/integration/cgroup.test.js"]
