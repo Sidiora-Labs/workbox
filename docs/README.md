@@ -13,7 +13,8 @@
 - [Guides](guides/README.md): task-oriented walkthroughs.
   - [Getting started](guides/getting-started.md): from a checkout to a first command in a sandbox.
   - [Use the SDK](guides/sdk.md): drive sandboxes from JavaScript.
-  - [Use the MCP server](guides/mcp.md): give an MCP client the four sandbox tools.
+  - [Run coding agents in a sandbox](guides/agents.md): Claude Code and Codex in the `agents` rootfs.
+  - [Use the MCP server](guides/mcp.md): give an MCP client the sandbox and agent tools.
   - [Deploy the server](guides/deploy.md): systemd unit and container image.
 - [Architecture](architecture.md): packages, host layout, launch chain, runner protocol, state machine.
 - [Operations](operations.md): install, run, configure, observe, reconcile, recover, back up.

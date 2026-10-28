@@ -11,7 +11,7 @@ types, `node --test`). Nothing is compiled or bundled.
 | `wb`       | The agent CLI inside the box. One command table generates `--help`, `wb tools` and [the wb reference](wb.md).                                                                                                                  |
 | `server`   | REST and WebSocket API on `node:http`: scoped bearer keys, the browser guard, schemas, request ids, audit of mutations, Prometheus metrics, `/healthz` and `/readyz`.                                                          |
 | `sdk`      | `WorkboxClient` and the `Sandbox` handle over every server route, with retries on idempotent calls and sessions as async iterators.                                                                                            |
-| `mcp`      | A stdio MCP server with four tools, built on the SDK.                                                                                                                                                                          |
+| `mcp`      | A stdio MCP server with sandbox and agent tools, built on the SDK.                                                                                                                                                             |
 | `cli`      | The operator CLI `workbox`, against a local engine or a remote server.                                                                                                                                                         |
 
 `protocol`, `runner` and `wb` have no third-party dependencies; they are what the runtime bundle
@@ -145,10 +145,11 @@ stored with a time and reason; an illegal transition is rejected with a code.
 - **SDK** (`@workbox/sdk`): `WorkboxClient` and `Sandbox` cover every route; GET, HEAD and DELETE
   are retried with jittered backoff on 5xx and network errors; `attach` returns a
   `SessionStream`; `events()` pages the events route and can follow it by polling.
-- **MCP** (`workbox-mcp`, stdio): `sandbox_create`, `sandbox_list`, `sandbox_exec` and
-  `sandbox_destroy`, over the SDK against `WORKBOX_SERVER` (default `http://127.0.0.1:8790`) with
-  `WORKBOX_TOKEN`. Exec output is bounded to 64 KiB and its timeout to 240 s.
-- **CLI** (`workbox`): `doctor`, `rootfs`, `runtime`, `sandbox`, `shell`, `serve` and
+- **MCP** (`workbox-mcp`, stdio): `sandbox_create`, `sandbox_list`, `sandbox_exec`,
+  `sandbox_destroy`, `agent_run` and `agent_output`, over the SDK against `WORKBOX_SERVER`
+  (default `http://127.0.0.1:8790`) with `WORKBOX_TOKEN`. Output is bounded to 64 KiB and waits to
+  240 s.
+- **CLI** (`workbox`): `doctor`, `rootfs`, `runtime`, `sandbox`, `shell`, `agent`, `serve` and
   `audit verify`. Sandbox commands use the local engine, or a server with `--server URL --token
 T`. `rootfs`, `runtime` and `audit` are local only.
 - **Inside the box**: `wb`, see [the wb reference](wb.md).

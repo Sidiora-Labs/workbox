@@ -13,7 +13,7 @@ into a child process, record evidence for a command, create a checkpoint, store 
 read the network policy. See the [wb reference](wb.md).
 
 The host side stays small. A harness needs only lifecycle and exec, and those are the MCP server's
-four tools: `sandbox_create`, `sandbox_list`, `sandbox_exec`, `sandbox_destroy`.
+sandbox tools: `sandbox_create`, `sandbox_list`, `sandbox_exec`, `sandbox_destroy`.
 
 ## What each sandbox is
 

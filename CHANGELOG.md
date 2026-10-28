@@ -22,6 +22,11 @@ All notable changes to Workbox are documented in this file. The format is based 
 - Reconcile after a daemon restart, including the network of `egress` and `allowlist` sandboxes.
 - `workbox doctor`, an idempotent host installer, a systemd unit and a server container image.
 - Interactive shells against a remote server with `workbox sandbox shell --server`.
+- An `agents` rootfs with Claude Code and Codex set up to run unattended, `@anthropic` and
+  `@openai` allowlist host sets, and SDK helpers for agent sandboxes and sessions.
+- `workbox agent` to run Claude Code or Codex in a sandbox, interactively, for one task or
+  detached, and `workbox sandbox attach` to follow a session.
+- The MCP tools `agent_run` and `agent_output` to hand a task to an agent in a sandbox.
 
 ### Security
 

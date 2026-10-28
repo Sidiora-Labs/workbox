@@ -190,6 +190,11 @@ verify` checks the chain.
   environment can be read through `/proc/<pid>/environ` by any process in the box running under
   the same uid, and sessions run as inner root by default. Grant a reference only to a sandbox
   whose every process may see it.
+- **Coding agents run unattended.** In the `agents` rootfs, Claude Code runs with permission
+  prompts bypassed and Codex without approvals or its own sandbox; the Workbox sandbox is the
+  boundary. An agent can read the credential it was given, and interactive Claude Code records
+  the last 20 characters of an API key in the sandbox's `~/.claude.json`. Use an allowlist to
+  limit where an agent can send data.
 - **Redaction has limits.** Values shorter than 8 characters are refused rather than
   redacted. Forms other than those listed above (compressed, encrypted, reversed, interleaved
   with other bytes, encoded twice) are not recognised.

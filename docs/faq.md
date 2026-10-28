@@ -34,6 +34,11 @@ default mode is `egress`. See the [network section of the security model](securi
 
 No. It runs the commands an agent issues; the agent brings its own model access.
 
+## Can I run Claude Code or Codex in a sandbox?
+
+Yes. Build the `agents` rootfs and run `workbox agent claude` or `workbox agent codex`. See
+[Run coding agents in a sandbox](guides/agents.md).
+
 ## How do secrets work?
 
 A secret is a named reference the daemon holds. `wb secret exec <ref>... -- <cmd...>` injects the

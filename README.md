@@ -35,13 +35,27 @@ short-lived CLI process cannot. Inside a sandbox, `wb tools` lists every command
 
 ## Interfaces
 
-- Operator CLI `workbox`: doctor, rootfs, runtime, sandbox, shell, serve, audit verify. It works
+- Operator CLI `workbox`: doctor, rootfs, runtime, sandbox, shell, agent, serve, audit verify. It works
   on the local host or against a server with `--server URL --token T`.
 - REST and WebSocket API: `workbox serve`, with scoped bearer keys, `GET /metrics`, `/healthz`
   and `/readyz`.
 - SDK: `@workbox/sdk` (`WorkboxClient`, `Sandbox`).
 - MCP server (stdio, `workbox-mcp`): `sandbox_create`, `sandbox_list`, `sandbox_exec` and
-  `sandbox_destroy`.
+  `sandbox_destroy`, plus `agent_run` and `agent_output` to hand a task to a coding agent in a
+  sandbox.
+
+## Coding agents
+
+Claude Code and Codex come preinstalled in the `agents` rootfs:
+
+```sh
+workbox rootfs build agents
+workbox agent claude $S                          # interactive
+workbox agent codex -p "Add a test for parse()" $S
+```
+
+The agent gets its API key from the host's secrets file and, by default, can reach only its API,
+GitHub and the package registries. See [Run coding agents in a sandbox](docs/guides/agents.md).
 
 ## Documentation
 
@@ -50,6 +64,7 @@ Start at the [documentation index](docs/README.md).
 - [Why Workbox?](docs/why-workbox.md)
 - [Project status](docs/project-status.md)
 - [Getting started](docs/guides/getting-started.md) and the other [guides](docs/guides/README.md)
+- [Run coding agents in a sandbox](docs/guides/agents.md)
 - [Architecture](docs/architecture.md)
 - [Security model](docs/security.md)
 - [Operations](docs/operations.md)

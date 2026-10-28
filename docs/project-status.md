@@ -15,6 +15,7 @@ Workbox is at version `0.1.0-dev` and has no tagged release yet.
 | SDK (`@workbox/sdk`)                                      | Implemented              | [SDK guide](guides/sdk.md)                            |
 | MCP server (`workbox-mcp`)                                | Implemented              | [MCP guide](guides/mcp.md)                            |
 | Operator CLI (`workbox`)                                  | Implemented              | [CLI reference](reference/cli.md)                     |
+| Claude Code and Codex in the `agents` rootfs              | Implemented              | [Coding agents guide](guides/agents.md)               |
 | Reconcile after a restart                                 | Implemented              | [Operations](operations.md#reconcile-after-a-restart) |
 | Hash-chained audit log with `workbox audit verify`        | Implemented              | [Security model](security.md#audit)                   |
 | Hyperfide provider adapter                                | Not shipped              | [Provider mapping](hyperfide-provider.md)             |

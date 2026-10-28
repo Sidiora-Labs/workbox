@@ -20,7 +20,7 @@ types, `node --test`. No TypeScript, no bundler, no build step.
 | `packages/wb`       | The in-box `wb` command (no runtime deps)                             |
 | `packages/server`   | REST and WebSocket server                                             |
 | `packages/sdk`      | `@workbox/sdk`                                                        |
-| `packages/mcp`      | `workbox-mcp`, four sandbox tools                                     |
+| `packages/mcp`      | `workbox-mcp`: sandbox and agent tools                                |
 | `packages/cli`      | The `workbox` operator CLI                                            |
 | `rootfs/`           | Root filesystem Dockerfiles                                           |
 | `deploy/`           | `install.sh`, the systemd unit, the server image, `check.sh`          |

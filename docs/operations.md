@@ -21,8 +21,9 @@ Procedures for running Workbox on one Linux host. `workbox` below is the operato
    under the Workbox root itself (which must not be on overlayfs), Docker for rootfs builds, and
    whether a rootfs and a runtime are installed. It exits 0 on a ready host and 4 otherwise. Fix
    every failure before creating sandboxes.
-3. `workbox rootfs build minimal` builds the base rootfs (needs Docker). `workbox rootfs list`
-   shows installed ones with their digests.
+3. `workbox rootfs build minimal` builds the base rootfs (needs Docker). `workbox rootfs build
+agents` builds the rootfs with Claude Code and Codex
+   ([guide](guides/agents.md)). `workbox rootfs list` shows installed ones with their digests.
 4. `workbox runtime install` installs Node 22 and the in-box packages (`--node-version v`,
    `--tarball file` for an offline install). `workbox runtime list` shows them.
 
@@ -66,8 +67,9 @@ fail closed with a coded error. Defaults: limits of 2 GiB memory, no swap, 2000 
 5 s; lease TTL 300 s; boot timeout 20 s.
 
 Secrets live in `/etc/workbox/secrets.json` (`{"REF": "value"}`, must not be group or world
-readable) or in `WORKBOX_SECRET_<REF>` variables of the daemon. Values shorter than 8 characters
-are refused. Grant references to a sandbox at create time with `secretRefs`.
+readable) or in `WORKBOX_SECRET_<REF>` variables of the daemon. They are read when the engine
+starts, so restart `workbox serve` after a change. Values shorter than 8 characters are refused.
+Grant references to a sandbox at create time with `secretRefs`.
 
 ## Observe
 
