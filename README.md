@@ -1,10 +1,19 @@
+<div align="center">
+
 # Workbox
 
-[![CI](https://github.com/Sidiora-Labs/workbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidiora-Labs/workbox/actions/workflows/ci.yml)
-[![Container image](https://github.com/Sidiora-Labs/workbox/actions/workflows/image.yml/badge.svg)](https://github.com/Sidiora-Labs/workbox/actions/workflows/image.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+<img src="https://supabase.paxeer.app/storage/v1/object/public/json/Untitled%20design.png">
 
-A sandbox for AI agents whose primary interface is the shell.
+
+**A sandbox for AI agents whose primary interface is the shell..**
+
+
+[![badge](https://shieldcn.dev/github/Sidiora-Labs/workbox/license.svg?variant=outline&size=lg&font=geist&logo=github&logoColor=dadee6&height=56&padX=15&iconSize=21&gap=4&labelGap=12)](https://github.com/Sidiora-Labs/hyperfide)
+[![badge](https://shieldcn.dev/badge/JAVASCRIPT.svg?variant=outline&size=lg&font=geist&logo=javascript&logoColor=F0DB4F&labelTextColor=1c3e76&height=56&padX=15&iconSize=28&gap=4&labelGap=12)](#)
+[![badge](https://shieldcn.dev/badge/SIDIORA%20LABS.svg?variant=outline&size=lg&font=geist&logo=lu%3AGlobe&logoColor=0043e6&labelTextColor=1c3e76&height=56&padX=15&iconSize=21&gap=4&labelGap=12)](https://github.com/org/Sidiora-Labs)
+[![badge](https://shieldcn.dev/github/Sidiora-Labs/workbox/ci.svg?variant=outline&size=lg&font=geist&logo=github&logoColor=dadee6&height=56&padX=15&iconSize=21&gap=4&labelGap=12)](https://github.com/Sidiora-Labs/workbox/actions)
+</div>
+
 
 Each sandbox is a Linux process tree isolated with namespaces, cgroup v2 limits, a reduced
 capability set and a seccomp filter. It runs on its own writable overlay of a shared read-only
