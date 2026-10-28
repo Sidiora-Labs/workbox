@@ -1,41 +1,337 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from '@workbox/server';
-import { WorkboxClient } from '../../src/client.js';
+import http from 'node:http';
+import { SCOPE_MATRIX } from '@workbox/server';
+import { bootServer, TOKENS } from '../../../server/test/helpers/real-server.js';
+import { WorkboxApiError, WorkboxClient } from '../../src/index.js';
 
-// Localhost test traffic must never go through an ambient HTTP(S) proxy.
-for (const k of [
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'http_proxy',
-  'https_proxy',
-  'ALL_PROXY',
-  'all_proxy',
-])
-  delete process.env[k];
-process.env.NO_PROXY = '127.0.0.1,localhost';
-process.env.no_proxy = '127.0.0.1,localhost';
+const text = (b64) => Buffer.from(b64, 'base64').toString();
+const lastJson = (stdout) => JSON.parse(stdout.trim().split('\n').at(-1));
 
-test('sdk drives a real server through create/list/exec/destroy', async () => {
-  const { FakeManager } = await import(
-    new URL('../../../server/test/helpers/fake-manager.js', import.meta.url)
-  );
-  const app = createServer({
-    manager: new FakeManager(),
-    keys: [{ id: 'root', token: 'tok', scopes: ['admin', 'read', 'exec', 'answer'] }],
+/** Route templates with at least one 2xx in the server's `workbox_http_requests_total`. */
+function okRoutes(metrics) {
+  const re =
+    /^workbox_http_requests_total\{method="[A-Z]+",route="([^"]+)",status="2\d\d"\} \d+$/gm;
+  return new Set([...metrics.matchAll(re)].map((m) => m[1]));
+}
+
+/**
+ * A real HTTP proxy in front of the server that lets the first `POST /v1/sandboxes` reach the
+ * server, waits for the server's answer, then drops the client connection without relaying it:
+ * the create happened, the caller never heard.
+ */
+async function droppingProxy(port) {
+  const seen = [];
+  let dropped = false;
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks);
+      const headers = { ...req.headers, host: `127.0.0.1:${port}`, connection: 'close' };
+      const up = http.request(
+        { host: '127.0.0.1', port, method: req.method, path: req.url, headers, agent: false },
+        (upRes) => {
+          const out = [];
+          upRes.on('data', (c) => out.push(c));
+          upRes.on('end', () => {
+            const answer = Buffer.concat(out);
+            seen.push({
+              method: req.method,
+              url: req.url,
+              body: body.length ? JSON.parse(body) : null,
+              status: upRes.statusCode,
+              response: JSON.parse(answer),
+            });
+            if (req.method === 'POST' && req.url === '/v1/sandboxes' && !dropped) {
+              dropped = true;
+              req.socket.destroy();
+              return;
+            }
+            res.writeHead(upRes.statusCode, { 'content-type': upRes.headers['content-type'] });
+            res.end(answer);
+          });
+        },
+      );
+      up.on('error', () => res.destroy());
+      up.end(body);
+    });
   });
-  const addr = await app.listen(0);
-  const client = new WorkboxClient({ baseUrl: `http://127.0.0.1:${addr.port}`, token: 'tok' });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    seen,
+    base: `http://127.0.0.1:${server.address().port}`,
+    close() {
+      server.closeAllConnections();
+      return new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+test('the sdk drives every route of a real server over a real engine', async (t) => {
+  const srv = await bootServer();
+  const as = (scope) =>
+    new WorkboxClient({ baseUrl: srv.base, token: TOKENS[scope], retryDelayMs: 20 });
+  const admin = as('admin');
+  const reader = as('read');
+  const harness = as('exec');
+  const human = as('answer');
   try {
-    assert.equal((await client.health()).ok, true);
-    const sb = await client.createSandbox({ name: 'sdk' });
-    const list = await client.listSandboxes();
-    assert.equal(list.items.length, 1);
-    const out = await sb.exec({ argv: ['echo', 'from-sdk'] });
-    assert.match(out.stdout, /from-sdk/);
-    const gone = await sb.destroy();
-    assert.equal(gone.state, 'DELETED');
+    await t.test('health, readiness and metrics', async () => {
+      assert.deepEqual(await reader.health(), { ok: true });
+      assert.deepEqual(await reader.ready(), { ready: true });
+      assert.match(await reader.metrics(), /# TYPE workbox_http_requests_total counter/);
+      await assert.rejects(
+        new WorkboxClient({ baseUrl: srv.base }).listSandboxes(),
+        (e) => e instanceof WorkboxApiError && e.status === 401,
+      );
+    });
+
+    const [a, b] = await Promise.all(
+      ['sdk-a', 'sdk-b'].map((name) => admin.createSandbox({ name })),
+    );
+    assert.equal(a.row.state, 'READY');
+
+    await t.test(
+      'inventory pages with a cursor; inspect separates desired and observed',
+      async () => {
+        const first = await reader.listSandboxes({ limit: 1 });
+        assert.equal(first.complete, false);
+        const rest = await reader.listSandboxes({ limit: 1, cursor: first.cursor });
+        assert.equal(rest.complete, true);
+        assert.deepEqual([first.items[0].id, rest.items[0].id].sort(), [a.id, b.id].sort());
+        const ins = await reader.sandbox(a.id).inspect();
+        assert.equal(ins.desired, 'READY');
+        assert.equal(ins.health, 'HEALTHY');
+        assert.equal(typeof ins.lastObservedAt, 'number');
+      },
+    );
+
+    await t.test(
+      'a create retried after a lost response makes one sandbox with one key',
+      async () => {
+        const proxy = await droppingProxy(srv.port);
+        try {
+          const viaProxy = new WorkboxClient({
+            baseUrl: proxy.base,
+            token: TOKENS.admin,
+            retryDelayMs: 20,
+          });
+          const sb = await viaProxy.createSandbox({ name: 'sdk-once' });
+          const creates = proxy.seen.filter((s) => s.method === 'POST');
+          assert.equal(creates.length, 2);
+          assert.equal(creates[0].status, 201);
+          assert.ok(creates[0].body.idempotencyKey);
+          assert.equal(creates[1].body.idempotencyKey, creates[0].body.idempotencyKey);
+          assert.equal(sb.id, creates[0].response.id);
+          assert.equal(creates[1].response.id, sb.id);
+          const all = await reader.listSandboxes({ limit: 100 });
+          assert.deepEqual(
+            all.items.filter((s) => s.name === 'sdk-once').map((s) => s.id),
+            [sb.id],
+          );
+          assert.equal((await admin.sandbox(sb.id).destroy()).state, 'DELETED');
+        } finally {
+          await proxy.close();
+        }
+      },
+    );
+
+    await t.test('exec runs in the box; a read key gets a 403 WorkboxApiError', async () => {
+      await assert.rejects(
+        reader.sandbox(a.id).exec({ argv: ['true'] }),
+        (e) => e instanceof WorkboxApiError && e.status === 403 && e.code === 'E_DENIED',
+      );
+      await assert.rejects(reader.sandbox(a.id).destroy(), (e) => e.status === 403);
+      const out = await harness.sandbox(a.id).exec({
+        argv: ['sh', '-c', 'echo out; echo err >&2; exit 3'],
+      });
+      assert.equal(out.stdout, 'out\n');
+      assert.equal(out.stderr, 'err\n');
+      assert.equal(out.exitCode, 3);
+    });
+
+    await t.test('files write, append, read a range and list', async () => {
+      const box = harness.sandbox(a.id);
+      const put = await box.writeFile('/tmp/sdk/hello.txt', 'hello from the sdk\n', {
+        mkdirs: true,
+      });
+      assert.equal(put.bytes, 19);
+      await box.writeFile('/tmp/sdk/hello.txt', Buffer.from('more\n'), { append: true });
+      const view = reader.sandbox(a.id);
+      const read = await view.readFile('/tmp/sdk/hello.txt');
+      assert.equal(text(read.data), 'hello from the sdk\nmore\n');
+      const part = await view.readFile('/tmp/sdk/hello.txt', { offset: 6, length: 4 });
+      assert.equal(text(part.data), 'from');
+      assert.deepEqual((await view.listFiles('/tmp/sdk')).entries, [
+        { name: 'hello.txt', type: 'file' },
+      ]);
+      await assert.rejects(view.readFile('/nope'), (e) => e.status === 404);
+    });
+
+    await t.test(
+      'a session streams as an async iterator and takes input',
+      { timeout: 60_000 },
+      async () => {
+        const box = harness.sandbox(a.id);
+        const { sessionId } = await box.startSession({
+          argv: ['sh', '-c', 'read line; echo "got:$line"'],
+          name: 'sdk-echo',
+        });
+        const stream = box.attach(sessionId);
+        stream.input('ping\n');
+        const seen = [];
+        for await (const evt of stream) seen.push(evt);
+        const out = seen
+          .filter((e) => e.type === 'session.output')
+          .map((e) => text(e.params.data))
+          .join('');
+        assert.equal(out, 'got:ping\n');
+        assert.equal(seen.at(-1).type, 'session.exit');
+        assert.equal(seen.at(-1).params.code, 0);
+        const { sessions } = await reader.sandbox(a.id).listSessions();
+        assert.ok(sessions.some((s) => s.sessionId === sessionId));
+      },
+    );
+
+    await t.test(
+      'an abort ends a session stream; a signal sent on another ends the session',
+      { timeout: 60_000 },
+      async () => {
+        const box = harness.sandbox(a.id);
+        const { sessionId } = await box.startSession({
+          argv: ['sh', '-c', 'echo started; exec sleep 600'],
+        });
+        const ac = new AbortController();
+        const watched = box.attach(sessionId, { signal: ac.signal });
+        await assert.rejects(
+          async () => {
+            for await (const evt of watched) if (evt.type === 'session.output') ac.abort();
+          },
+          (e) => e.name === 'AbortError',
+        );
+        const killer = box.attach(sessionId);
+        killer.sendSignal('SIGKILL');
+        const seen = [];
+        for await (const evt of killer) seen.push(evt);
+        assert.equal(seen.at(-1).type, 'session.exit');
+      },
+    );
+
+    await t.test('an ask raised in the box is listed and answered through the sdk', async () => {
+      const raised = await harness.sandbox(a.id).exec({
+        argv: ['wb', 'ask', 'raise', '--json', '--kind', 'question', 'Which branch?'],
+      });
+      assert.equal(raised.exitCode, 0, raised.stderr);
+      const { askId } = lastJson(raised.stdout);
+      const open = await reader.listAsks({ status: 'open', sandboxId: a.id, limit: 10 });
+      assert.deepEqual(
+        open.asks.map((x) => x.askId),
+        [askId],
+      );
+      await assert.rejects(reader.answerAsk(askId, 'x'), (e) => e.status === 403);
+      assert.equal((await human.answerAsk(askId, 'main')).status, 'answered');
+      await assert.rejects(
+        human.answerAsk(askId, 'again'),
+        (e) => e.status === 409 && !e.retryable,
+      );
+    });
+
+    await t.test(
+      'events page and follow through async iterators; evidence and artifacts list',
+      { timeout: 60_000 },
+      async () => {
+        for (const step of [1, 2, 3]) {
+          const emit = await harness.sandbox(a.id).exec({
+            argv: ['wb', 'event', 'emit', 'sdk.step', JSON.stringify({ step }), '--json'],
+          });
+          assert.equal(emit.exitCode, 0, emit.stderr);
+        }
+        const view = reader.sandbox(a.id);
+        assert.equal((await view.listEvents({ afterSeq: 0, limit: 1 })).events.length, 1);
+        const seen = [];
+        for await (const evt of view.events({ limit: 1 })) seen.push(evt);
+        assert.equal(seen.filter((e) => e.type === 'sdk.step').length, 3);
+        const seqs = seen.map((e) => e.seq);
+        assert.deepEqual(
+          seqs,
+          [...new Set(seqs)].sort((x, y) => x - y),
+        );
+
+        const ac = new AbortController();
+        const later = harness.sandbox(a.id).exec({
+          argv: ['wb', 'event', 'emit', 'sdk.later', '{}', '--json'],
+        });
+        const followed = [];
+        await assert.rejects(
+          async () => {
+            const opts = { afterSeq: seqs.at(-1), follow: true, intervalMs: 50, signal: ac.signal };
+            for await (const evt of view.events(opts)) {
+              followed.push(evt.type);
+              if (evt.type === 'sdk.later') ac.abort();
+            }
+          },
+          (e) => e.name === 'AbortError',
+        );
+        assert.equal((await later).exitCode, 0);
+        assert.equal(followed.at(-1), 'sdk.later');
+
+        const put = await harness.sandbox(a.id).exec({
+          argv: [
+            'sh',
+            '-c',
+            'echo artifact-body > /tmp/out.txt && wb artifact put /tmp/out.txt --json',
+          ],
+        });
+        assert.equal(put.exitCode, 0, put.stderr);
+        const artifacts = await view.listArtifacts({ limit: 10 });
+        assert.equal(artifacts.items.length, 1);
+        assert.equal(artifacts.complete, true);
+        const evidence = await view.listEvidence({ limit: 10 });
+        assert.ok(Array.isArray(evidence.items));
+        assert.equal(typeof evidence.complete, 'boolean');
+        assert.deepEqual((await reader.sandbox(b.id).listArtifacts()).items, []);
+      },
+    );
+
+    await t.test('checkpoints create and list', async () => {
+      const cp = await admin.sandbox(a.id).createCheckpoint({ name: 'sdk-cp' });
+      assert.ok(cp.id);
+      const { checkpoints } = await reader.sandbox(a.id).listCheckpoints();
+      assert.deepEqual(
+        checkpoints.map((c) => c.name),
+        ['sdk-cp'],
+      );
+    });
+
+    await t.test('drain, reconcile and destroy', async () => {
+      assert.equal((await admin.sandbox(b.id).drain('sdk test')).state, 'DRAINING');
+      const rec = await admin.reconcile();
+      const observed = [...rec.attached, ...rec.suspect, ...rec.absent];
+      assert.ok(observed.includes(a.id) && observed.includes(b.id), JSON.stringify(rec));
+      assert.equal((await a.destroy()).state, 'DELETED');
+      assert.equal((await b.destroy()).state, 'DELETED');
+      assert.deepEqual((await reader.listSandboxes()).items, []);
+      const everything = await reader.listSandboxes({ includeDeleted: true, limit: 100 });
+      assert.ok(everything.items.length >= 3);
+      assert.ok(everything.items.every((s) => s.state === 'DELETED'));
+    });
+
+    await t.test('every route in the server table answered 2xx to an sdk call', async () => {
+      const metrics = await reader.metrics();
+      const ok = okRoutes(metrics);
+      const httpRoutes = Object.keys(SCOPE_MATRIX).filter((k) => !k.endsWith('/ws'));
+      assert.equal(httpRoutes.length, 19);
+      assert.deepEqual(
+        httpRoutes.filter((k) => !ok.has(k)),
+        [],
+      );
+      const ws = Number(/^workbox_ws_connections_total (\d+)$/m.exec(metrics)?.[1]);
+      assert.equal(ws, 3);
+      const attaches = srv.auditEntries().filter((e) => e.action === 'api.session.attach');
+      assert.equal(attaches.length, 3);
+    });
   } finally {
-    await app.close();
+    await srv.stop();
   }
 });

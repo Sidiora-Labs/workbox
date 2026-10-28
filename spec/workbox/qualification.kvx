@@ -73,3 +73,4 @@ exit_code   = 0
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/3.1-e2e.log"
 observed    = "Server tests and e2e now run on a real Manager, but packages/sdk/test/integration/sdk-server.test.js (3.2) and packages/cli/test/integration/remote.test.js (3.4) still import packages/server/test/helpers/fake-manager.js, which lacks manager.get/sessions the new server calls; they were not run here."
 assumption  = "Tasks 3.2 and 3.4 move those tests onto test/helpers/real-server.js; delete fake-manager.js once its last user migrates."
+update_3_2  = "Task 3.2 moved the SDK integration test onto real-server.js; packages/cli/test/integration/remote.test.js (3.4) is now the only FakeManager user, so fake-manager.js stays until 3.4 migrates it and then deletes it."

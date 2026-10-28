@@ -86,7 +86,7 @@
     - Routes: sandboxes CRUD with cursor inventory and complete flag, inspect, drain, reconcile; exec; files; sessions over WebSocket; evidence and artifacts; checkpoints; asks list and answer; events stream.
     - Tests run the server against a real engine and cover auth failures, schema 400s, lifecycle, exec, a WebSocket session and an ask answer round trip.
     - _Requirements: 6.1, 6.2, 6.3_
-  - [ ] 3.2 SDK
+  - [x] 3.2 SDK
     - WorkboxClient with typed JSDoc, retries with jitter on 5xx and network errors for idempotent calls, AbortSignal support, Sandbox handle with exec, sessions (async iterator of events), files, evidence, checkpoints, asks.
     - Tests exercise every route against a real server.
     - _Requirements: 6.4_
