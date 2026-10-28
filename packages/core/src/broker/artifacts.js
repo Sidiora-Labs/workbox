@@ -1,3 +1,4 @@
+import { E } from '../errors.js';
 import { acceptOutboxFile, deliverToInbox } from './outbox.js';
 
 /** `broker.artifact.*` handlers over the outbox/CAS handoff. */
@@ -31,13 +32,20 @@ export function artifactPut(ctx, params) {
   return { sha256: accepted.sha256, size: accepted.size };
 }
 
-/** @param {object} ctx @param {{sha256: string}} params */
+/**
+ * Deliver an artifact into this sandbox's inbox. Only artifacts this sandbox references are
+ * readable; a digest held by another sandbox reads as not found and is never delivered.
+ * @param {object} ctx @param {{sha256: string}} params
+ */
 export function artifactGet(ctx, params) {
-  const mine = ctx.store.listArtifacts(ctx.sandboxId, { limit: 1000 });
-  if (!mine.items.some((a) => a.sha256 === params.sha256)) {
-    // Also allow artifacts this sandbox produced as evidence logs.
-    const art = ctx.store.getArtifact(params.sha256);
-    if (!art) return deliver(ctx, params);
+  if (!ctx.store.hasArtifactRef(ctx.sandboxId, params.sha256)) {
+    ctx.audit?.append({
+      actor: 'broker',
+      action: 'artifact.get.denied',
+      sandboxId: ctx.sandboxId,
+      data: { sha256: params.sha256 },
+    });
+    throw E.notFound(`artifact ${params.sha256} not found`, { sha256: params.sha256 });
   }
   return deliver(ctx, params);
 }
@@ -47,6 +55,7 @@ function deliver(ctx, params) {
     artifactsDir: ctx.artifactsDir,
     inboxDir: ctx.inboxDir,
     sha256: params.sha256,
+    uidRange: ctx.uidRange,
   });
   ctx.audit?.append({
     actor: 'broker',

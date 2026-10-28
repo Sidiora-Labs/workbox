@@ -281,7 +281,11 @@ export async function secretCommand(ctx, argv) {
       if (method === 'session.output') ctx.out.write(Buffer.from(p.data, 'base64'));
       if (method === 'session.exit') {
         off();
-        resolve({ sessionId: started.sessionId, exited: p, exitCode: p.code });
+        resolve({
+          sessionId: started.sessionId,
+          exited: p,
+          exitCode: exitStatus(p.code, p.signal),
+        });
       }
     });
     ctx.client
@@ -292,9 +296,11 @@ export async function secretCommand(ctx, argv) {
 
 /** @param {object} ctx @param {string[]} argv */
 export async function eventCommand(ctx, argv) {
-  const [sub, type, ...rest] = argv;
+  const [sub, ...args] = argv;
+  const { opts, positional } = parseOpts(args, new Set(['causation']));
+  const [type, ...rest] = positional;
   if (sub !== 'emit' || !type)
-    throw new ProtocolError(Codes.INVALID_PARAMS, 'wb event emit <type> [json]');
+    throw new ProtocolError(Codes.INVALID_PARAMS, 'wb event emit <type> [json] [--causation id]');
   let payload;
   if (rest.length) {
     try {
@@ -303,7 +309,11 @@ export async function eventCommand(ctx, argv) {
       throw new ProtocolError(Codes.INVALID_PARAMS, 'event payload must be JSON');
     }
   }
-  return ctx.client.request('broker.event.emit', { type, payload });
+  return ctx.client.request('broker.event.emit', {
+    type,
+    payload,
+    causation: opts.causation?.[0],
+  });
 }
 
 /** @param {object} ctx @param {string[]} argv */

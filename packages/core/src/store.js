@@ -616,6 +616,15 @@ export class Store {
       .run(sandboxId, sha256, ref.name ?? '', ref.kind ?? null, this.clock());
   }
 
+  /** Whether a sandbox references an artifact. @param {string} sandboxId @param {string} sha256 */
+  hasArtifactRef(sandboxId, sha256) {
+    return Boolean(
+      this.db
+        .prepare(`SELECT 1 FROM artifact_refs WHERE sandbox_id = ? AND sha256 = ? LIMIT 1`)
+        .get(sandboxId, sha256),
+    );
+  }
+
   /** @param {string} sandboxId @param {{limit?: number, cursor?: string|null}} [opts] */
   listArtifacts(sandboxId, opts = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 1000);

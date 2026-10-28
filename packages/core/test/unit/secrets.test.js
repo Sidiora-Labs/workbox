@@ -2,8 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { SecretProvider, parseRef, assertRef } from '../../src/secrets.js';
+import { SecretProvider, parseRef, assertRef, secretRedactor } from '../../src/secrets.js';
 import { tmpDir } from '../helpers/tmp.js';
+
+test('secretRedactor registers every provider value under its reference', () => {
+  const p = new SecretProvider({ env: { WORKBOX_SECRET_DEPLOY_TOKEN: 'tok-abcdef' } });
+  const r = secretRedactor(p);
+  assert.equal(r.apply('x tok-abcdef y'), 'x [REDACTED:DEPLOY_TOKEN] y');
+  assert.deepEqual(r.applyDeep({ k: ['tok-abcdef'] }), { k: ['[REDACTED:DEPLOY_TOKEN]'] });
+});
 
 test('provider loads env refs and resolves with rename', () => {
   const p = new SecretProvider({ env: { WORKBOX_SECRET_DEPLOY_TOKEN: 's3cret', OTHER: 'x' } });
