@@ -89,6 +89,10 @@ Do not start a wave while a lower-wave eligible task is unfinished (workflow.kvx
   (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) injected via `runner.go` env.
 - Verify from inside: rules unmodifiable in-box (no `CAP_NET_ADMIN` after drop), req 1.5
   (`none` ⇒ loopback only) re-asserted by the network integration test.
+- H13 lands here, before the proxy is wired. Nothing calls `createProxy` yet, so the hole is
+  latent until this task. The proxy resolves every name on the host, refuses the always-blocked
+  ranges and connects to the address it checked. Hostname rules apply only on ports 80/443 plus
+  ports the profile declares.
 
 ### P0-4 — Task 2.2: seccomp (req 1.6)
 
@@ -128,6 +132,13 @@ Do not start a wave while a lower-wave eligible task is unfinished (workflow.kvx
   once at install, record the resolved version + digest in the manifest; never re-resolve
   silently on re-install). Install is idempotent: a second install with an identical manifest
   is a no-op success; a failed step leaves a `failed` manifest, not a partial "ok".
+- Network host sets as host-side data: `@node`, `@python`, `@go`, `@rust`, `@ubuntu`,
+  `@github`, `@docker`, `@browsers`, `@huggingface`. The lists come from tryboxi
+  `policy.Presets`, which include the CDNs real installs hit, such as the Playwright and Chrome
+  download hosts. An allowlist entry `@name` expands to its set, so `normalizeAllowEntry` gains
+  that form. Each toolchain preset names the sets it needs (`web` ⇒ `@node` + `@browsers`).
+- `wb preset install` never widens policy from inside the box. In allowlist mode with a needed
+  set missing, it fails fast with the network code and names the `@set` the operator must add.
 
 ### P0-7 — Task 2.5: PTY sessions + interactive shell (req 3.5)
 
@@ -148,7 +159,8 @@ Do not start a wave while a lower-wave eligible task is unfinished (workflow.kvx
   `/healthz`, `/readyz`, graceful shutdown. Routes: sandbox CRUD + cursor inventory with
   `complete` flag, inspect (desired/health/last-observed separate), drain, reconcile, exec,
   files (over runner `fs.*`), sessions over WebSocket, evidence/artifacts, checkpoints,
-  asks list/answer (the only answer path, req 4.4), events stream.
+  asks list/answer (the only answer path, req 4.4), events stream. The H15 browser-request
+  guard runs ahead of auth on every route.
 - 3.2 `sdk`: `WorkboxClient` + `Sandbox` handle covering every route; retries with jitter only
   on idempotent calls; `AbortSignal` everywhere; sessions as async iterators.
 - 3.3 `mcp`: stdio server exposing exactly `sandbox_create|sandbox_list|sandbox_exec|sandbox_destroy`
@@ -184,11 +196,37 @@ Do not start a wave while a lower-wave eligible task is unfinished (workflow.kvx
 | E8 | Backup/restore drill: SQLite online backup + audit chain + CAS snapshot, `workbox backup/restore`, restore verified by audit `verify` + store `integrity_check` | 4.1 | Single-host scope stated; no HA claim |
 | E9 | arm64 seccomp BPF + compat matrix CI job (kernel/bwrap/slirp/nft/node versions), offline rootfs/runtime install path | 2.2, 4.1 | Doctor reports arch support explicitly |
 | E10 | Per-sandbox subordinate ranges via idmapped mounts (spec d7 later-hardening), TLS + key rotation/revocation for the server, webhook ask channel beyond stdout | 1.3 base, 3.1, 2.3 | Each is its own spec task when taken; not bundled into P0 |
+| E11 | Run output cleaned up for agents. Strip ANSI (CSI/OSC) codes; collapse carriage-return redraws such as progress bars to their final state; flag binary output (a NUL in the first 8 KiB, or more than 32 invalid UTF-8 sequences); keep the head and tail with a `... N lines omitted (full log: <sha256>, wb artifact get) ...` marker. A single oversized line falls back to byte windows. The cleaned text is a view only: the raw log in the CAS and its digest remain the evidence | 1.5, 3.3 | Pure functions in `protocol/src/output.js`, zero deps. Used in-box by `wb run` and host-side for the mcp bounded output. Port tryboxi `internal/output/clean.go` with the `output_test.go` vectors |
+| E12 | Host-observed run context in evidence. `networkBlocked`: proxy deny events for the sandbox inside `[startedAt, endedAt]`, deduped by host. `changedFiles`: entries in the writable overlay layer with mtime ≥ `startedAt`, whiteouts reported as deletions, capped at 500 with a `truncated` flag. The broker fills both at `broker.evidence.record` and rejects values the box supplies for them | 2.1, 1.5 | Every process in the box shares the writable layer, so `changedFiles` means "changed during the run window", not "changed by this command". The host only reads that layer; it never writes it while it is mounted |
+| E13 | Resource facts in evidence, read from cgroup files: `oomKilled` (delta of `memory.events` `oom_kill`), `cpuMs` (delta of `cpu.stat` `usage_usec`), `peakMemoryBytes` | 1.5, 1.6 | Cheap. Deltas cover the whole sandbox over the run window. On this host's 6.8 kernel `memory.peak` is the cgroup's lifetime peak (a per-fd reset arrives in 6.12), so a per-command peak needs a per-run child cgroup or falls back to the P0-1 sampled RSS; the evidence records which source was used |
+| E14 | Generated `wb` guide for agents. `docs/gen-wb.mjs` renders it from the same registry as `docs/wb.md`: what `wb run` records, exit codes, a blocked host ⇒ `wb ask raise --kind permission`, secrets never printed. It is shown in-box by `wb help agent` and written into a harness by `workbox agent-rules install claude\|codex\|cursor` as a skill file, an `AGENTS.md` block or a rule file, backing up any existing file first | 3.x, 4.2 | Template: tryboxi `agent-rules/sandbox.md` and `cmd/sandboxctl/mcp.go`. The content covers `wb` commands, not MCP tools, per the CLI-native thesis |
+| E15 | Secrets as placeholders. **Needs an owner decision before work.** The box only ever sees a random per-sandbox placeholder for each secret. For the hosts bound to a secret, the host proxy decrypts TLS with a per-host leaf certificate signed by a host-local CA and swaps placeholders in request headers for the real value, including inside Basic-auth base64. It refuses placeholders sent to any other host or over cleartext HTTP, forces `Accept-Encoding: identity` and scrubs echoed values from responses. Git tokens are added only for allowed `owner/repo`, and `git-receive-pack` ref updates are checked against allowed push-branch globs (read-only by default). Requests carrying a stored value into the box (exec argv/env/stdin, files written in) are rejected | 2.3, 2.1 | Additive to req 4.5: a per-secret mode, `env` (today's injection, the default) or `proxy`. Costs: Node has no X.509 creation API (`X509Certificate` only parses), so this needs a pinned core-only dependency or host `openssl`; the CA must be trusted in-box through a read-only mount plus `SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS`/`REQUESTS_CA_BUNDLE`/`GIT_SSL_CAINFO`; clients that pin certificates break; the proxy decrypts agent traffic for bound hosts, which `docs/security.md` must state. Builds on H13 and the H12 per-sandbox proxy credential. Port tryboxi `internal/network/egress/{egress,intercept,ca}.go` and `internal/secrets` with their test vectors |
+| E16 | Repo sync with diff, apply, pull and undo. **Needs a new spec req and an owner decision.** One-way delta sync from the host repo into the box: a manifest of size, mtime and sha256; candidates from `git ls-files -c -o --exclude-standard`; never sync `.env*`, `*.pem`, `*.key`, `id_*`, `.npmrc`, `.aws`, `.ssh`; the copied `.git/config` loses its `credential`/`include`/`includeIf` sections, `extraheader`/`helper`/`askpass` keys and URL credentials. `diff` compares against the synced base. `apply` does a per-file 3-way merge with `git merge-file -p` on temp files and never touches the host index, commits, checks out, resets or cleans. `pull` copies changed files and refuses a host file changed since the last sync unless forced. Every host write is preceded by a backup artifact that `undo` restores. Absolute paths, `..`, escaping symlinks and anything under `.git/` are rejected | 1.6, 2.3 | Writes into the box go through the runner (`fs.*` or an in-box tar extract), never as host writes into a mounted writable layer, because overlayfs forbids changing layers under a live mount. All host deletes go through H14. Overlaps Hyperfide's own repo handling, so confirm the provider contract needs it before adding the req. Port tryboxi `internal/workspace/{sync,apply}.go` with the `workspace_test.go` vectors |
+
+### External reference: tryboxi
+
+[tryboxi](https://github.com/karthikponna/tryboxi) is an MIT-licensed Go microVM sandbox daemon,
+read at `5fdcee5` on 2026-10-28. Its isolation backend, vsock guest agent and MCP-first interface
+do not apply here; the pieces below do. Ported logic is rewritten in JS, carries the Go test
+vectors as JS fixtures, and keeps the MIT notice in a root `NOTICE` file from the first derived
+commit. Its Linux backend is only unit-tested (its real VMs run on macOS), so none of it counts
+as proven on Linux.
+
+| tryboxi source | Workbox item |
+|---|---|
+| `internal/network/policy` + `policy_test.go` | H13; `@` host sets in P0-6 |
+| `internal/output/clean.go` + `output_test.go` | E11 |
+| `internal/service/exec.go` (`network_blocked`, `changed_files`, exit fields) | E12, E13 |
+| `agent-rules/sandbox.md`, `cmd/sandboxctl/mcp.go` | E14 |
+| `internal/network/egress/{egress,intercept,ca}.go` + tests, `internal/secrets` | E15 |
+| `internal/workspace/{sync,apply}.go` + `workspace_test.go` | E16 |
+| `internal/safefs` + `safefs_test.go` | H14 |
+| `internal/api/middleware` | H15 |
 
 ## 3. Hardening list
 
-Timing is the point: H1–H3 land **before** the surface that would expose them (broker relay,
-files API, REST). The rest ride with the task that touches the file. Every H item gets a
+Timing is the point: H1–H3 and H13 land **before** the surface that would expose them (broker
+relay, files API, REST, the proxy). The rest ride with the task that touches the file. Every H item gets a
 negative test asserting the failure mode, per req 8 — a fix without its attack test is not done.
 
 | # | Hardening | Where (verified) | Lands with |
@@ -205,6 +243,9 @@ negative test asserting the failure mode, per req 8 — a fix without its attack
 | H10 | Durability: audit append has no lock/fsync — two writers fork the chain, a torn last line makes the daemon unstartable, verify reads whole files into memory (`audit.js:52-151`); `launch.log` grows forever and is read whole (`launch.js:243,271-279`); store `JSON.parse` on row reads crashes all callers on one corrupt row, several list calls unbounded (`store.js`). Fix: single `O_APPEND` write + fsync policy, cross-process lockfile, tolerate/repair torn final line on open (truncate to last good line, audit the repair), streaming verify, launch-log rotation + byte-capped tail reads, defensive row parse ⇒ `E_INTERNAL` with row id, paginated lists, `integrity_check` on open | `core/src/{audit,store}.js`, `host/launch.js` | P0-2 (manager is the second writer) |
 | H11 | Bounded config + encodings: config has minima only — `memoryBytes`/`pids`/`spoolBytes` can be 2^53 (`config.js:128-161`); NDJSON decodes with lossy UTF-8 (`ndjson.js:61`) and schema string `max` counts UTF-16 units not bytes (`schema.js:96`); `Capture` splits multibyte chars at the byte cap (`exec.js:30-45`); doctor `cgroupCheck` mutates host cgroups and can leak a probe cgroup (no `finally`). Fix: maxima mirroring cgroup/kernel limits, byte-length accounting in schema strings, fatal UTF-8 on the control channel (`TextDecoder{ fatal:true }`) with session *payload* bytes remaining base64 (already the case), UTF-8-boundary-aware capture truncation, doctor probe cgroup cleanup in `finally` + `--json` read-only mode documented | `core/src/{config}.js`, `host/doctor.js`, `sandbox/exec.js`, `protocol/src/{ndjson,schema}.js` | P0-0/P0-2 |
 | H12 | Forward-looking (design-stage, no code yet — cheap now, expensive later): proxy must not trust source IP alone per sandbox (per-sandbox proxy credential issued at `runner.go`, rotated per boot); WS auth before upgrade + heartbeat + backpressure (drop slow consumers, never grow unbounded sends — same rule as Peer `_send`); scoped-key least-privilege matrix written down before 3.1 routes multiply; sandbox/run/outbox dirs tightened from 0755 toward 0710 with group = daemon (shared subuid range d7 makes host-dir perms the only cross-sandbox file barrier on the host side) | `host/{proxy,launch}.js`, `server/`, docs | P0-3, P0-8 design notes |
+| H13 | Proxy SSRF. In `egress`, the default mode (`config.js:16`), nft accepts the proxy port before the private-range drops (`nft.js:64-73`). The proxy then allows every target (`proxy.js:54`) and connects by name (`proxy.js:79`, `proxy.js:114`) without checking the resolved address. So `curl -x http://10.0.2.2:8080 http://169.254.169.254/`, or a CONNECT to `127.0.0.1:<port>`, reaches cloud metadata or host loopback services. In `allowlist`, an allowed `*.domain` whose DNS answers a private address does the same. Fix: resolve on the host; unmap IPv4-mapped IPv6, then refuse the always-blocked ranges (0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.168/16, 198.18/15, 224/4, 240/4, 255.255.255.255/32, ::/128, ::1/128, fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96); connect to the checked address with no second lookup; deny `localhost`, `*.localhost`, `*.local` and `*.internal` by name; apply hostname rules only on 80/443 plus declared ports; allow raw-IP targets only through CIDR allow entries. nft also gets an explicit IPv6 drop: its `ip daddr` rules match IPv4 only, so in egress IPv6 falls through to `accept`, which is harmless today only because slirp4netns runs without IPv6 | `core/src/host/{proxy,nft}.js` | P0-3 (2.1), before `createProxy` gets its first caller |
+| H14 | A single choke point for deletes, complementing H2: H2 validates names, H14 bounds where deletes can land. Every host-side delete (`launch.js` `removeDirs`, checkpoint and artifact GC, a future E16 undo) goes through one `removeUnder(root, path)`. It resolves symlinks on the deepest existing ancestor, refuses the root itself and anything outside it, and is the only module allowed to call `fs.rm`/`rmSync`, which an eslint `no-restricted-properties` rule enforces everywhere else. Port tryboxi `internal/safefs` with `safefs_test.go` | ＋ `core/src/host/safefs.js`, `host/launch.js`, broker GC | P0-2 (the manager's destroy is the main deleter) |
+| H15 | Browser-originated requests to the local API. A page in the operator's browser can POST to `127.0.0.1:<port>` (CSRF) or reach the API through DNS rebinding. Fix: reject any request that carries `Origin` or `Sec-Fetch-Site` with 403 before auth runs, and accept `Host` only for `localhost`, `127.0.0.1`, `::1` and configured server names | `server/src/{server,auth}.js` | P0-8 (3.1) |
 
 ## 4. Spec gaps — proposed defaults (owner-confirmable, all backward-compatible)
 
@@ -245,6 +286,8 @@ Legend: ✎ modify, ＋ create, — leave alone. Every ＋/✎ source file impli
 
 - ✎ `package.json` — add `fmt` coverage for new dirs only; scripts unchanged otherwise.
   Fix the 6 prettier-failing `packages/*/package.json` (run `pnpm fmt`) in P0-0.
+- ＋ `NOTICE` — the MIT notice for tryboxi-derived code, added with the first derived commit
+  (H13 at the latest).
 - ＋ `.github/workflows/ci.yml` (P0-9/E9) — gates exist only as local scripts today; CI runs
   `check:tests`, `lint`, `fmt:check`, unit tests unprivileged, and a privileged bare-host job
   for integration/e2e. This is what makes req 8's "gate that cannot be skipped" true.
@@ -269,6 +312,8 @@ Legend: ✎ modify, ＋ create, — leave alone. Every ＋/✎ source file impli
   add `broker.checkpoint.restore` only if restore is ever exposed to wb (plan: host-side, so no).
 - ✎ `src/errors.js`, `src/envelope.js`, `src/ids.js`, `src/index.js` — errors gain optional
   `retryable` + `requestId` fields (additive); rest unchanged.
+- ＋ `src/output.js` (E11) — ANSI strip, CR collapse, binary detection, head+tail truncation;
+  pure functions, zero deps.
 
 ### `packages/core`
 
@@ -300,7 +345,10 @@ Legend: ✎ modify, ＋ create, — leave alone. Every ＋/✎ source file impli
   schema+digest verification on load, tar guards, `mkdtemp` staging + lockfile, pinned Node
   hashes, bounded docker output; runtime gains the `node-pty` bundle entry in P0-7 and stops
   copying symlinked files (H8).
-- ＋ `src/host/netns.js`, `src/host/nft.js`, `src/host/proxy.js` (P0-3); ＋ `src/host/seccomp.js` (P0-4).
+- ＋ `src/host/netns.js`, `src/host/nft.js`, `src/host/proxy.js` (P0-3). H13's resolved-address
+  check, port rules and IPv6 drop land in `proxy.js`/`nft.js`; the `@` host sets go in a data
+  module next to `proxy.js` with P0-6. ＋ `src/host/seccomp.js` (P0-4).
+- ＋ `src/host/safefs.js` (H14) — `removeUnder(root, path)`, the only caller of `fs.rm`.
 - ✎ `src/sandbox/state.js` — P0-2: transition table + drain/quarantine edges as data (§4).
 - ✎ `src/sandbox/supervisor.js` — H1 token presentation, H5 store-profile validation,
   `exec()` wrapper (P0-0), netns/nft/proxy hooks replacing the hard-coded `10.0.2.x`
@@ -359,7 +407,8 @@ Legend: ✎ modify, ＋ create, — leave alone. Every ＋/✎ source file impli
 - server ＋ `src/{server,auth,routes/{sandboxes,exec,files,sessions,evidence,artifacts,checkpoints,asks,events},ws,metrics}.js`;
   one route module per family so the 1:1 test map stays honest; Fastify pinned in
   `packages/server/package.json` only. Auth (H12): hashed scoped keys, 401/403, WS auth
-  pre-upgrade, body-size limits mirroring protocol caps.
+  pre-upgrade, body-size limits mirroring protocol caps. H15's browser-request guard sits in
+  `server.js` ahead of `auth.js`.
 - sdk ＋ `src/{client,sandbox,errors,retry}.js` — `fetch`/`WebSocket` globals only (already in
   the eslint globals list), no deps beyond Node ≥22.13 built-ins.
 - mcp ＋ `src/{server,tools}.js` — stdio JSON-RPC; depends on `@workbox/sdk` only; tool list
@@ -400,15 +449,18 @@ Per-item tests (additions beyond the 1:1 unit floor):
 | P0-0 (1.4) | `core/test/integration/sessions.test.js` (exists as WIP): ordering, replay, gap after 8 MiB overflow, survive host disconnect/reconnect, TERM→KILL escalation, exec timeout, in-box OOM (`oom_kill>=1`), pid-limit proof deferred from 1.3 | attach during flood loses nothing (H7); oversize chunk ⇒ `truncated` visible; pre-aborted Peer request rejects, never hangs; `..`/absolute sandbox id rejected (H2); `__proto__` config patch harmless (H4) |
 | P0-1 (1.5) | `core/test/integration/wb.test.js` inside a real sandbox: `wb status/tools` (+`--json`), `wb session *`, `wb run` evidence fields, digest-verified artifact in CAS, `fs.*` round-trip via supervisor | forged digest/size rejected; symlink in outbox rejected (`O_NOFOLLOW`); outbox file owned outside mapped range rejected; local peer calling `runner.go`/`broker.secret.resolve` ⇒ `E_DENIED` (H1); `fs.write` with `..`/absolute-host path rejected (H2) |
 | P0-2 (1.6) | `cli/test/integration/cli.test.js`: create via CLI, kill manager process, restart, rediscovered with sessions intact, destroy ⇒ `DELETED`; empty-cgroup sandbox ⇒ `ABSENT`, not relaunched | duplicate idempotency key + different profile ⇒ conflict; illegal transition ⇒ machine code; second nonce presentation ⇒ refused + `QUARANTINED`; audit chain verifies across the restart (H10) |
-| P0-3 (2.1) | `core/test/integration/network.test.js`: none/egress/allowlist against a host listener + the proxy; DNS works in egress; `wb net policy|test` | RFC1918 + gateway denied in egress; non-proxy traffic dropped in allowlist; CONNECT to unlisted host ⇒ 403 + audit event; `nft` rules unmodifiable from inside; sandbox A cannot use sandbox B's proxy credential (H12) |
+| P0-3 (2.1) | `core/test/integration/network.test.js`: none/egress/allowlist against a host listener + the proxy; DNS works in egress; `wb net policy|test` | RFC1918 + gateway denied in egress; non-proxy traffic dropped in allowlist; CONNECT to unlisted host ⇒ 403 + audit event; `nft` rules unmodifiable from inside; sandbox A cannot use sandbox B's proxy credential (H12); in egress, `127.0.0.1`, `169.254.169.254` and `[::ffff:127.0.0.1]` through the proxy ⇒ 403 + audit, as is an allowlisted name whose DNS answer (from a real test resolver) is `10.0.0.1` (H13); hostname rule on an undeclared port ⇒ denied; IPv6 packet dropped |
 | P0-4 (2.2) | `core/test/integration/seccomp.test.js`: each denylisted syscall ⇒ `EPERM` in a real sandbox; ordinary toolchain ops (fork/exec/chown/setuid/socket/epoll) unaffected; `/proc/self/status` shows filter mode 2 | x32 ABI syscall ⇒ killed/`EPERM` per program; sandbox booted without the fd fails checks and quarantines (no silent unfiltered boot) |
 | P0-5 (2.3) | `core/test/integration/broker.test.js`: ask raise→answer→`wait` wakes; secret exec sees the value, `env` outside does not; lease renew extends deadline; checkpoint→restore into new sandbox reproduces files; artifact put/get/list | out-of-policy ref refused; secret value greps clean across store DB, audit files, spool replay and sandbox fs; answer via wb (not host API) impossible; expired ask/lease behaviours; checkpoint of a running writer either quiesces or is refused with a code — never a silent torn tar |
-| P0-6 (2.4) | `core/test/integration/presets.test.js`: install `python` with egress; manifest at `/var/lib/workbox-preset/python.json` + host mirror; `python3`/`uv` run | unknown preset ⇒ coded error; re-install is a no-op with identical manifest; a step failure records `failed`, not `ok`; preset install in `none` network fails fast with the network code |
+| P0-6 (2.4) | `core/test/integration/presets.test.js`: install `python` with egress; manifest at `/var/lib/workbox-preset/python.json` + host mirror; `python3`/`uv` run | unknown preset ⇒ coded error; re-install is a no-op with identical manifest; a step failure records `failed`, not `ok`; preset install in `none` network fails fast with the network code; allowlist profile without the preset's host set ⇒ fast failure naming the missing `@set`; an in-box install never changes the stored policy |
 | P0-7 (2.5) | `core/test/integration/pty.test.js`: `isatty` true in-box, resize propagates (`stty size`), `workbox shell` scripted round-trip | resize on a pipe session ⇒ `E_UNSUPPORTED`; PTY session stop still escalates TERM→KILL |
-| P0-8 (3.1–3.4) | server tests vs a real engine (auth 401/403, schema 400 with field paths, lifecycle, exec, WS session, ask answer); sdk tests cover every route vs that server; mcp spawns and runs exec in a real sandbox; `cli/test/integration/remote.test.js` serve + remote create/exec/rm; first `test/e2e/lifecycle.test.js` | MCP tool list equals exactly the four names; scoped key with `read` cannot exec/destroy; oversize body ⇒ 413/400 not OOM; WS without token rejected pre-upgrade; SDK retry never duplicates a non-idempotent create (idempotency key asserted) |
+| P0-8 (3.1–3.4) | server tests vs a real engine (auth 401/403, schema 400 with field paths, lifecycle, exec, WS session, ask answer); sdk tests cover every route vs that server; mcp spawns and runs exec in a real sandbox; `cli/test/integration/remote.test.js` serve + remote create/exec/rm; first `test/e2e/lifecycle.test.js` | MCP tool list equals exactly the four names; scoped key with `read` cannot exec/destroy; oversize body ⇒ 413/400 not OOM; WS without token rejected pre-upgrade; SDK retry never duplicates a non-idempotent create (idempotency key asserted); request with `Origin` or `Sec-Fetch-Site` ⇒ 403, `Host: evil.example` ⇒ 403 (H15) |
 | P0-9 (4.1–4.3) | `bash deploy/check.sh`; `node docs/check.mjs`; `test/e2e/{ask-checkpoint,density}.test.js`: full flow + 20 concurrent sandboxes writing p50/p95 + RSS to `docs/measurements.md` | `docs/check.mjs` fails on a deliberately staled `wb.md` (self-test); install script is idempotent on re-run |
 | Gates | `scripts/check-tests.mjs` negative self-test (temp tree missing a unit test ⇒ exit 1); JSDoc-on-exports enforcement test; `fmt:check` back to green and kept there by CI | coverage floor is the spec's 90/80/90 — depressed-coverage files today (`exec.js` 32%, `supervisor.js` 36%, `runner.js` 46%, `cgroup.js` 55% lines in-sandbox) must reach it via bare-host integration, not by lowering thresholds |
 | E4 fuzz | seeded property tests in unit layer (NDJSON, schema, envelope, Peer races, spool invariants, `canonicalJSON`, config merge, `digestTree`, state machine) | a fuzz failure prints its seed and minimised input; seeds are then pinned as regression cases |
+| H14 | unit vectors ported from tryboxi `safefs_test.go`; destroy of a real sandbox removes only its own dirs | symlink pointing outside the root ⇒ refused; the root itself ⇒ refused; an `fs.rm` call outside `safefs.js` fails lint |
+| E11–E14 | unit vectors ported from tryboxi `output_test.go`; `core/test/integration/wb.test.js` gains: progress-bar output collapses, a binary log is flagged, `networkBlocked` lists a denied host, `changedFiles` lists a file the run wrote, `oomKilled` is true after an in-box OOM; `node docs/check.mjs` fails on a stale agent guide | box-supplied `networkBlocked`/`changedFiles`/`oomKilled` in the envelope ⇒ rejected; truncation never alters the CAS digest; `agent-rules install` over an existing file leaves a backup |
+| E15/E16 (if taken) | ported `intercept_test.go`/`egress_test.go`/`workspace_test.go` vectors; a real TLS round-trip through the proxy to a local HTTPS server with a bound secret; sync → edit in the box → apply → undo on a real git repo | placeholder sent to an unbound host or over cleartext ⇒ refused + audit; echoed secret scrubbed; a stored value in exec argv ⇒ rejected; apply with `..`, an escaping symlink or a `.git/` path ⇒ rejected; pull over a host file changed since sync ⇒ refused without force |
 
 Concurrency/isolation test gap to close in P0-2: two live sandboxes simultaneously — separate
 uppers, separate cgroups, killing one leaves the other `READY` (no such test exists today).
@@ -449,7 +501,7 @@ host passing `workbox doctor`):
 
 Definition of done for the whole plan: every req AC in spec.kvx 1.1–8.4 is either proven by a
 named test above or explicitly listed as a documented deviation (today the only planned
-deviation is the req 1.6 ptrace wording, §P0-4). Expansions E1–E10 are done only when their
+deviation is the req 1.6 ptrace wording, §P0-4). Expansions E1–E16 are done only when their
 own tests join the same gates; none may weaken a P0 acceptance row.
 
 ## 8. Sequencing summary
@@ -457,12 +509,13 @@ own tests join the same gates; none may weaken a P0 acceptance row.
 ```text
 P0-0 land 1.4 (+H2/H3/H4/H7 fixes, exec export)
   -> P0-1 wb base + broker/outbox/fs (+H1, H5, H8)
-  -> P0-2 manager/reconcile/CLI-local (+H6 tokens, H10, H11)
-  -> P0-3 network/proxy  |  P0-4 seccomp  |  P0-5 broker full  |  P0-7 PTY   (parallel-eligible after 1.6)
-  -> P0-6 presets (needs P0-3 egress)
-  -> P0-8 server -> SDK -> MCP + CLI-remote (first e2e lands with server)
+  -> P0-2 manager/reconcile/CLI-local (+H6 tokens, H10, H11, H14)
+  -> P0-3 network/proxy (+H13)  |  P0-4 seccomp  |  P0-5 broker full  |  P0-7 PTY   (parallel-eligible after 1.6)
+  -> P0-6 presets + @ host sets (needs P0-3 egress)
+  -> P0-8 server (+H15) -> SDK -> MCP + CLI-remote (first e2e lands with server)
   -> P0-9 deploy + docs + density e2e
-  -> E1..E10 expansions, each behind its P0 parent's green gate
+  -> E1..E14 expansions, each behind its P0 parent's green gate
+  -> E15/E16 only after an owner decision (E16 also needs a new spec req)
 ```
 
 Risks to the plan itself: (1) all bare-host numbers are unproven until P0-0's gate runs off
