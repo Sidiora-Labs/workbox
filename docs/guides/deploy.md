@@ -25,8 +25,8 @@ systemctl enable --now workbox
 ```
 
 The unit sets `Restart=on-failure`, `ProtectSystem=full`, `PrivateTmp=yes` and `NoNewPrivileges=yes`.
-The comments in the unit list each hardening option it deliberately leaves out and which step of
-the launch chain it would break; read them before adding any. Sandboxes keep running when the
+Other systemd hardening options break the launch chain; the comments in the unit say which ones
+and why, so read them before adding any. Sandboxes keep running when the
 daemon stops, and `serve` reconciles them at start
 ([Operations](../operations.md#reconcile-after-a-restart)).
 
@@ -56,4 +56,4 @@ other user's `subuid` entry.
 The server has no TLS. Keep it on loopback or a trusted network, or put a TLS-terminating proxy in
 front and add the name it forwards to `serverNames` in the serve config
 ([Operations](../operations.md#run-the-server)). `deploy/check.sh` validates the deployment assets
-and this host; see [Verification](../verification.md).
+and this host; see [Testing](../verification.md).

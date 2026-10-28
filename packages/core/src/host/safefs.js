@@ -6,7 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { E } from '../errors.js';
 
 /**
- * The single choke point for host-side deletes (H14), ported from tryboxi internal/safefs (MIT).
+ * The single choke point for host-side deletes (H14).
  * Every path is resolved, symlinks included, and must land strictly inside an explicit root. This
  * is the only host-side module allowed to call fs.rm/fs.rmSync; a source scan in its unit test
  * enforces that. It also holds the install primitives built on it (H8): a cross-process lockfile,

@@ -77,9 +77,8 @@ are refused. Grant references to a sandbox at create time with `secretRefs`.
 - Logs are structured JSON lines with a component tag; registered secret values are redacted.
 - First debugging steps: `workbox sandbox inspect <id>` (desired state, `stateReason`, health,
   `lastObservedAt`, sessions), `workbox sandbox events <id>` (events; locally also the state
-  transitions), and `wb
-status` inside the box. `wb net policy` shows the effective network mode; `wb net test <host>
-<port>` probes a target. Proxy decisions are in the audit log as `net.allow` and `net.deny`.
+  transitions), and `wb status` inside the box. `wb net policy` shows the effective network
+  mode; `wb net test <host> <port>` probes a target. Proxy decisions are in the audit log as `net.allow` and `net.deny`.
 
 ## Reconcile after a restart
 
@@ -99,9 +98,7 @@ Reconcile restores the network of every `egress` and `allowlist` sandbox it atta
 listens again on the address and port the sandbox's sessions were given, a new slirp4netns
 attaches to its namespace (unless the old one still runs), and the ruleset is reinstalled. Both
 come from `net.json` in the sandbox's directory, which the daemon writes at launch and which
-keeps the box on the policy it was launched with even if the config changed. A sandbox launched
-before that record existed cannot get its proxy back and is reported `suspect`; recreate it (from
-a checkpoint if its files matter). Health is `HEALTHY` only while the control channel is up and,
+keeps the box on the policy it was launched with even if the config changed. Health is `HEALTHY` only while the control channel is up and,
 for `egress` and `allowlist`, while the proxy listens and the sandbox's tap device exists, so a
 sandbox whose slirp4netns died turns `SUSPECT` at the next health poll.
 

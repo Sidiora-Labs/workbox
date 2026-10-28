@@ -241,7 +241,7 @@ function renderMeasurements(m) {
   const rows = (pairs) => pairs.map(([k, v]) => `| ${k} | ${v} |`).join('\n');
   return `# Measurements
 
-Recorded by test/e2e/lifecycle.test.js (density test): ${DENSITY} sandboxes created concurrently through the SDK against a real server, Manager and engine. These are recorded values, not thresholds; thresholds are an owner decision (spec req 7 ac_5).
+Recorded by \`test/e2e/lifecycle.test.js\`: ${DENSITY} sandboxes created concurrently through the SDK against a real server, on the host below. These are measurements, not performance targets.
 
 ## Host
 

@@ -32,7 +32,7 @@ default mode is `egress`. See the [network section of the security model](securi
 
 ## Does it call models?
 
-No. It runs the commands an agent issues. Model calls are excluded from the `wb` toolkit.
+No. It runs the commands an agent issues; the agent brings its own model access.
 
 ## How do secrets work?
 
@@ -54,8 +54,8 @@ server exits 4 and names the holder. Use `--server` to go through the server. Se
 
 ## Is there a Hyperfide adapter?
 
-Not in this repository. [The provider mapping](hyperfide-provider.md) shows which Workbox
-endpoint an adapter would call for each provider operation and where Workbox falls short.
+Not yet. [The provider mapping](hyperfide-provider.md) shows which Workbox endpoint an adapter
+would call for each provider operation, and which operations are not covered.
 
 ## Where are the numbers for create time and memory?
 

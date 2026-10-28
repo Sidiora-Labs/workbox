@@ -10,8 +10,7 @@ import { expandHostSets, hostSet, isHostSetEntry } from './hostsets.js';
  * its own listener port, so the policy it enforces belongs to that sandbox by construction (nft in
  * each sandbox netns admits only its own port). Every name is resolved here on the host, the
  * answers are checked against the always-blocked ranges and the host's own addresses, and the
- * proxy connects to the address it checked with no second lookup (H13; the address policy is
- * derived from tryboxi internal/network/policy, MIT, see NOTICE). Every decision reaches
+ * proxy connects to the address it checked with no second lookup (H13). Every decision reaches
  * `onDecision`; denials answer 403.
  */
 

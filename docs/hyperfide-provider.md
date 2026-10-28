@@ -6,8 +6,8 @@ Hyperfide drives sandbox providers through one adapter contract, defined in
 `PROVIDER_METHODS` are twelve operations: `capabilities`, `prepare`, `create`, `list`, `observe`,
 `attach`, `execute`, `inspect`, `stop`, `transfer`, `lifetime` and `destroy`.
 
-Workbox does not ship a Hyperfide adapter. This page maps each operation to the Workbox endpoint
-or command an adapter would call, and says where Workbox falls short. "Gap" means Workbox has no
+Workbox does not include a Hyperfide adapter yet. This page maps each operation to the Workbox
+endpoint or command an adapter would call, and notes what is missing. "Gap" means Workbox has no
 endpoint for the operation; "partial" means an endpoint exists but does not carry everything the
 contract's parameters or result require. Paths are relative to `workbox serve`; scopes are from
 `SCOPE_MATRIX` in `packages/server/src/auth.js`.

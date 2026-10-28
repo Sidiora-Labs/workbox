@@ -1,8 +1,5 @@
 # Workbox documentation
 
-Start with the smallest page that answers your question. Every link below points at a file in this
-tree.
-
 ## Evaluate Workbox
 
 - [Why Workbox?](why-workbox.md): what it is for, what it is not, and how it differs from the alternatives it replaces.
@@ -20,7 +17,7 @@ tree.
   - [Deploy the server](guides/deploy.md): systemd unit and container image.
 - [Architecture](architecture.md): packages, host layout, launch chain, runner protocol, state machine.
 - [Operations](operations.md): install, run, configure, observe, reconcile, recover, back up.
-- [Verification](verification.md): the local gates and what each one proves.
+- [Testing](verification.md): the test suites and checks, and what they need from the host.
 
 ## Reference
 
@@ -31,9 +28,14 @@ tree.
 - [wb reference](wb.md): the in-box agent command, generated from its command table.
 - [Hyperfide provider mapping](hyperfide-provider.md): how the surfaces cover Hyperfide's provider operations.
 
-## Keeping these pages true
+## Contribute
 
-`node docs/check.mjs` fails when a required page is missing, when `wb.md` differs from what
-`node docs/gen-wb.mjs` renders, when a relative link or anchor does not resolve, or when a page is
-not reachable from this index. `wb.md` is generated: change the `wb` command table, then run
-`node docs/gen-wb.mjs`. `measurements.md` is rewritten by the end-to-end suite; do not edit it by hand.
+- [Contributing](../CONTRIBUTING.md), [support](../SUPPORT.md) and the [security policy](../SECURITY.md).
+- [Changelog](../CHANGELOG.md) and [roadmap](../ROADMAP.md).
+
+## Editing these docs
+
+`node docs/check.mjs` fails when a required page is missing, when `wb.md` is out of date, when a
+relative link or anchor does not resolve, or when a page is not linked from this index. `wb.md` is
+generated: change the `wb` command table, then run `node docs/gen-wb.mjs`. `measurements.md` is
+rewritten by the end-to-end suite; do not edit it by hand.

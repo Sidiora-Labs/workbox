@@ -6,11 +6,11 @@ body:
   - type: markdown
     attributes:
       value: |
-        Read SUPPORT.md and the documentation first. Questions about Docker, your kernel's user-namespace policy, or your cloud provider belong with those projects.
+        Please check SUPPORT.md and the documentation first.
   - type: checkboxes
     id: checks
     attributes:
-      label: Preflight
+      label: Checks
       options:
         - label: I reviewed the documentation and searched existing issues.
           required: true
@@ -22,7 +22,7 @@ body:
       label: Component
       options:
         - Sandbox lifecycle
-        - wb toolkit
+        - wb command
         - Network policy
         - Server, SDK, or MCP
         - Operator CLI

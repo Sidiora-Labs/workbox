@@ -1,24 +1,21 @@
 # Contributing to Workbox
 
-Thanks for taking the time to contribute. This document explains how the project is organized,
-what we expect from patches, and how to get changes merged quickly.
+Thanks for your interest in contributing. This page covers setting up, running the tests and
+getting a change merged.
 
-## Ground rules
+## Before you start
 
-- Be respectful. The [code of conduct](CODE_OF_CONDUCT.md) applies to every interaction in this
-  project.
-- Keep changes focused. One pull request should do one thing. If you find yourself fixing an
-  unrelated bug on the way, split it out.
-- Every change that touches behavior needs a test. If it cannot be tested, explain why in the pull
-  request description.
-- Discuss large changes first. Open an issue before writing a thousand lines nobody asked for.
-  Small fixes and obvious improvements can go straight to a pull request.
-- Do not report security problems in public issues. Follow [SECURITY.md](SECURITY.md).
+- The [code of conduct](CODE_OF_CONDUCT.md) applies to every interaction in this project.
+- Keep each pull request to one change. If you find an unrelated bug on the way, fix it in a
+  separate pull request.
+- Every change to behavior needs a test.
+- For a large change, open an issue first so the approach can be agreed before you write it.
+  Small fixes can go straight to a pull request.
+- Do not report security problems in public issues; see [SECURITY.md](SECURITY.md).
 
-## Getting set up
+## Setting up
 
-You need Node.js 22.13 or newer and pnpm (the repository pins `pnpm@12.8.1` in `package.json`).
-From a checkout of the repository:
+You need Node.js 22.13 or newer and pnpm (`pnpm@12.8.1`, pinned in `package.json`):
 
 ```sh
 pnpm install --frozen-lockfile
@@ -26,64 +23,46 @@ make check
 make unit-unprivileged
 ```
 
-`make check` runs lint, the format check, the 1:1 test gate and the documentation gate. It needs
-no privileges. `make help` lists every target.
+`make check` runs lint, the format check, the test layout check and the docs check, and needs no
+privileges. `make help` lists every target.
 
 ## Running sandboxes and the full test suite
 
-Sandboxes need a Linux host with cgroup v2, bubblewrap and root. Docker is needed only to build
-the rootfs. On a host you are willing to prepare:
+Sandboxes need a Linux host with cgroup v2, bubblewrap and root; Docker is needed only to build the
+rootfs. Use a machine you can dedicate to it:
 
 ```sh
 sh deploy/install.sh
-node packages/cli/src/main.js doctor     # every failure names its remedy
+node packages/cli/src/main.js doctor     # each failure comes with a fix
 make test
 ```
 
-`pnpm test` runs the unit, integration and e2e tests against real sandboxes, and
-`pnpm test:coverage` enforces the coverage floors (lines 90, branches 80, functions 90). The
-integration and e2e tests cannot run on an ordinary hosted CI runner, so CI runs the static gates
-and the unit tests that work without root. A change to the launch chain, cgroups, the network
-policy or a surface should be run through `make test` before you open the pull request, and the
-pull request should say so. `bash deploy/check.sh` validates the deployment assets and runs the
-host doctor.
+`pnpm test` runs the unit, integration and end-to-end tests against real sandboxes, and
+`pnpm test:coverage` enforces the coverage floors (90% lines, 80% branches, 90% functions). CI
+cannot run the integration and end-to-end tests, so it runs the static checks and the unit tests
+that work without root. If you change the launch chain, cgroups, the network policy or one of the
+interfaces, run `make test` before opening the pull request and say so in its description.
 
-The operating procedures are in [docs/operations.md](docs/operations.md), and the design in
-[docs/architecture.md](docs/architecture.md).
+The design is described in [docs/architecture.md](docs/architecture.md) and the operating
+procedures in [docs/operations.md](docs/operations.md).
 
-## Project layout
-
-Eight packages under `packages/`: `protocol`, `core`, `runner`, `wb`, `server`, `sdk`, `mcp` and
-`cli`. `protocol`, `runner` and `wb` run inside the box and have no runtime dependencies. Scope,
-decisions and acceptance criteria live in [spec/workbox/spec.kvx](spec/workbox/spec.kvx); read the
-requirement your change serves before you start.
-
-## Code standards
+## Code style
 
 - Plain JavaScript, Node 22 ESM, JSDoc for types. No TypeScript, no bundler.
-- `.editorconfig` and `.prettierrc` are authoritative. Run `pnpm fmt` before committing.
+- Follow `.editorconfig` and `.prettierrc`; run `pnpm fmt` before committing.
 - `pnpm lint` must pass.
 - Every source module `packages/<p>/src/<path>.js` has a unit test at
-  `packages/<p>/test/unit/<path>.test.js`. `node scripts/check-tests.mjs` enforces it, and fails a
-  package with code but no integration test.
-- Tests run real code on real host primitives. Fakes, mocks and stubs that make a test pass
-  without exercising the real path are not accepted.
+  `packages/<p>/test/unit/<path>.test.js`, and every package has an integration test.
+  `node scripts/check-tests.mjs` checks both.
+- Tests exercise the real code path on real host primitives; mocks and stubs that bypass it are
+  not accepted.
 - Errors carry stable codes. No silent catches.
+- `protocol`, `runner` and `wb` run inside the box and must not gain runtime dependencies.
 - If you change the `wb` command table, regenerate the reference with `node docs/gen-wb.mjs`.
-  `node docs/check.mjs` fails on a stale `docs/wb.md` or a link that does not resolve.
 
 ## Commits and pull requests
 
-- Write the commit message as a plain sentence describing the real change. Subjects in this
-  repository are not `type:` prefixed; the changelog groups them by the spec task they carry
-  (`[spec:workbox/<wave>.<n>]`) and otherwise by the leading verb.
-- Do not mix formatting-only changes with behavior changes.
-- Fill in the pull request template and list the commands you ran with their results. Say which of
-  them could not run on your machine.
-- [CHANGELOG.md](CHANGELOG.md) is generated from the git history; `make changelog` regenerates it
-  with git-cliff.
-
-## Licensing
-
-The packages are marked `UNLICENSED` and the repository carries no license file. Do not add third
-party code without recording it in [NOTICE](NOTICE).
+- Write the commit subject as a plain sentence describing the change, without a `type:` prefix.
+- Keep formatting-only changes separate from behavior changes.
+- Fill in the pull request template, including the commands you ran.
+- [CHANGELOG.md](CHANGELOG.md) is updated when a release is cut.

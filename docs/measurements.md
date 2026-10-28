@@ -1,6 +1,6 @@
 # Measurements
 
-Recorded by test/e2e/lifecycle.test.js (density test): 20 sandboxes created concurrently through the SDK against a real server, Manager and engine. These are recorded values, not thresholds; thresholds are an owner decision (spec req 7 ac_5).
+Recorded by `test/e2e/lifecycle.test.js`: 20 sandboxes created concurrently through the SDK against a real server, on the host below. These are measurements, not performance targets.
 
 ## Host
 

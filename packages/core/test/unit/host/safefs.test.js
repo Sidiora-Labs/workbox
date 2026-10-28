@@ -18,8 +18,6 @@ import {
 } from '../../../src/host/safefs.js';
 import { tmpDir } from '../../helpers/tmp.js';
 
-/** Vectors ported from tryboxi internal/safefs/safefs_test.go (MIT). */
-
 function mkfile(p) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, 'x');

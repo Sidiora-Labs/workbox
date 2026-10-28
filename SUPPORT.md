@@ -1,18 +1,14 @@
 # Support
 
-Workbox is community-supported open-source software. There is no guaranteed response time or
-production support SLA.
+## Where to ask
 
-## Choose the right channel
-
-- **Reproducible defect:** open a Bug report using the issue form.
-- **Proposal for a feature or contract change:** open a Feature proposal before a large patch.
-- **Usage or architecture question:** use the Question form, after reading the
-  [documentation](docs/architecture.md) and [operations guide](docs/operations.md).
+- **Bug:** open a bug report with the issue form.
+- **Feature or interface change:** open a feature request before starting a large patch.
+- **Usage question:** use the question form, after checking the [documentation](docs/README.md).
 - **Security vulnerability:** do not open an issue; follow [SECURITY.md](SECURITY.md).
-- **Community conduct incident:** follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- **Conduct issue:** follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-## Before asking for help
+## What to include
 
 Run these and include the output:
 
@@ -23,13 +19,9 @@ bwrap --version
 uname -r
 ```
 
-Include the revision (`git rev-parse HEAD`), the command you ran, the expected behavior, the
-actual error, and the smallest sequence of steps that reproduces it. For a sandbox that is not
-healthy, add `workbox sandbox` output for it and the tail of its `launch.log`.
+Add the revision (`git rev-parse HEAD`), the command you ran, what you expected, the error you
+got, and the shortest steps that reproduce it. For an unhealthy sandbox, add the output of
+`workbox sandbox inspect <id>` and the end of its `launch.log`.
 
-Do not attach the secrets file, API keys, bearer tokens, lease tokens or the audit directory.
-Redact them from any log you paste.
-
-Maintainers may convert support requests into documentation or tracked defects. Questions about
-Docker, your kernel's user-namespace policy or your cloud provider's nested virtualization may
-need to be handled with those projects.
+Never attach the secrets file, API keys, bearer tokens, lease tokens or the audit directory, and
+remove them from any log you paste.

@@ -1,7 +1,6 @@
 # Project status and compatibility
 
-This page separates what is implemented from what is claimed about deployments. It is not a
-certification statement. The version is `0.1.0-dev`; nothing here is a production release.
+Workbox is at version `0.1.0-dev` and has no tagged release yet.
 
 ## Implementation status
 
@@ -21,8 +20,6 @@ certification statement. The version is `0.1.0-dev`; nothing here is a productio
 | Hyperfide provider adapter                                | Not shipped              | [Provider mapping](hyperfide-provider.md)             |
 | TLS, high availability, live migration                    | Not in v1                | [Stated limits](security.md#stated-limits)            |
 
-Scope, decisions and acceptance criteria are recorded in [`spec/workbox/spec.kvx`](../spec/workbox/spec.kvx).
-
 ## Supported host
 
 | Requirement  | Value                                                                                         |
@@ -34,13 +31,12 @@ Scope, decisions and acceptance criteria are recorded in [`spec/workbox/spec.kvx
 | CPU          | x86_64 for the seccomp filter; other architectures run sandboxes without seccomp              |
 | Host tools   | bubblewrap, util-linux, slirp4netns, nftables, uidmap, iproute2; `workbox doctor` checks them |
 
-macOS and Windows are not supported hosts. `workbox doctor` is the authority for a given machine:
-it reports every prerequisite as pass or fail with a remedy.
+macOS and Windows are not supported. Run `workbox doctor` to check a machine: it reports every
+prerequisite as pass or fail, with a fix for each failure.
 
 ## Known limits
 
-The complete list, with the reasoning for each, is [Stated limits](security.md#stated-limits). The
-ones that most often decide adoption:
+The full list is in [the security model](security.md#stated-limits). The main ones:
 
 - All sandboxes share one subordinate uid range, so separation on the host rests on per-sandbox
   directories and mount namespaces, not on uids.

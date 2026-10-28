@@ -1,8 +1,8 @@
 # Guides
 
-Task-oriented walkthroughs. Each one starts from a working checkout of this repository and says
-what it assumes. For lookups, use the [reference](../reference/README.md); for the reasoning behind
-the design, the [architecture](../architecture.md) and the [security model](../security.md).
+Step-by-step guides, each starting from a checkout of this repository. For lookups, see the
+[reference](../reference/README.md); for the design, the [architecture](../architecture.md) and
+the [security model](../security.md).
 
 - [Getting started](getting-started.md): install the host, build a rootfs, serve, and run a first command.
 - [Use the SDK](sdk.md): create sandboxes, run commands, stream a session and page events from JavaScript.

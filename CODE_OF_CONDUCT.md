@@ -37,5 +37,4 @@ example posting from a project account or speaking about the project at an event
 ## Enforcement
 
 Report violations privately to the maintainers listed in [MAINTAINERS.md](MAINTAINERS.md), not in
-a public issue. If your report concerns a maintainer, say so and it will be handled by someone
-else where there is someone else.
+a public issue. If your report concerns a maintainer, say so in the report.

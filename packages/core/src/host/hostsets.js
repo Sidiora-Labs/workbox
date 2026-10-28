@@ -2,9 +2,9 @@ import { E } from '../errors.js';
 
 /**
  * Named host sets for allowlist policies (task 2.4): the entry `@name` stands for every host of
- * the set. The lists are tryboxi internal/network/policy Presets (MIT, see NOTICE), which include
- * the CDNs real installs hit; `@ubuntu` also carries the Debian mirrors the rootfs apt uses, and
- * `@browsers` the Microsoft mirror `playwright install` also fetches from.
+ * the set. The lists include the CDNs real installs hit; `@ubuntu` also carries the Debian
+ * mirrors the rootfs apt uses, and `@browsers` the Microsoft mirror `playwright install` also
+ * fetches from.
  */
 export const HOST_SETS = Object.freeze({
   node: Object.freeze([

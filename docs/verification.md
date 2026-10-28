@@ -1,35 +1,28 @@
-# Verification
+# Testing
 
-Each gate answers a different question. Run the narrowest one that covers your change, and do not
-read a pass as more than the last column says.
+| Command                        | What it runs                                                                                                                                | Needs                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `make check`                   | `pnpm lint`, `pnpm fmt:check`, `node scripts/check-tests.mjs` and `node docs/check.mjs`                                                     | Node and pnpm            |
+| `node scripts/check-tests.mjs` | Checks that every `packages/<p>/src/**/*.js` has a unit test at the same relative path and every package has an integration test            | Node                     |
+| `make unit-unprivileged`       | The unit tests that run as an ordinary user; this is what CI runs                                                                           | Node                     |
+| `pnpm test`                    | Unit, integration and end-to-end tests                                                                                                      | A prepared host, as root |
+| `pnpm test:coverage`           | Unit and integration tests with coverage floors of 90% lines, 80% branches and 90% functions                                                | A prepared host, as root |
+| `node docs/check.mjs`          | Checks that the required pages exist, `wb.md` is up to date, every relative link and anchor resolves, and every page is linked in the index | Node and pnpm            |
+| `bash deploy/check.sh`         | Validates the deployment assets and runs `workbox doctor`                                                                                   | A prepared host, as root |
 
-| Gate                           | What it proves                                                                                                                                          | What it does not prove                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| `node scripts/check-tests.mjs` | Every `packages/<p>/src/**/*.js` has a unit test at the same relative path, every non-stub package has an integration test, and `test/e2e` holds a test | That the tests are good                  |
-| `pnpm lint`                    | ESLint passes over the repository                                                                                                                       | Behavior                                 |
-| `pnpm fmt:check`               | Prettier formatting of `packages/**` (js, json, md) and `scripts/*.mjs`                                                                                 | Formatting of `docs/` or the root README |
-| `pnpm test`                    | Unit, integration and end-to-end tests pass                                                                                                             | Tests that were skipped on this host     |
-| `pnpm test:coverage`           | The unit and integration suites meet lines 90, branches 80, functions 90                                                                                | End-to-end behavior                      |
-| `node docs/check.mjs`          | Required pages exist, `wb.md` is current, every relative link and anchor resolves, every page is reachable from the docs index                          | That the prose is true                   |
-| `bash deploy/check.sh`         | Deployment assets parse and pass their checks on this host                                                                                              | A production deployment                  |
+## Host requirements
 
-## Host-dependent tests
-
-The integration and end-to-end tests drive real sandboxes, so they need a host that passes
+The integration and end-to-end tests start real sandboxes, so they need a host that passes
 `workbox doctor`: root, bubblewrap, user namespaces, cgroup v2 delegation, overlayfs and the
-network tools. Some tests are skipped with a stated reason when the host cannot run them: the
-seccomp tests off x86_64, a session test that needs to switch to uid 65534, and the toolchain
-preset install matrix unless it is enabled. Read the skipped count in the test summary before
-treating a green run as full coverage.
+network tools. Some tests are skipped, with the reason printed, when the host cannot run them:
+the seccomp tests on hosts other than x86_64, a session test that switches to uid 65534, and the
+toolchain preset install matrix unless `WORKBOX_PRESET_MATRIX=1` is set. Check the skipped count
+in the summary.
 
-## Documentation gate
-
-`node docs/check.mjs` is the only documentation gate. It checks structure, not truth: a link can
-resolve and the sentence around it can still be wrong. Every command, flag and path in these pages
-was checked against the source at the revision that last changed them; when you change a command,
-update its page in the same change.
+## Documentation
 
 - `docs/wb.md` is generated: `node docs/gen-wb.mjs` rewrites it from `wb tools --json`.
 - `docs/measurements.md` is rewritten by `test/e2e/lifecycle.test.js`.
 - Format the pages you edit with `npx prettier --write <page>`, except `wb.md` and
   `measurements.md`.
+- When you change a command, flag or path, update its page in the same change.

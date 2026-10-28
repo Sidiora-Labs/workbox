@@ -12,8 +12,8 @@ cannot do alone, `wb` asks the host to do: raise a question to a human, inject a
 into a child process, record evidence for a command, create a checkpoint, store an artifact, or
 read the network policy. See the [wb reference](wb.md).
 
-The host side stays small. Lifecycle and exec are the only operations a harness needs, and the MCP
-server mirrors exactly those: `sandbox_create`, `sandbox_list`, `sandbox_exec`, `sandbox_destroy`.
+The host side stays small. A harness needs only lifecycle and exec, and those are the MCP server's
+four tools: `sandbox_create`, `sandbox_list`, `sandbox_exec`, `sandbox_destroy`.
 
 ## What each sandbox is
 
@@ -35,8 +35,8 @@ the [security model](security.md) and the [architecture](architecture.md).
 
 ## Where it fits
 
-Workbox is shaped to the operations Hyperfide's sandbox provider contract expects. It ships no
-Hyperfide adapter; the [provider mapping](hyperfide-provider.md) says which endpoint covers each
-operation and where it falls short. It is usable on its own through the
+Workbox is built around the operations Hyperfide's sandbox provider contract expects. It does not
+include a Hyperfide adapter yet; the [provider mapping](hyperfide-provider.md) shows which endpoint
+covers each operation. It can be used on its own through the
 [operator CLI](reference/cli.md), the [REST and WebSocket API](reference/rest-api.md), the
 [SDK](guides/sdk.md) or the [MCP server](guides/mcp.md).

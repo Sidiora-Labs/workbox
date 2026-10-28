@@ -74,5 +74,5 @@ deploy-check: ## Validate the deployment assets and run the host doctor
 
 ci: check unit-unprivileged ## What the hosted CI workflow runs
 
-changelog: ## Regenerate CHANGELOG.md from git history (needs git-cliff)
-	git cliff -o CHANGELOG.md
+changelog: ## Print a draft of unreleased changes from git history (needs git-cliff)
+	git cliff --unreleased

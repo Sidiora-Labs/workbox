@@ -11,7 +11,7 @@ types, `node --test`). Nothing is compiled or bundled.
 | `wb`       | The agent CLI inside the box. One command table generates `--help`, `wb tools` and [the wb reference](wb.md).                                                                                                                  |
 | `server`   | REST and WebSocket API on `node:http`: scoped bearer keys, the browser guard, schemas, request ids, audit of mutations, Prometheus metrics, `/healthz` and `/readyz`.                                                          |
 | `sdk`      | `WorkboxClient` and the `Sandbox` handle over every server route, with retries on idempotent calls and sessions as async iterators.                                                                                            |
-| `mcp`      | A stdio MCP server with exactly four tools over the SDK.                                                                                                                                                                       |
+| `mcp`      | A stdio MCP server with four tools, built on the SDK.                                                                                                                                                                          |
 | `cli`      | The operator CLI `workbox`, against a local engine or a remote server.                                                                                                                                                         |
 
 `protocol`, `runner` and `wb` have no third-party dependencies; they are what the runtime bundle
@@ -38,10 +38,10 @@ parent).
 
 - `workbox rootfs build minimal` builds `rootfs/minimal/Dockerfile` (Debian bookworm-slim with
   bash, coreutils, util-linux, procps, ca-certificates, curl, git, less, nano, jq, xz-utils and
-  gnupg; toolchains come from `wb preset install`, d5), exports it, shifts every
-  inode's uid and gid by the subordinate base while restoring setuid and setgid bits, and writes a
-  manifest with a sorted content digest. Identical inputs give the identical digest. Docker is
-  needed only for this step (d1).
+  gnupg; toolchains come from `wb preset install`), exports it, shifts every inode's uid and gid
+  by the subordinate base while restoring setuid and setgid bits, and writes a manifest with a
+  sorted content digest. Identical inputs give the identical digest. Docker is needed only for
+  this step.
 - `workbox runtime install` verifies a Node 22 tarball against its SHA-256, copies protocol,
   runner and wb beside it, writes the `bin/wb` and `bin/init.sh` wrappers and a manifest.
 
@@ -57,7 +57,7 @@ from the daemon:
 2. `unshare --user --mount --propagation private --map-users --map-groups --setuid 0 --setgid 0`
    enters a range-mapped user namespace with a private mount namespace, as inner root.
 3. `sh` mounts the overlay (rootfs read-only below, `upper` on top) at `merged`. bubblewrap 0.9
-   has no `--overlay`, so this happens here, inside the user namespace (d9).
+   has no `--overlay`, so this happens here, inside the user namespace.
 4. `bwrap` unshares pid, net, ipc, uts and cgroup, binds `merged` as `/`, the runtime read-only
    at `/opt/workbox` and `run` at `/run/workbox`, mounts `/proc`, `/dev`, and 1777 tmpfs on
    `/tmp` and `/dev/shm`, clears the environment, keeps the 14 capabilities and loads the
@@ -96,6 +96,9 @@ directions (`packages/protocol/src/methods.js` lists every method and its schema
   sequence has been evicted; `session.exit` carries code and signal. Sessions keep running when
   the host connection drops. Stop sends SIGTERM and escalates to SIGKILL after the grace (5 s by
   default).
+- PTY sessions run under util-linux `script(1)`, which keeps the runner free of native
+  dependencies; resize uses `stty -F <pty> rows R cols C`. A custom rootfs needs `script` and
+  `stty` for PTY sessions.
 - `exec` (`packages/core/src/sandbox/exec.js`) is a session run to completion with a timeout and
   bounded capture (1 MiB per stream by default), reporting `truncated` and `timedOut`.
 
@@ -142,7 +145,7 @@ stored with a time and reason; an illegal transition is rejected with a code.
 - **SDK** (`@workbox/sdk`): `WorkboxClient` and `Sandbox` cover every route; GET, HEAD and DELETE
   are retried with jittered backoff on 5xx and network errors; `attach` returns a
   `SessionStream`; `events()` pages the events route and can follow it by polling.
-- **MCP** (`workbox-mcp`, stdio): exactly `sandbox_create`, `sandbox_list`, `sandbox_exec` and
+- **MCP** (`workbox-mcp`, stdio): `sandbox_create`, `sandbox_list`, `sandbox_exec` and
   `sandbox_destroy`, over the SDK against `WORKBOX_SERVER` (default `http://127.0.0.1:8790`) with
   `WORKBOX_TOKEN`. Exec output is bounded to 64 KiB and its timeout to 240 s.
 - **CLI** (`workbox`): `doctor`, `rootfs`, `runtime`, `sandbox`, `shell`, `serve` and

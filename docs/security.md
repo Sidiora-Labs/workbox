@@ -1,8 +1,6 @@
 # Security model and its limits
 
-This page states what Workbox enforces, where in the code it is enforced, and what it does not
-enforce. The limits section is part of the model: treat anything listed there as outside the
-boundary.
+What Workbox enforces, where in the code, and the [known limits](#stated-limits).
 
 The threat model is an agent with root inside its sandbox that runs arbitrary code. The boundary
 protects the host, other sandboxes, the shared rootfs and the host's network from it. Operators
@@ -20,13 +18,13 @@ and API clients holding admin keys are trusted.
   sets: chown, dac_override, fowner, fsetid, kill, setgid, setuid, setpcap, net_bind_service,
   net_raw, sys_chroot, mknod, audit_write, setfcap. bwrap drops all others
   (`--cap-drop ALL --cap-add ...`), then `init.sh` runs `setpriv --no-new-privs` with the same
-  bounding set, so setuid binaries and file capabilities cannot raise privilege (d10). `sudo`
+  bounding set, so setuid binaries and file capabilities cannot raise privilege. `sudo`
   does not work for non-root uids in the box.
 - The writable filesystem is a private overlay: the shared read-only rootfs below, the sandbox's
-  `upper` directory on top. The overlay is mounted inside the launch user and mount namespace
-  (d9), so it never appears in the host mount table. Destroy refuses to record `DELETED` while
+  `upper` directory on top. The overlay is mounted inside the launch user and mount namespace,
+  so it never appears in the host mount table. Destroy refuses to record `DELETED` while
   any host mount still references the sandbox directory.
-- The runtime (Node, protocol, runner, wb) is bind-mounted read-only at `/opt/workbox` (d12).
+- The runtime (Node, protocol, runner, wb) is bind-mounted read-only at `/opt/workbox`.
 - Before a sandbox becomes `READY`, the runner reports self-checks (uid map, capability sets,
   `NoNewPrivs`, that `mount(2)` fails, and the seccomp mode) and the host compares them with what
   it launched. A mismatch moves the sandbox to `QUARANTINED`.
@@ -39,17 +37,16 @@ and API clients holding admin keys are trusted.
 - Destroy writes `cgroup.kill`, waits for `cgroup.procs` to empty and removes the cgroup.
 - Every host-side delete goes through one function, `removeUnder` in
   `packages/core/src/host/safefs.js`. It resolves symlinks on the deepest existing ancestor and
-  refuses the root itself or any path outside it (H14).
+  refuses the root itself or any path outside it.
 
 ### Seccomp
 
 - On x86_64 hosts the supervisor passes a classic BPF program to `bwrap --seccomp`
   (`packages/core/src/host/seccomp.js`). It returns `EPERM` for any architecture other than
-  x86_64, for the x32 ABI, and for 50 syscalls: the 14 named in req 1.6 (mount, umount2,
-  pivot_root, setns, unshare, keyctl, add_key, request_key, kexec_load, open_by_handle_at,
-  ptrace, bpf, perf_event_open, userfaultfd), the rest of the Docker default profile's
-  unconditionally blocked set that exists on x86_64, the three io_uring calls and the new mount
-  API. Every other syscall is allowed.
+  x86_64, for the x32 ABI, and for 50 syscalls: mount, umount2, pivot_root, setns, unshare,
+  keyctl, add_key, request_key, kexec_load, open_by_handle_at, ptrace, bpf, perf_event_open and
+  userfaultfd; the rest of the Docker default profile's unconditionally blocked set that exists
+  on x86_64; the three io_uring calls; and the new mount API. Every other syscall is allowed.
 - The runner reports `Seccomp: 2` from `/proc/self/status` before the sandbox is declared ready.
 
 ### Control channel between host and runner
@@ -90,7 +87,7 @@ and API clients holding admin keys are trusted.
   local address.
 - The proxy resolves every name on the host, checks every answer against the always-blocked
   ranges (IPv4 and IPv6, IPv4-mapped addresses unmapped first) and the host's own addresses, and
-  connects to the address it checked, with no second lookup (H13). It denies `localhost`,
+  connects to the address it checked, with no second lookup. It denies `localhost`,
   `*.localhost`, `*.local` and `*.internal` by name. In allowlist mode hostname entries (with an
   optional `*.` prefix) apply to ports 80 and 443 plus any ports the profile declares, and raw IP
   targets are allowed only through CIDR entries. Denials answer 403; every decision is appended
@@ -98,20 +95,16 @@ and API clients holding admin keys are trusted.
 
 ### The host-namespace guard
 
-An earlier test run flushed the host's firewall rules by running nft in the wrong namespace. The
-code now makes that impossible to do by mistake (`packages/core/src/host/netns.js`):
+Network setup must only ever touch a sandbox's own network namespace, never the host's
+(`packages/core/src/host/netns.js`):
 
 - Every `nsenter`, `nft` and `slirp4netns` spawn goes through `spawnGuarded`. Immediately before
   spawning it reads `/proc/<pid>/ns/net` and refuses with `E_DENIED` when that namespace is the
-  host's (`/proc/1/ns/net`), this process's own, or unreadable. A refusal throws before anything
-  is spawned.
+  host's (`/proc/1/ns/net`), this process's own, or unreadable.
 - `netnsPid` finds the sandbox process to target by walking at most four levels down the launch
   pid's tree, skipping processes in the host or own namespace, and refuses pid 1 outright.
-- `guardedSpawnCount()` counts every spawn the guard lets through. The unit tests use it as a
-  tripwire: refusing the host and own namespaces must leave the count unchanged. A unit test also
-  asserts that the rendered ruleset never contains `flush ruleset` for any mode.
-- The only host-namespace network change Workbox makes is creating `workbox0` and putting its
-  /32 address on it; it never edits the host firewall.
+- The only change Workbox makes to the host's network namespace is creating `workbox0` and
+  putting its /32 address on it. It never edits the host firewall.
 
 ### Secrets
 
@@ -126,7 +119,7 @@ code now makes that impossible to do by mistake (`packages/core/src/host/netns.j
   environment. `wb secret list` shows references only.
 - Every value must be at least 8 characters. A shorter value is refused when it is loaded, so it
   is never registered, injected or left unredacted.
-- The invariant is injection-only. Redaction is defence in depth on top of it: the redactor
+- A value is only ever injected into the child that asked for it. As a second layer, the redactor
   (`packages/protocol/src/redact.js`) scrubs every registered value from session output, the
   audit log and logs, matching in one pass the raw value, its JSON-escaped form, base64 (standard
   and URL-safe, padded and unpadded, and the stable middle of the value at each byte alignment
@@ -176,18 +169,17 @@ verify` checks the chain.
 
 ## Stated limits
 
-- **Shared subordinate range (d7).** Every sandbox maps onto the same host uid range. On the host,
+- **Shared subordinate range.** Every sandbox maps onto the same host uid range. On the host,
   files of different sandboxes are not distinguishable by owner, and inner root of one sandbox has
   the same host uid as inner root of every other. Separation between sandboxes on the host side
   rests on the per-sandbox directories and mount namespaces, not on uids. Per-sandbox ranges
-  through idmapped mounts are a later hardening task.
-- **Domain enforcement only through the proxy (d11).** Hostname allowlists bind only clients that
+  through idmapped mounts are not implemented yet.
+- **Domain enforcement only through the proxy.** Hostname allowlists bind only clients that
   honour `HTTP_PROXY`/`HTTPS_PROXY`. In allowlist mode other traffic is dropped by nftables; in
   egress mode direct connections to public IPv4 addresses are allowed by design and never pass
   the proxy's name or address checks.
-- **ptrace is denied outright.** Req 1.6 asks for "ptrace of non-descendants"; plain seccomp
-  cannot express that, so `ptrace(2)` fails with `EPERM` for every target, and debuggers and
-  `strace` do not work in the box.
+- **ptrace is denied outright.** Seccomp cannot limit `ptrace(2)` to non-descendants, so it fails
+  with `EPERM` for every target, and debuggers and `strace` do not work in the box.
 - **Seccomp does not filter by argument.** `clone` and `clone3` are allowed with any flags and
   `personality` with any persona; the Docker profile's argument filters for these are not
   reproduced. Namespace creation through `clone` is bounded by the capability set and the
@@ -198,7 +190,7 @@ verify` checks the chain.
   environment can be read through `/proc/<pid>/environ` by any process in the box running under
   the same uid, and sessions run as inner root by default. Grant a reference only to a sandbox
   whose every process may see it.
-- **Redaction is not a guarantee.** Values shorter than 8 characters are refused rather than
+- **Redaction has limits.** Values shorter than 8 characters are refused rather than
   redacted. Forms other than those listed above (compressed, encrypted, reversed, interleaved
   with other bytes, encoded twice) are not recognised.
 - **Proxy and slirp live in the managing process.** The per-sandbox proxy listener and the
@@ -210,14 +202,6 @@ verify` checks the chain.
   policy never come from inside the box.
 - **`workbox0` persists.** The dummy link and its address stay on the host after the last sandbox
   is gone.
-- **PTY through script(1).** PTY sessions use util-linux `script(1)` instead of a native
-  `node-pty` binding, which keeps the runner dependency-free. Resize runs coreutils
-  `stty -F <slave> rows R cols C`, which sets the window size with `TIOCSWINSZ`; the kernel then
-  delivers `SIGWINCH`. A rootfs without `script` and `stty` has no PTY sessions.
-- **Events are paged polling.** `GET /v1/sandboxes/:id/events` returns pages after `afterSeq`;
-  there is no push stream for events. Only session output is streamed, over WebSocket.
-- **The server is plain `node:http`.** It does not use Fastify (task 3.1's original wording); the
-  routes, scopes, schema validation and audit behave as specified without a framework.
 - **WebSocket token in the query.** Besides the `Authorization` header, an upgrade accepts
   `?token=`. A query-string token can end up in the logs of anything between client and server.
 - **Lease expiry does not stop a sandbox.** An expired lease is reported; nothing is killed.

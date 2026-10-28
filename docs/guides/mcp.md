@@ -1,6 +1,6 @@
 # Use the MCP server
 
-`workbox-mcp` is a stdio MCP server with exactly four tools, over the SDK. It talks to a running
+`workbox-mcp` is a stdio MCP server with four tools, built on the SDK. It talks to a running
 Workbox server; start one first ([Getting started](getting-started.md#4-serve)).
 
 ## Configure
@@ -36,6 +36,7 @@ version. The token needs `admin` for create and destroy, `read` for list and `ex
 | `sandbox_exec`    | `sandboxId`, `command` (a shell command), `timeoutMs` (at most 240000)                        | Exit code, stdout and stderr, each capped at 64 KiB; any cut is reported in `truncated` |
 | `sandbox_destroy` | `sandboxId`                                                                                   | Destroys the sandbox and deletes its writable layer                                     |
 
-`allow` is accepted only with `networkMode` set to `allowlist`. Arguments are validated against each tool's input schema before anything is sent. The tool
-surface is deliberately only lifecycle and exec: everything else is a command the agent discovers
-inside the box with `wb tools` and `--help`; see the [wb reference](../wb.md).
+`allow` is accepted only with `networkMode` set to `allowlist`. Arguments are checked against each
+tool's input schema before anything is sent. The tools cover only lifecycle and exec; everything
+else is a command the agent finds inside the box with `wb tools` and `--help`. See the
+[wb reference](../wb.md).

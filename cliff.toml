@@ -1,21 +1,15 @@
-# git-cliff configuration for Workbox — https://git-cliff.org/docs/configuration
+# git-cliff configuration for Workbox: https://git-cliff.org/docs/configuration
 #
-# Regenerate the changelog with `make changelog` (needs git-cliff on PATH).
-#
-# Conventions it encodes: `[Unreleased]` for everything after the last tag
-# (there are no tags yet, so it is everything), one group per kind of change,
-# and a trailing `[spec:<feature>/<task>]` kept in the subject as
-# `(task <feature>/<task>)` so a commit is grouped by the wave of its task.
-# Workbox commit subjects are plain sentences, not `type:` prefixes, so the
-# groups below match on the leading verb and on the task wave.
+# `make changelog` prints a draft of the unreleased changes from git history; edit it into
+# CHANGELOG.md when cutting a release. Commit subjects are plain sentences, so changes are grouped
+# by their leading verb.
 
 [changelog]
 header = """
 # Changelog
 
-All notable changes to this project are recorded here, generated from git history.
-There are no tags yet, so every change is listed under Unreleased. A group is the wave of the
-spec task a commit carries (`[spec:workbox/<wave>.<n>]`), or the kind of change when it carries none.
+All notable changes to Workbox are documented in this file. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 """
 body = """
@@ -47,27 +41,18 @@ split_commits = false
 commit_preprocessors = [
     # attribution trailers are not release notes
     { pattern = '(?m)^(Co-Authored-By|Signed-off-by|Claude-Session):.*$', replace = "" },
-    # the task a commit was made under stays in the subject as `(task <feature>/<task>)`
-    { pattern = '[ \t]*\[spec:([^\]]+)\]', replace = " (task ${1})" },
+    # task tags are for the spec, not for readers
+    { pattern = '[ \t]*\[spec:[^\]]+\]', replace = "" },
 ]
 protect_breaking_commits = false
 commit_parsers = [
-    { message = "^Merge ", skip = true },
-    # an interim commit that says itself it is not qualified is not a release note
-    { message = "^WIP ", skip = true },
-    # the wave of the spec task the commit carries
-    { message = "\\(task workbox/0\\.", group = "Foundation (wave 0)" },
-    { message = "\\(task workbox/1\\.", group = "Sandbox lifecycle (wave 1)" },
-    { message = "\\(task workbox/2\\.", group = "Isolation, broker and presets (wave 2)" },
-    { message = "\\(task workbox/3\\.", group = "Harness surfaces (wave 3)" },
-    { message = "\\(task workbox/4\\.", group = "Deployment, documentation and measurement (wave 4)" },
-    # commits with no task, by leading verb
-    { message = "^(Plan|Point|Record|Import)\\b", group = "Planning" },
-    { message = "^(Harden|Refuse|Close the H[0-9]|Add the H[0-9])|\\bH[0-9]+\\b", group = "Hardening" },
-    { message = "^(Fix|Restore|Make)\\b", group = "Fixes" },
-    { message = "^(Move|Mount)\\b", group = "Changes" },
-    { message = "^(Cover|Prove)\\b", group = "Tests" },
-    { message = ".*", group = "Other" },
+    { message = "^(Merge|WIP) ", skip = true },
+    { message = "^(Plan|Point|Record|Import|Mark)\\b", skip = true },
+    { message = "^(Cover|Prove|Qualify)\\b", skip = true },
+    { message = "^(Harden|Refuse|Guard|Deny|Close)\\b|\\bH[0-9]+\\b", group = "Security" },
+    { message = "^(Fix|Restore)\\b", group = "Fixed" },
+    { message = "^(Move|Mount|Rewrite|Make)\\b", group = "Changed" },
+    { message = ".*", group = "Added" },
 ]
 filter_commits = false
 fail_on_unmatched_commit = false

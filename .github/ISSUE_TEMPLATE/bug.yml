@@ -1,16 +1,16 @@
 name: Bug report
-description: Report a reproducible Workbox defect.
+description: Report a reproducible bug in Workbox.
 title: '[Bug]: '
 labels: ['bug']
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for reporting a defect. Do not include secrets, API keys, tokens, customer code, or exploit details. Report vulnerabilities through the private security channel described in SECURITY.md.
+        Thanks for the report. Do not include secrets, API keys, tokens or private code. Report vulnerabilities privately as described in SECURITY.md.
   - type: checkboxes
     id: checks
     attributes:
-      label: Preflight
+      label: Checks
       options:
         - label: I searched existing issues for this problem.
           required: true
@@ -23,7 +23,7 @@ body:
       options:
         - Launch chain, rootfs, or runtime install
         - Runner or sessions
-        - wb toolkit
+        - wb command
         - Network policy or proxy
         - Server (REST or WebSocket)
         - SDK
