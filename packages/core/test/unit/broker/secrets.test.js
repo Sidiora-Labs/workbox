@@ -9,11 +9,13 @@ test('policy gates resolution; list shows configured refs only', () => {
   const sb = store.createSandbox({ rootfs: 'minimal', runtime: 'current', profile: {} });
   store.setSecretPolicy(sb.id, ['DEPLOY_TOKEN', 'MISSING']);
   const secrets = new SecretProvider({
-    env: { WORKBOX_SECRET_DEPLOY_TOKEN: 'v1', WORKBOX_SECRET_OTHER: 'v2' },
+    env: { WORKBOX_SECRET_DEPLOY_TOKEN: 'deploy-value-1', WORKBOX_SECRET_OTHER: 'other-value-2' },
   });
   const c = { store, sandboxId: sb.id, secrets };
   assert.deepEqual(secretList(c).refs, ['DEPLOY_TOKEN']);
-  assert.deepEqual(secretResolve(c, { refs: ['DEPLOY_TOKEN'] }).env, { DEPLOY_TOKEN: 'v1' });
+  assert.deepEqual(secretResolve(c, { refs: ['DEPLOY_TOKEN'] }).env, {
+    DEPLOY_TOKEN: 'deploy-value-1',
+  });
   assert.throws(() => secretResolve(c, { refs: ['OTHER'] }), /outside this sandbox/);
   store.close();
 });

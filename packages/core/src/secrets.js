@@ -1,12 +1,19 @@
 import fs from 'node:fs';
 import { E } from './errors.js';
-import { Redactor } from './redact.js';
+import { Redactor, MIN_LENGTH } from './redact.js';
 
 /**
  * Host-side secret provider. Values come from a 0600 JSON file ({ "REF": "value" }) and/or the
  * process environment (`WORKBOX_SECRET_<REF>`). Values are held in memory only: never logged,
  * never written to the store. The per-sandbox policy (store `secret_policy`) is enforced by the
  * broker before resolution.
+ *
+ * The invariant is that a value is only ever injected into the env of the child that asked for
+ * it; redaction of spool, audit and logs is defence in depth on top of that. Every value must be
+ * at least MIN_LENGTH (8) characters: a shorter one is refused with E_INVALID_PARAMS wherever it
+ * comes from, because the redactor redacts every registered value however short and a short one
+ * would shred ordinary output. Refusing fails closed: a short value is never registered, never
+ * injected and so never left unredacted.
  */
 export class SecretProvider {
   /**
@@ -20,8 +27,10 @@ export class SecretProvider {
     this.values = new Map();
     if (this.file) this.loadFile(this.file);
     for (const [k, val] of Object.entries(this.env)) {
-      if (k.startsWith(this.envPrefix) && typeof val === 'string' && val.length > 0)
-        this.values.set(k.slice(this.envPrefix.length), val);
+      if (!k.startsWith(this.envPrefix) || typeof val !== 'string' || val.length === 0) continue;
+      const ref = k.slice(this.envPrefix.length);
+      assertValue(ref, val);
+      this.values.set(ref, val);
     }
   }
 
@@ -45,8 +54,7 @@ export class SecretProvider {
       throw E.invalid(`secrets file ${file} must contain a JSON object`, { file });
     for (const [ref, val] of Object.entries(parsed)) {
       assertRef(ref);
-      if (typeof val !== 'string' || val.length === 0)
-        throw E.invalid(`secret ${ref} must be a non-empty string`, { ref });
+      assertValue(ref, val);
       this.values.set(ref, val);
     }
     return this;
@@ -55,8 +63,7 @@ export class SecretProvider {
   /** @param {string} ref @param {string} value */
   set(ref, value) {
     assertRef(ref);
-    if (typeof value !== 'string' || value.length === 0)
-      throw E.invalid(`secret ${ref} must be a non-empty string`, { ref });
+    assertValue(ref, value);
     this.values.set(ref, value);
     return this;
   }
@@ -115,6 +122,21 @@ export function parseRef(raw) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envName))
     throw E.invalid(`invalid env name in secret reference ${raw}`, { ref: raw });
   return { ref, envName };
+}
+
+/**
+ * Refuse anything but a string of at least MIN_LENGTH characters. The value never appears in the
+ * error.
+ * @param {string} ref @param {unknown} value
+ */
+function assertValue(ref, value) {
+  if (typeof value !== 'string' || value.length === 0)
+    throw E.invalid(`secret ${ref} must be a non-empty string`, { ref });
+  if (value.length < MIN_LENGTH)
+    throw E.invalid(`secret ${ref} is shorter than ${MIN_LENGTH} characters`, {
+      ref,
+      minLength: MIN_LENGTH,
+    });
 }
 
 /** @param {string} ref */
