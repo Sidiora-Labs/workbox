@@ -334,7 +334,7 @@ reqs       = ["6.4"]
 
 [task.3.3]
 title      = "MCP server"
-status     = "pending"
+status     = "done"
 wave       = 3
 requires   = ["3.2"]
 touches    = ["packages/mcp/**"]
