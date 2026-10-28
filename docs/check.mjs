@@ -2,7 +2,7 @@
 /**
  * Documentation gate (spec task 4.2): every required page exists, docs/wb.md equals what
  * docs/gen-wb.mjs renders from `wb tools --json`, and every relative link and anchor in README.md
- * and docs/ resolves. Before trusting the staleness check it proves, on a temporary copy, that a
+ * and docs/ resolves, and every page under docs/ is reachable from docs/README.md. Before trusting the staleness check it proves, on a temporary copy, that a
  * deliberately staled wb.md is caught and the current one is not.
  */
 import fs from 'node:fs';
@@ -156,6 +156,33 @@ export function linkProblem(file, target) {
   return null;
 }
 
+/**
+ * Pages under docs/ that docs/README.md does not reach by following relative markdown links.
+ * @param {string[]} files markdown files covered by the gate
+ * @returns {string[]} problems, one per unreachable page, or one when the index is missing
+ */
+export function unreachablePages(files) {
+  const index = path.join(docs, 'README.md');
+  if (!fs.existsSync(index)) return ['missing docs/README.md, the documentation index'];
+  const seen = new Set([index]);
+  const queue = [index];
+  while (queue.length) {
+    const file = queue.pop();
+    for (const target of linksOf(fs.readFileSync(file, 'utf8'))) {
+      if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+      const rawPath = target.split('#')[0];
+      if (!rawPath) continue;
+      const next = path.resolve(path.dirname(file), decodeURIComponent(rawPath));
+      if (!next.endsWith('.md') || seen.has(next) || !fs.existsSync(next)) continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  return files
+    .filter((f) => f.startsWith(docs + path.sep) && !seen.has(f))
+    .map((f) => `${path.relative(root, f)} is not reachable from docs/README.md`);
+}
+
 /** Run every check. @returns {Promise<string[]>} */
 export async function check() {
   const problems = [];
@@ -165,7 +192,9 @@ export async function check() {
   problems.push(...selfTest(expected));
   const stale = wbStaleness(WB_DOC, expected);
   if (stale) problems.push(stale);
-  for (const file of collectMd()) {
+  const files = collectMd();
+  problems.push(...unreachablePages(files));
+  for (const file of files) {
     if (!fs.existsSync(file)) {
       problems.push(`missing ${path.relative(root, file)}`);
       continue;

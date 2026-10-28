@@ -43,14 +43,33 @@ sandbox's network proxy. Inside the box, `wb tools` lists every agent subcommand
 
 ## Documentation
 
+Start at the [documentation index](docs/README.md).
+
+- [Why Workbox?](docs/why-workbox.md)
+- [Project status and compatibility](docs/project-status.md)
+- [Getting started](docs/guides/getting-started.md) and the [guides](docs/guides/README.md)
 - [Architecture](docs/architecture.md)
 - [Security model and its limits](docs/security.md)
-- [wb reference (generated)](docs/wb.md)
-- [Hyperfide provider mapping](docs/hyperfide-provider.md)
 - [Operations](docs/operations.md)
+- [Reference](docs/reference/README.md): [CLI](docs/reference/cli.md), [REST and WebSocket API](docs/reference/rest-api.md), [configuration](docs/reference/configuration.md), [wb reference (generated)](docs/wb.md)
+- [Hyperfide provider mapping](docs/hyperfide-provider.md)
+- [Verification](docs/verification.md)
 - [Measurements](docs/measurements.md)
+- [FAQ](docs/faq.md)
 
 Scope, decisions and acceptance criteria are in [`spec/workbox/spec.kvx`](spec/workbox/spec.kvx).
+
+## Project status
+
+Version `0.1.0-dev`: implemented and covered by the local gates, not a production release. It
+supports one Linux host with cgroup v2, driven by a root daemon, with no HA and no TLS. The full
+matrix and the known limits are in [project status](docs/project-status.md).
+
+## Security
+
+Sandboxes share the host kernel and are isolated by namespaces, cgroup v2 limits, dropped
+capabilities and a seccomp filter; this is not a hypervisor boundary. What is enforced and what is
+not is in [the security model](docs/security.md).
 
 ## Development gates
 
@@ -60,7 +79,7 @@ pnpm lint
 pnpm fmt:check
 pnpm test                      # unit, integration and e2e; integration needs a capable host
 pnpm test:coverage             # lines 90, branches 80, functions 90
-node docs/check.mjs            # docs/wb.md current, every doc link and anchor resolves
+node docs/check.mjs            # docs/wb.md current, every doc link and anchor resolves, every page indexed
 bash deploy/check.sh
 ```
 
