@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
+import { threadId } from 'node:worker_threads';
 import {
   Audit,
   canonicalJSON,
@@ -102,6 +105,132 @@ test('verify detects tampering, gaps and unparsable lines', () => {
     assert.ok(Audit.verify(dir).ok);
     assert.equal(second.seq, 2);
   } finally {
+    cleanup();
+  }
+});
+
+test('a final line torn mid-write is truncated on open, the repair is audited and the chain verifies', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const clock = fakeClock(Date.UTC(2026, 9, 27, 8));
+    const audit = new Audit({ dir, clock }).open();
+    for (let i = 0; i < 3; i++) audit.append({ actor: 'a', action: `act${i}`, data: { i } });
+    const file = path.join(dir, 'audit-20261027.ndjson');
+    const whole = fs.readFileSync(file, 'utf8');
+    const keep = whole.lastIndexOf('\n', whole.length - 2) + 1;
+    fs.truncateSync(file, keep + 20);
+    assert.deepEqual(Audit.verify(dir).brokenAt, {
+      file: 'audit-20261027.ndjson',
+      line: 3,
+      reason: 'unparsable line',
+    });
+    const reopened = new Audit({ dir, clock }).open();
+    assert.equal(reopened.seq, 3);
+    const lines = fs
+      .readFileSync(file, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    assert.deepEqual(
+      lines.map((l) => l.action),
+      ['act0', 'act1', 'audit.repair'],
+    );
+    assert.equal(lines[2].actor, 'audit');
+    assert.deepEqual(lines[2].data, {
+      file: 'audit-20261027.ndjson',
+      offset: keep,
+      bytes: 20,
+      sha256: createHash('sha256')
+        .update(whole.slice(keep, keep + 20))
+        .digest('hex'),
+    });
+    assert.deepEqual(Audit.verify(dir), { ok: true, entries: 3, brokenAt: null });
+
+    clock.set(Date.UTC(2026, 9, 28, 8));
+    const next = path.join(dir, 'audit-20261028.ndjson');
+    fs.writeFileSync(next, '{"seq":4,"ts":');
+    const resumed = new Audit({ dir, clock }).open();
+    assert.equal(
+      resumed.seq,
+      4,
+      'an all-torn file empties and the chain resumes from the day before',
+    );
+    assert.equal(JSON.parse(fs.readFileSync(next, 'utf8')).data.bytes, 14);
+    assert.deepEqual(Audit.verify(dir), { ok: true, entries: 4, brokenAt: null });
+
+    fs.appendFileSync(next, '{"not":"an entry"}\n');
+    assert.throws(
+      () => new Audit({ dir, clock }).append({ actor: 'a', action: 'x' }),
+      (e) => e.code === 'E_INTERNAL' && e.data.file === 'audit-20261028.ndjson',
+    );
+    assert.match(fs.readFileSync(next, 'utf8'), /"not":"an entry"/, 'a complete line is kept');
+    assert.ok(!fs.existsSync(path.join(dir, '.audit.lock')), 'the lock is released on failure');
+  } finally {
+    cleanup();
+  }
+});
+
+test('verify streams files larger than its buffer, lines longer than it and multibyte text', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const clock = fakeClock(Date.UTC(2026, 9, 27));
+    const audit = new Audit({ dir, clock, fsync: false }).open();
+    for (let i = 0; i < 40; i++)
+      audit.append({ actor: 'a', action: 'bulk', data: { i, pad: 'x'.repeat(4000) } });
+    audit.append({ actor: 'a', action: 'huge', data: { pad: 'é'.repeat(70_000) } });
+    assert.equal(new Audit({ dir, clock }).open().seq, 41);
+    audit.append({ actor: 'a', action: 'after' });
+    const file = path.join(dir, 'audit-20261027.ndjson');
+    assert.ok(fs.statSync(file).size > 2 * 64 * 1024);
+    assert.deepEqual(Audit.verify(dir), { ok: true, entries: 42, brokenAt: null });
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    const huge = JSON.parse(lines[40]);
+    huge.data.pad = `${huge.data.pad.slice(0, -1)}e`;
+    lines[40] = JSON.stringify(huge);
+    fs.writeFileSync(file, lines.join('\n'));
+    assert.deepEqual(Audit.verify(dir), {
+      ok: false,
+      entries: 40,
+      brokenAt: { file: 'audit-20261027.ndjson', line: 41, reason: 'hash mismatch' },
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('the audit lock waits out a live holder with E_BUSY and breaks one a dead writer left', () => {
+  const { dir, cleanup } = tmpDir();
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
+    stdio: 'ignore',
+  });
+  try {
+    const clock = fakeClock(Date.UTC(2026, 9, 27));
+    const audit = new Audit({ dir, clock, lockTimeoutMs: 100 }).open();
+    const lock = path.join(dir, '.audit.lock');
+    const live = `${holder.pid}:0:feedface`;
+    fs.writeFileSync(lock, live);
+    const started = Date.now();
+    assert.throws(
+      () => audit.append({ actor: 'a', action: 'blocked' }),
+      (e) => e.code === 'E_BUSY' && e.data.lock === lock,
+    );
+    assert.ok(Date.now() - started >= 100);
+    assert.equal(fs.readFileSync(lock, 'utf8'), live, 'a live holder keeps its lock');
+    assert.equal(Audit.verify(dir).entries, 0);
+
+    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    fs.writeFileSync(lock, `${dead}:0:deadbeef`);
+    assert.equal(audit.append({ actor: 'a', action: 'after-dead' }).seq, 1);
+    fs.writeFileSync(lock, `${process.pid}:${threadId}:0ld`);
+    assert.equal(audit.append({ actor: 'a', action: 'after-pid-reuse' }).seq, 2);
+    fs.writeFileSync(lock, live);
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    assert.equal(audit.append({ actor: 'a', action: 'after-stale' }).seq, 3);
+    assert.ok(!fs.existsSync(lock));
+    assert.deepEqual(Audit.verify(dir), { ok: true, entries: 3, brokenAt: null });
+  } finally {
+    holder.kill('SIGKILL');
     cleanup();
   }
 });
