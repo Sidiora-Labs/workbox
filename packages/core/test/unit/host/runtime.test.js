@@ -143,7 +143,11 @@ test('runtime packages with external dependencies are refused and downloads are 
       mgr.install({ nodeVersion: '0.0.0' }),
       (e) => e.code === 'E_UNAVAILABLE' && e.data.status === 404,
     );
-    assert.equal(fs.existsSync(path.join(dir, 'cache/node-v0.0.0-linux-x64.tar.xz.part')), false);
+    assert.deepEqual(
+      fs.readdirSync(path.join(dir, 'cache')).filter((n) => n.endsWith('.part')),
+      [],
+      'no download staging file is left',
+    );
     assert.deepEqual(mgr.isFresh(), {
       fresh: false,
       current: null,

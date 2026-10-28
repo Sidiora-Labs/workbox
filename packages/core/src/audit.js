@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { threadId } from 'node:worker_threads';
 import { E } from './errors.js';
+import { removeUnder } from './host/safefs.js';
 
 export const GENESIS = '0'.repeat(64);
 
@@ -331,7 +332,7 @@ function acquireLock(lockPath, timeoutMs, staleMs) {
 }
 
 function releaseLock(lockPath, token) {
-  if (readLock(lockPath) === token) fs.rmSync(lockPath, { force: true });
+  if (readLock(lockPath) === token) removeUnder(path.dirname(lockPath), lockPath);
 }
 
 function readLock(lockPath) {
@@ -345,6 +346,7 @@ function readLock(lockPath) {
 
 /** Remove the lock if its holder is gone; true when the lock is no longer there. */
 function breakStaleLock(lockPath, staleMs) {
+  const dir = path.dirname(lockPath);
   const held = readLock(lockPath);
   if (held === null) return true;
   if (!lockIsStale(lockPath, held, staleMs)) return false;
@@ -353,13 +355,13 @@ function breakStaleLock(lockPath, staleMs) {
     fs.writeFileSync(guard, String(process.pid), { flag: 'wx', mode: 0o600 });
   } catch (e) {
     if (e.code !== 'EEXIST') throw e;
-    if (lockIsStale(guard, '', staleMs)) fs.rmSync(guard, { force: true });
+    if (lockIsStale(guard, '', staleMs)) removeUnder(dir, guard);
     return false;
   }
   try {
-    if (readLock(lockPath) === held) fs.rmSync(lockPath, { force: true });
+    if (readLock(lockPath) === held) removeUnder(dir, lockPath);
   } finally {
-    fs.rmSync(guard, { force: true });
+    removeUnder(dir, guard);
   }
   return true;
 }

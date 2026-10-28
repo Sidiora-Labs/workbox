@@ -47,3 +47,4 @@ exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/hc-verify-1.log"
 observed    = "With the runtime stale after a runner/wb change, two test files ran ensureAssets in parallel and RuntimeManager.install raced on the shared <version>.tmp staging dir (EEXIST on symlinkSync, ENOENT in digestTree); a later install in the same run succeeded."
 assumption  = "Pre-existing: install stages into a fixed name with no cross-process lock; it only bites on the first parallel run after an in-box package change and needs a per-process staging dir or a lock."
+resolved    = "Lock runtime and rootfs installs across processes, route the last stray deletes through removeUnder and rotate live launch logs"

@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { E } from '../errors.js';
 import { nullLogger } from '../log.js';
-import { removeUnder } from './safefs.js';
+import { removeUnder, withLockFile, lockPathFor, makeStaging, commitStaging } from './safefs.js';
 
 export const ROOTFS_MANIFEST = 'manifest.json';
 export const MANIFEST_SCHEMA = 1;
@@ -76,7 +76,7 @@ export class RootfsManager {
     if (!fs.existsSync(this.dirRoot)) return [];
     return fs
       .readdirSync(this.dirRoot, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && !d.name.endsWith('.tmp'))
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !d.name.endsWith('.tmp'))
       .map((d) => this.get(d.name))
       .filter(Boolean)
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -85,22 +85,39 @@ export class RootfsManager {
   /**
    * Build the Dockerfile, export the container filesystem, shift ownership and write the manifest.
    * The result appears atomically; an existing rootfs is replaced only when `force` is set.
+   * Builders of one name serialise on a lockfile and stage in a private mkdtemp directory beside
+   * the target; one that waited while another built the same Dockerfile returns that build.
    * @param {string} name
    * @param {{dockerfileDir?: string, force?: boolean, tag?: string}} [opts]
    * @returns {Promise<RootfsManifest>}
    */
   async build(name, opts = {}) {
     const target = this.dir(name);
-    if (fs.existsSync(target) && !opts.force)
-      throw E.conflict(`rootfs ${name} already exists`, { name, path: target });
     const dockerfileDir = opts.dockerfileDir ?? path.join(BUILTIN_ROOTFS_DIR, name);
     const dockerfile = path.join(dockerfileDir, 'Dockerfile');
     if (!fs.existsSync(dockerfile))
       throw E.notFound(`no Dockerfile at ${dockerfile}`, { dockerfile });
-    const tag = opts.tag ?? `workbox-rootfs-${name}:latest`;
-    const staging = `${target}.tmp`;
-    removeUnder(this.dirRoot, staging);
-    fs.mkdirSync(staging, { recursive: true, mode: 0o755 });
+    const seen = this.get(name);
+    return withLockFile(lockPathFor(this.dirRoot, name), async () => {
+      const now = this.get(name);
+      if (
+        now &&
+        now.createdAt !== seen?.createdAt &&
+        now.source?.dockerfileSha256 === sha256File(dockerfile)
+      ) {
+        this.log.info('rootfs built by a concurrent builder', { name, digest: now.digest });
+        return now;
+      }
+      if (fs.existsSync(target) && !opts.force)
+        throw E.conflict(`rootfs ${name} already exists`, { name, path: target });
+      const tag = opts.tag ?? `workbox-rootfs-${name}:latest`;
+      return this._buildLocked(name, { target, dockerfileDir, dockerfile, tag });
+    });
+  }
+
+  /** Build into a fresh staging directory and commit it; the caller holds the lock. */
+  async _buildLocked(name, { target, dockerfileDir, dockerfile, tag }) {
+    const staging = makeStaging(this.dirRoot, name);
     let containerId = null;
     try {
       this.log.info('docker build', { name, tag, dockerfileDir });
@@ -128,8 +145,7 @@ export class RootfsManager {
         `${JSON.stringify(manifest, null, 2)}\n`,
         { mode: 0o644 },
       );
-      removeUnder(this.dirRoot, target);
-      fs.renameSync(staging, target);
+      commitStaging(this.dirRoot, staging, target);
       this.log.info('rootfs built', {
         name,
         digest: manifest.digest,

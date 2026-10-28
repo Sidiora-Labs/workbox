@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { E } from '../errors.js';
 import { renderRuleset, installArgv, assertIpv4 } from './nft.js';
 import { createProxy, hostAddresses } from './proxy.js';
+import { removeUnder } from './safefs.js';
 
 /**
  * slirp4netns lifecycle, nft installation and the per-sandbox proxy (task 2.1). The sandbox is
@@ -339,7 +340,7 @@ export class SandboxNet {
       if (code !== 0) throw E.unavailable(`nft install failed (${code}): ${stderr.trim()}`);
       return rules;
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      removeUnder(os.tmpdir(), dir);
     }
   }
 

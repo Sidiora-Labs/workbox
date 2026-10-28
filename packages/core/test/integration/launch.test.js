@@ -2,8 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { Supervisor } from '../../src/sandbox/supervisor.js';
-import { hostMountsFor, sandboxDirs, CAPABILITY_MASK } from '../../src/host/launch.js';
+import {
+  hostMountsFor,
+  sandboxDirs,
+  CAPABILITY_MASK,
+  LAUNCH_LOG_MAX_BYTES,
+} from '../../src/host/launch.js';
 import { digestTree } from '../../src/host/rootfs.js';
 import { hashNonce } from '../../src/host/launch.js';
 import { testEngine } from '../helpers/engine.js';
@@ -208,6 +214,40 @@ test('destroying a real sandbox removes only its own directories, never what its
     assert.equal(fs.existsSync(siblingDirs.root), false);
   } finally {
     for (const sup of sups) await sup.destroy().catch(() => undefined);
+    await eng.cleanup();
+  }
+});
+
+test('the health loop rotates the launch.log of a live sandbox once it grows past the cap', async () => {
+  const eng = await testEngine();
+  let sup = null;
+  try {
+    const row = eng.store.createSandbox({
+      rootfs: 'minimal',
+      runtime: 'current',
+      profile: { network: { mode: 'none' } },
+    });
+    sup = new Supervisor({ ...eng, sandbox: row });
+    await sup.launch();
+    const dirs = sandboxDirs(eng.config.paths.sandboxes, row.id);
+    const marker = 'newest line before rotation\n';
+    fs.appendFileSync(dirs.log, Buffer.alloc(LAUNCH_LOG_MAX_BYTES, '.'));
+    fs.appendFileSync(dirs.log, marker);
+    assert.ok(fs.statSync(dirs.log).size > LAUNCH_LOG_MAX_BYTES);
+    sup.startHealthPoll(50);
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(`${dirs.log}.1`) && Date.now() < deadline) await sleep(25);
+    const rotated = fs.readFileSync(`${dirs.log}.1`);
+    assert.equal(rotated.length, LAUNCH_LOG_MAX_BYTES, 'launch.log.1 holds exactly the cap');
+    assert.ok(rotated.toString().endsWith(marker), 'the newest bytes are kept');
+    assert.ok(fs.statSync(dirs.log).size < LAUNCH_LOG_MAX_BYTES, 'launch.log truncated in place');
+    assert.equal(sup.observeHealth(), 'HEALTHY');
+    const status = await sup.request('runner.status', {});
+    assert.equal(status.phase, 'ready', 'the sandbox keeps running across the rotation');
+    assert.equal((await sup.destroy()).state, 'DELETED');
+    assert.equal(fs.existsSync(dirs.root), false);
+  } finally {
+    if (sup) await sup.destroy().catch(() => undefined);
     await eng.cleanup();
   }
 });
