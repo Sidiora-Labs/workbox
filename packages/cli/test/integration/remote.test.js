@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from '@workbox/server';
-import { main } from '../../src/main.js';
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { CgroupManager } from '@workbox/core';
+import { hashToken } from '@workbox/server';
+import { ensureAssets, ASSETS_ROOT } from '../../../core/test/helpers/engine.js';
+import { tmpDir } from '../../../core/test/helpers/tmp.js';
 
 // Localhost test traffic must never go through an ambient HTTP(S) proxy.
 for (const k of [
@@ -16,42 +23,259 @@ for (const k of [
 process.env.NO_PROXY = '127.0.0.1,localhost';
 process.env.no_proxy = '127.0.0.1,localhost';
 
-function capture() {
-  const chunks = [];
-  return { stream: { write: (d) => chunks.push(String(d)) }, text: () => chunks.join('') };
+const MAIN = fileURLToPath(new URL('../../src/main.js', import.meta.url));
+
+/** One bearer token per role; the serve config file below grants each its scopes. */
+const TOKENS = Object.freeze({
+  admin: 'remote-admin-token',
+  exec: 'remote-exec-token',
+  read: 'remote-read-token',
+});
+
+const until = async (fn, ms = 15_000) => {
+  const deadline = Date.now() + ms;
+  while (!(await fn())) {
+    if (Date.now() > deadline) throw new Error('condition not met');
+    await new Promise((r) => setTimeout(r, 25));
+  }
+};
+
+/**
+ * A fresh Workbox root for the served engine, linked to the shared rootfs and runtime assets, with
+ * a private cgroup parent; `cleanup` removes both, live sandboxes included.
+ * @param {string} tag
+ */
+async function serveRoot(tag) {
+  await ensureAssets();
+  const t = tmpDir(`workbox-remote-${tag}-`);
+  fs.chmodSync(t.dir, 0o711);
+  const root = path.join(t.dir, 'root');
+  fs.mkdirSync(root, { mode: 0o711 });
+  fs.symlinkSync(path.join(ASSETS_ROOT, 'rootfs'), path.join(root, 'rootfs'));
+  fs.symlinkSync(path.join(ASSETS_ROOT, 'runtime'), path.join(root, 'runtime'));
+  const parent = `workbox-remote-${process.pid}-${tag}`;
+  const base = { ...process.env };
+  for (const k of ['WORKBOX_CONFIG', 'WORKBOX_TOKEN', 'WORKBOX_API_KEYS', 'WORKBOX_PORT'])
+    delete base[k];
+  const env = {
+    ...base,
+    WORKBOX_ROOT: root,
+    WORKBOX_CGROUP_PARENT: parent,
+    WORKBOX_NETWORK_MODE: 'none',
+  };
+  // Remote clients get a root that must never come into existence: they open no local engine.
+  const clientRoot = path.join(t.dir, 'client-root');
+  const clientEnv = {
+    ...base,
+    WORKBOX_ROOT: clientRoot,
+    WORKBOX_CGROUP_PARENT: `${parent}-client`,
+  };
+  const config = path.join(t.dir, 'serve.json');
+  const keys = [
+    { id: 'ops', token: TOKENS.admin, scopes: ['admin'] },
+    { id: 'harness', tokenSha256: hashToken(TOKENS.exec), scopes: ['exec', 'read'] },
+    { id: 'observer', tokenSha256: hashToken(TOKENS.read), scopes: ['read'] },
+  ];
+  fs.writeFileSync(config, JSON.stringify({ keys, host: '127.0.0.1', port: 0 }), { mode: 0o600 });
+  const cgroups = new CgroupManager({ root: '/sys/fs/cgroup', parent });
+  const cleanup = async () => {
+    if (fs.existsSync(cgroups.parentPath)) {
+      for (const name of cgroups.list())
+        await cgroups.remove(cgroups.childPath(name), { timeoutMs: 10_000 }).catch(() => undefined);
+      fs.rmdirSync(cgroups.parentPath);
+    }
+    t.cleanup();
+  };
+  return { root, env, clientEnv, clientRoot, config, cgroups, cleanup };
 }
 
-test('remote mode: serve + create/exec/rm through the CLI against a real server', async () => {
-  const { FakeManager } = await import(
-    new URL('../../../server/test/helpers/fake-manager.js', import.meta.url)
-  );
-  const app = createServer({
-    manager: new FakeManager(),
-    keys: [{ id: 'root', token: 'tok', scopes: ['admin', 'read', 'exec', 'answer'] }],
+/**
+ * Spawn the real `workbox` binary. `done` resolves when it exits; `child` is exposed for signals.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string[]} args
+ */
+function spawnCli(env, args) {
+  const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', MAIN, ...args], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const addr = await app.listen(0);
-  const base = `http://127.0.0.1:${addr.port}`;
-  const remote = ['--server', base, '--token', 'tok'];
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => (stdout += d));
+  child.stderr.on('data', (d) => (stderr += d));
+  const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
+  const done = new Promise((resolve) => {
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      let json = null;
+      try {
+        json = JSON.parse(stdout);
+      } catch {
+        json = null;
+      }
+      resolve({ code, signal, stdout, stderr, json });
+    });
+  });
+  return { child, done, out: () => stdout };
+}
+
+/** One HTTP request on a fresh connection; resolves with the status. */
+function httpStatus(method, url, token) {
+  const headers = token ? { authorization: `Bearer ${token}` } : {};
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, { method, agent: false, headers }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** Start `workbox serve --config` and wait until its /readyz answers 200. */
+async function startServe(r, live) {
+  const s = spawnCli(r.env, ['serve', '--config', r.config]);
+  live.add(s);
+  await until(() => /listening on http:\/\/[\d.]+:\d+\n/.test(s.out()));
+  const origin = s.out().match(/listening on (http:\/\/[\d.]+:\d+)/)[1];
+  await until(() => httpStatus('GET', `${origin}/readyz`).then((st) => st === 200));
+  return { ...s, origin };
+}
+
+/** SIGTERM a serve process; it must exit 0 on its own. */
+async function stopServe(s, live) {
+  s.child.kill('SIGTERM');
+  const done = await s.done;
+  live.delete(s);
+  assert.equal(done.signal, null, 'SIGTERM is handled, not fatal');
+  assert.equal(done.code, 0, done.stderr);
+}
+
+test('remote mode: serve with a config file, then create, ls, inspect, exec and rm through the CLI', async () => {
+  const r = await serveRoot('e2e');
+  const live = new Set();
+  const remote = (origin, token) => ['--server', origin, '--token', token];
+  const cli = (...args) => spawnCli(r.clientEnv, args).done;
   try {
-    const o = capture();
-    const e = capture();
-    assert.equal(
-      await main(['sandbox', 'create', '--name', 'remote1', ...remote], {
-        out: o.stream,
-        err: e.stream,
-      }),
-      0,
+    let serve = await startServe(r, live);
+    const admin = remote(serve.origin, TOKENS.admin);
+    const created = await cli('sandbox', 'create', '--name', 'remote1', ...admin);
+    assert.equal(created.code, 0, created.stderr);
+    assert.equal(created.json.state, 'READY');
+    assert.equal(created.json.health, 'HEALTHY');
+    assert.equal(created.json.name, 'remote1');
+    const id = created.json.id;
+    const cgroupPath = created.json.cgroup;
+    assert.ok(cgroupPath.startsWith(r.cgroups.parentPath), 'the served engine owns the sandbox');
+    assert.ok(r.cgroups.procs(cgroupPath).length > 0);
+
+    const listed = await cli('sandbox', 'ls', ...admin);
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.deepEqual(
+      listed.json.items.map((s) => s.id),
+      [id],
     );
-    assert.match(o.text(), /sb-1/);
-    const o2 = capture();
-    assert.equal(await main(['sandbox', 'ls', ...remote], { out: o2.stream, err: e.stream }), 0);
-    assert.match(o2.text(), /sb-1/);
-    const o3 = capture();
-    assert.equal(
-      await main(['sandbox', 'rm', 'sb-1', ...remote], { out: o3.stream, err: e.stream }),
-      0,
+    const read = remote(serve.origin, TOKENS.read);
+    const inspect = await cli('sandbox', ...read, 'inspect', id, '--json');
+    assert.equal(inspect.code, 0, inspect.stderr);
+    assert.equal(inspect.json.desired, 'READY');
+    assert.equal(inspect.json.health, 'HEALTHY');
+    assert.equal(inspect.stdout.trim().includes('\n'), false, '--json prints one compact line');
+
+    const exec = remote(serve.origin, TOKENS.exec);
+    const ran = await cli(
+      'sandbox',
+      'exec',
+      id,
+      ...exec,
+      '--',
+      'sh',
+      '-c',
+      'echo remote-$((6 * 7)) > /workspace/proof && cat /workspace/proof',
     );
+    assert.equal(ran.code, 0, ran.stderr);
+    assert.equal(ran.json.stdout, 'remote-42\n');
+    assert.equal(ran.json.exitCode, 0);
+    const proof = path.join(r.root, 'sandboxes', id, 'upper', 'workspace', 'proof');
+    assert.equal(fs.readFileSync(proof, 'utf8'), 'remote-42\n', 'the command ran inside the box');
+    const failing = await cli(
+      'sandbox',
+      'exec',
+      id,
+      ...exec,
+      '--',
+      'sh',
+      '-c',
+      'echo out; echo err >&2; exit 7',
+    );
+    assert.equal(failing.code, 7, 'the CLI exits with the remote command’s own exit code');
+    assert.equal(failing.json.stdout, 'out\n');
+    assert.equal(failing.json.stderr, 'err\n');
+    assert.equal(failing.json.exitCode, 7);
+
+    const wrong = await cli('sandbox', 'ls', ...remote(serve.origin, 'not-a-token'));
+    assert.equal(wrong.code, 4);
+    assert.equal(wrong.stdout, '');
+    assert.equal(wrong.stderr, 'workbox: missing or invalid bearer token (E_DENIED)\n');
+    assert.equal(await httpStatus('GET', `${serve.origin}/v1/sandboxes`, 'not-a-token'), 401);
+    const noExec = await cli('sandbox', 'exec', id, ...read, '--', 'true');
+    assert.equal(noExec.code, 4);
+    assert.equal(noExec.stderr, 'workbox: scope exec required (E_DENIED)\n');
+    const noRm = await cli('sandbox', 'rm', id, ...read);
+    assert.equal(noRm.code, 4);
+    assert.equal(noRm.stderr, 'workbox: scope admin required (E_DENIED)\n');
+    const noRmExec = await cli('sandbox', 'rm', id, ...exec);
+    assert.equal(noRmExec.code, 4);
+    assert.equal(noRmExec.stderr, 'workbox: scope admin required (E_DENIED)\n');
+    const sandboxUrl = `${serve.origin}/v1/sandboxes/${id}`;
+    assert.equal(await httpStatus('POST', `${sandboxUrl}/exec`, TOKENS.read), 403);
+    assert.equal(await httpStatus('DELETE', sandboxUrl, TOKENS.read), 403);
+    const missing = await cli('sandbox', 'inspect', 'sb-nope', ...read);
+    assert.equal(missing.code, 3, missing.stderr);
+
+    await stopServe(serve, live);
+    assert.ok(r.cgroups.procs(cgroupPath).length > 0, 'the sandbox outlived the server');
+    const down = await cli('sandbox', 'ls', ...admin);
+    assert.equal(down.code, 4);
+    assert.match(down.stderr, /^workbox: GET \/v1\/sandboxes failed: .* \(E_UNAVAILABLE\)\n$/);
+
+    serve = await startServe(r, live);
+    const again = remote(serve.origin, TOKENS.admin);
+    const back = await cli('sandbox', 'inspect', id, ...again);
+    assert.equal(back.code, 0, back.stderr);
+    assert.equal(back.json.desired, 'READY');
+    assert.equal(back.json.health, 'HEALTHY', 'the restarted server reattached the live sandbox');
+    const still = await cli('sandbox', 'exec', id, ...again, '--', 'cat', '/workspace/proof');
+    assert.equal(still.code, 0, still.stderr);
+    assert.equal(still.json.stdout, 'remote-42\n');
+
+    const removed = await cli('sandbox', 'rm', id, ...again);
+    assert.equal(removed.code, 0, removed.stderr);
+    assert.equal(removed.json.state, 'DELETED');
+    assert.equal(removed.json.health, 'ABSENT');
+    assert.equal(fs.existsSync(cgroupPath), false, 'the cgroup directory is gone');
+    assert.equal(fs.existsSync(path.join(r.root, 'sandboxes', id)), false);
+    const gone = await cli('sandbox', 'inspect', id, ...again);
+    assert.equal(gone.code, 0, gone.stderr);
+    assert.equal(gone.json.desired, 'DELETED');
+    const empty = await cli('sandbox', 'ls', ...again);
+    assert.deepEqual(empty.json.items, []);
+    await stopServe(serve, live);
+
+    const badConfig = path.join(path.dirname(r.config), 'bad.json');
+    fs.writeFileSync(badConfig, JSON.stringify({ keys: [{ id: 'k', token: 't', scopes: ['x'] }] }));
+    const refused = await spawnCli(r.env, ['serve', '--config', badConfig]).done;
+    assert.equal(refused.code, 2);
+    assert.match(
+      refused.stderr,
+      /invalid serve config .*unknown scope x for key k \(E_INVALID_PARAMS\)/,
+    );
+    assert.equal(fs.existsSync(r.clientRoot), false, 'remote commands never opened a local engine');
   } finally {
-    await app.close();
+    for (const s of live) {
+      s.child.kill('SIGKILL');
+      await s.done;
+    }
+    await r.cleanup();
   }
 });

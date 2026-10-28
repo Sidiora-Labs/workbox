@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseOpts, connectionOpts, sandboxCommand } from '../../src/commands.js';
+import {
+  parseOpts,
+  connectionOpts,
+  withoutConnection,
+  sandboxCommand,
+} from '../../src/commands.js';
 
 test('option parsing and remote sandbox routing', async () => {
   assert.deepEqual(
@@ -21,4 +26,16 @@ test('option parsing and remote sandbox routing', async () => {
   assert.deepEqual(await sandboxCommand(ctx, ['ls']), { items: [] });
   assert.deepEqual(await sandboxCommand(ctx, ['inspect', 'sb-1']), { id: 'sb-1' });
   assert.throws(() => parseOpts(['--name'], new Set(['name'])), /needs a value/);
+});
+
+test('connection flags are dropped anywhere before --, and kept after it', () => {
+  assert.deepEqual(
+    withoutConnection(['--server', 'http://x', 'rm', '--token', 't', 'sb-1', '--json']),
+    ['rm', 'sb-1', '--json'],
+  );
+  assert.deepEqual(
+    withoutConnection(['exec', 'sb-1', '--token', 't', '--', 'x', '--server', 'y']),
+    ['exec', 'sb-1', '--', 'x', '--server', 'y'],
+  );
+  assert.deepEqual(withoutConnection(['--config', 'c.json', 'ls']), ['--config', 'c.json', 'ls']);
 });
