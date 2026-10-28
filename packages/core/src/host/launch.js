@@ -262,7 +262,8 @@ export function spawnSandbox(spec) {
   let seccompFd = spec.seccompFd;
   let seccompFileFd = null;
   if (seccompFd === undefined && Buffer.isBuffer(spec.seccompProgram)) {
-    const file = path.join(spec.dirs.run, 'seccomp.bpf');
+    // Host-only, like host-token: dirs.root is not bind-mounted into the box.
+    const file = path.join(spec.dirs.root, 'seccomp.bpf');
     fs.writeFileSync(file, spec.seccompProgram, { mode: 0o600 });
     seccompFileFd = fs.openSync(file, 'r');
     seccompFd = 3;
@@ -275,7 +276,8 @@ export function spawnSandbox(spec) {
       detached: true,
       stdio,
     });
-    if (seccompFd === undefined) child.unref();
+    // The program fd is duplicated into the child at spawn, so the launcher detaches either way.
+    child.unref();
     if (!child.pid) throw E.unavailable('launch chain did not start', { log: spec.dirs.log });
     return { pid: child.pid, child };
   } finally {

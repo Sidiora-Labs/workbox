@@ -62,7 +62,7 @@
     - proxy.js is an HTTP CONNECT and absolute-URI forward proxy bound to the gateway-reachable address with per-sandbox allowlists, 403 on denial and audit events; the sandbox environment receives HTTP_PROXY, HTTPS_PROXY and NO_PROXY.
     - wb net policy|test; tests cover none, egress and allowlist against a host listener and the proxy, deny of RFC1918 and the gateway, and that nft cannot be changed from inside.
     - _Requirements: 5.1, 5.2, 5.3, 4.6_
-  - [ ] 2.2 Seccomp filter
+  - [x] 2.2 Seccomp filter
     - seccomp.js assembles a classic BPF program for x86_64: validate arch, deny the x32 ABI, return EPERM for the denylist, allow otherwise; the program is passed to bwrap --seccomp through an inherited fd.
     - Tests: denied syscalls fail with EPERM inside a real sandbox, apt-style operations (fork, exec, chown, setuid, socket, epoll, io_uring absent) still work, and the filter is reported in /proc/self/status.
     - _Requirements: 1.6_
