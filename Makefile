@@ -9,6 +9,7 @@ NODE ?= node
 # launch chain can run on. `make unit` runs them; `make unit-unprivileged` leaves them out so a
 # hosted CI runner, which is not root, can run the rest.
 PRIVILEGED_UNIT := \
+	packages/cli/test/unit/agent.test.js \
 	packages/cli/test/unit/local.test.js \
 	packages/cli/test/unit/main.test.js \
 	packages/cli/test/unit/serve.test.js \
