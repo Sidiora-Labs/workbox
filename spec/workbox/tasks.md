@@ -90,7 +90,7 @@
     - WorkboxClient with typed JSDoc, retries with jitter on 5xx and network errors for idempotent calls, AbortSignal support, Sandbox handle with exec, sessions (async iterator of events), files, evidence, checkpoints, asks.
     - Tests exercise every route against a real server.
     - _Requirements: 6.4_
-  - [ ] 3.3 MCP server
+  - [x] 3.3 MCP server
     - stdio MCP server exposing sandbox_create, sandbox_list, sandbox_exec and sandbox_destroy over the SDK with concise descriptions and bounded output.
     - Tests spawn the server, list tools and run exec in a real sandbox.
     - _Requirements: 6.4_
