@@ -142,7 +142,7 @@ test('bwrapArgs and launchEnv encode the isolation profile', () => {
   assert.match(joined, /--ro-bind \/sb\/ID\/etc\/resolv.conf \/etc\/resolv.conf/);
   assert.match(
     joined,
-    /--proc \/proc --dev \/dev --tmpfs \/tmp --tmpfs \/dev\/shm --chdir \/workspace/,
+    /--proc \/proc --dev \/dev --perms 1777 --tmpfs \/tmp --perms 1777 --tmpfs \/dev\/shm --chdir \/workspace/,
   );
   assert.match(joined, new RegExp(`--setenv PATH ${SANDBOX_PATH}`));
   assert.match(joined, /--setenv HOME \/root/);

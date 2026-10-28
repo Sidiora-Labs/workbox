@@ -85,6 +85,16 @@ test('launch -> READY with the exact isolation profile, then destroy leaves noth
     assert.equal(status.phase, 'ready');
     assert.equal(status.network.mode, 'none');
     assert.equal(sup.observeHealth(), 'HEALTHY');
+    const tmp = await sup.exec({
+      argv: [
+        'sh',
+        '-c',
+        'stat -c %a /tmp /dev/shm && setpriv --reuid 65534 --regid 65534 --clear-groups touch /tmp/nobody',
+      ],
+      timeoutMs: 30_000,
+    });
+    assert.equal(tmp.exitCode, 0, tmp.stderr);
+    assert.equal(tmp.stdout, '1777\n1777\n', 'shared tmp dirs are sticky and world-writable');
     const written = fs.readdirSync(dirs.upper);
     assert.ok(written.length > 0, `the runner wrote into the upper layer: ${written}`);
     assert.equal(fs.statSync(path.join(dirs.upper, written[0])).uid >= eng.config.uid.base, true);
