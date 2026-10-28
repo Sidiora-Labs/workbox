@@ -1,5 +1,9 @@
 # Workbox
 
+[![CI](https://github.com/Sidiora-Labs/workbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidiora-Labs/workbox/actions/workflows/ci.yml)
+[![Container image](https://github.com/Sidiora-Labs/workbox/actions/workflows/image.yml/badge.svg)](https://github.com/Sidiora-Labs/workbox/actions/workflows/image.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A sandbox for AI agents whose primary interface is the shell.
 
 Each sandbox is a Linux process tree isolated with namespaces, cgroup v2 limits, a reduced
@@ -87,3 +91,7 @@ After changing the `wb` command table, run `node docs/gen-wb.mjs` to regenerate 
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SUPPORT.md](SUPPORT.md) and the
 [changelog](CHANGELOG.md).
+
+## License
+
+Workbox is licensed under the [Apache License, Version 2.0](LICENSE).

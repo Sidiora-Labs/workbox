@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -14,22 +14,74 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Verify
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  static:
+    name: Lint, format and docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: pnpm
-      - name: Install (locked)
-        run: pnpm install --frozen-lockfile
-      - name: Static gates (lint, format, 1:1 test mapping, docs)
+      - run: pnpm install --frozen-lockfile
+      - name: Lint, format, test layout and docs
         run: make check
+      - name: Lint workflows
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+
+  unit:
+    name: Unit tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Unit tests that run without root
         run: make unit-unprivileged
+
+  integration:
+    name: Integration and end-to-end tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      WORKBOX_E2E_ANTHROPIC_API_KEY: ${{ secrets.WORKBOX_E2E_ANTHROPIC_API_KEY }}
+      WORKBOX_E2E_OPENAI_API_KEY: ${{ secrets.WORKBOX_E2E_OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap slirp4netns uidmap nftables
+      - name: Prepare the host
+        run: sudo sh deploy/install.sh
+      - name: Host doctor
+        run: sudo env "PATH=$PATH" node packages/cli/src/main.js doctor
+      - name: Unit and integration tests with coverage
+        run: sudo --preserve-env=WORKBOX_E2E_ANTHROPIC_API_KEY,WORKBOX_E2E_OPENAI_API_KEY env "PATH=$PATH" pnpm run test:coverage
+      - name: End-to-end tests
+        run: sudo --preserve-env=WORKBOX_E2E_ANTHROPIC_API_KEY,WORKBOX_E2E_OPENAI_API_KEY env "PATH=$PATH" node --test 'test/e2e/*.test.js'
+      - name: Deployment check
+        run: sudo env "PATH=$PATH" bash deploy/check.sh
