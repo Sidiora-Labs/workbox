@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.gz binary
+*.xz binary
+
+pnpm-lock.yaml linguist-generated=true
+docs/wb.md linguist-generated=true

@@ -1,0 +1,76 @@
+name: Feature proposal
+description: Propose a change to a Workbox surface, the isolation boundary, or the tooling.
+title: '[Proposal]: '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Changes to the isolation boundary, the protocol, the REST or MCP surface, or the `wb` command set should be agreed here before implementation.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and the roadmap for this proposal.
+          required: true
+        - label: I have separated the problem from my preferred implementation.
+          required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Isolation (namespaces, capabilities, seccomp, cgroups)
+        - Network policy
+        - wb toolkit
+        - Protocol
+        - REST and WebSocket API
+        - SDK
+        - MCP server
+        - Operator CLI
+        - Deployment or documentation
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who is blocked, and what cannot be done or operated safely today?
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Proposed contract
+      description: Describe observable behavior, inputs, outputs, bounds, and failure semantics.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include using an existing `wb` command, preset, or surface where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration
+      description: Explain effects on the protocol version, routes, `wb --json` output, the on-disk sandbox layout, and existing sandboxes.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Authority, security, and resource bounds
+      description: What new authority or unbounded behavior could this introduce, and how is it constrained?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Acceptance evidence
+      description: What tests, on a real sandbox, would prove the proposal works?
+    validations:
+      required: true
