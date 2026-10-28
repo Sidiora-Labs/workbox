@@ -49,3 +49,11 @@ log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/
 observed    = "With the runtime stale after a runner/wb change, two test files ran ensureAssets in parallel and RuntimeManager.install raced on the shared <version>.tmp staging dir (EEXIST on symlinkSync, ENOENT in digestTree); a later install in the same run succeeded."
 assumption  = "Pre-existing: install stages into a fixed name with no cross-process lock; it only bites on the first parallel run after an in-box package change and needs a per-process staging dir or a lock."
 resolved    = "Lock runtime and rootfs installs across processes, route the last stray deletes through removeUnder and rotate live launch logs"
+
+[finding.4-7-preset-matrix]
+revision    = "b41dc63+worktree"
+command     = "WORKBOX_TEST_ASSETS=/var/tmp/workbox-test-assets-pm WORKBOX_PRESET_MATRIX=1 node --test --test-name-pattern=<preset> packages/core/test/integration/presets-matrix.test.js"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/pm-{system-2,go-1,rust-1,agents-1,web-2}.log"
+observed    = "All five install with ok manifests byte-equal to the host store: system (cc 12.2.0, clang 14.0.6, cmake 3.25.1, pkgconf 1.8.1) after apt's _apt gpgv failed on the box's 0755 /tmp (exit 100, pm-system-1.log), go1.27.3, rust 1.99.1, agents (node v22.23.4, claude 2.1.312, codex-cli 0.165.0, hyperfide step skipped) on first run, web (pnpm 12.15.0, bun 1.4.4, playwright 1.64.1, Chrome for Testing 156.0.8078.4) after @browsers gained playwright.download.prss.microsoft.com (pm-web-1.log)."
+assumption  = "The launcher's bwrap --tmpfs /tmp stays 0755 (the apt steps now use a 1777 TMPDIR), rust links binaries only with the system preset's cc so its smoke stops at cargo check, and system/go/rust/agents ran before the host check moved ahead of the smoke step."

@@ -17,8 +17,10 @@ const WORK = '/var/cache/workbox-preset';
 const bash = (script) => ['bash', '-c', `set -euo pipefail; ${script}`];
 const fetchChecked = (url, sha256, dest) =>
   `mkdir -p ${WORK} && curl -fsSL --retry 3 -o ${dest} "${url}" && echo "${sha256}  ${dest}" | sha256sum -c -`;
+// apt verifies signatures as the unprivileged _apt user, which cannot write the box's 0755 /tmp.
+const aptTmp = `install -d -m 1777 ${WORK}/tmp && export TMPDIR=${WORK}/tmp`;
 const apt = (pkgs) =>
-  `apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${pkgs.join(' ')}`;
+  `${aptTmp} && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${pkgs.join(' ')}`;
 const tool = (bin, ...args) => ({ verify: [bin, ...(args.length ? args : ['--version'])], bin });
 
 const NODE = {
@@ -83,7 +85,7 @@ export const PRESETS = Object.freeze({
       },
       {
         argv: bash(
-          'export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; playwright install --with-deps chromium && ln -sfT "$(find /ms-playwright -path "*/chrome-linux*/chrome" -type f | head -1)" /usr/local/bin/workbox-chromium',
+          `${aptTmp} PLAYWRIGHT_BROWSERS_PATH=/ms-playwright && playwright install --with-deps chromium && ln -sfT "$(find /ms-playwright -path "*/chrome-linux*/chrome" -type f | head -1)" /usr/local/bin/workbox-chromium`,
         ),
         tools: { chromium: tool('/usr/local/bin/workbox-chromium') },
       },
