@@ -345,7 +345,7 @@ reqs       = ["6.4"]
 
 [task.3.4]
 title      = "CLI remote mode and serve"
-status     = "pending"
+status     = "done"
 wave       = 3
 requires   = ["3.2"]
 touches    = ["packages/cli/**"]

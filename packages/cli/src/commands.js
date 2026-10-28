@@ -34,6 +34,23 @@ export function connectionOpts(argv) {
   return { server: opts.server, token: opts.token, config: opts.config, opts, positional };
 }
 
+/**
+ * argv without `--server URL` and `--token T`, so they may sit anywhere before a `--`.
+ * @param {string[]} argv
+ */
+export function withoutConnection(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--') {
+      out.push(...argv.slice(i));
+      break;
+    }
+    if (argv[i] === '--server' || argv[i] === '--token') i++;
+    else out.push(argv[i]);
+  }
+  return out;
+}
+
 function manager(ctx) {
   if (ctx.engine) return ctx.engine.manager;
   throw new Error('this command needs a local engine or --server');

@@ -2,8 +2,10 @@
 import { pathToFileURL } from 'node:url';
 import { WorkboxClient } from '@workbox/sdk';
 import { openLocalEngine } from './local.js';
+import { serveCommand } from './serve.js';
 import {
   connectionOpts,
+  withoutConnection,
   doctorCommand,
   sandboxCommand,
   shellCommand,
@@ -24,11 +26,12 @@ Usage:
   workbox runtime install|list [--node-version v]
   workbox sandbox create|ls|inspect|rm|exec|shell|drain|events [--server URL --token T]
   workbox shell <id>
-  workbox serve [--port 8790] [--host 127.0.0.1]
+  workbox serve [--config server.json] [--port 8790] [--host 127.0.0.1]
   workbox audit verify
   workbox --help | --version
 
 Sandbox commands talk to a local engine by default, or to a remote server with --server/--token.
+The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames"}.
 Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable, 5 timeout.`;
 
 /** @param {unknown} e */
@@ -105,8 +108,9 @@ export async function main(argv, deps = {}) {
     const built = await buildContext(deps, cmd, rest, { out, err });
     engine = built.engine;
     ownEngine = built.ownEngine;
+    const args = withoutConnection(rest);
     if (cmd === 'serve') {
-      await (deps.serve ?? serveDefault)(built.ctx, rest);
+      await (deps.serve ?? serveCommand)(built.ctx, args);
       return 0;
     }
     const fn = COMMANDS[cmd];
@@ -114,50 +118,15 @@ export async function main(argv, deps = {}) {
       err.write(`workbox: unknown command ${cmd}\n\n${HELP}\n`);
       return 2;
     }
-    const result = await fn(built.ctx, rest);
+    const result = await fn(built.ctx, args);
     printResult(out, result, rest);
     return resultExit(result);
   } catch (e) {
     err.write(`workbox: ${e.message}${e.code ? ` (${e.code})` : ''}\n`);
     return exitCodeForError(e);
   } finally {
-    if (ownEngine && cmd !== 'serve') engine?.close();
+    if (ownEngine) engine?.close();
   }
-}
-
-async function serveDefault(ctx, rest) {
-  const { createServer } = await import('@workbox/server');
-  const port = Number(restFlag(rest, '--port') ?? process.env.WORKBOX_PORT ?? 8790);
-  const host = restFlag(rest, '--host') ?? '127.0.0.1';
-  const token = process.env.WORKBOX_TOKEN;
-  const keys = token
-    ? [{ id: 'env', token, scopes: ['admin', 'read', 'exec', 'answer'] }]
-    : readKeysEnv();
-  const app = createServer({ manager: ctx.engine.manager, keys, audit: ctx.engine.audit });
-  const addr = await app.listen(port, host);
-  ctx.out.write(`workbox server listening on http://${addr.address}:${addr.port}\n`);
-  await new Promise((resolve) => {
-    const stop = async () => {
-      await app.close();
-      ctx.engine.close();
-      resolve();
-    };
-    process.once('SIGTERM', stop);
-    process.once('SIGINT', stop);
-  });
-}
-
-function readKeysEnv() {
-  try {
-    return process.env.WORKBOX_API_KEYS ? JSON.parse(process.env.WORKBOX_API_KEYS) : [];
-  } catch {
-    return [];
-  }
-}
-
-function restFlag(rest, flag) {
-  const i = rest.indexOf(flag);
-  return i === -1 ? undefined : rest[i + 1];
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -94,7 +94,7 @@
     - stdio MCP server exposing sandbox_create, sandbox_list, sandbox_exec and sandbox_destroy over the SDK with concise descriptions and bounded output.
     - Tests spawn the server, list tools and run exec in a real sandbox.
     - _Requirements: 6.4_
-  - [ ] 3.4 CLI remote mode and serve
+  - [x] 3.4 CLI remote mode and serve
     - workbox serve starts the server with a config file; every sandbox command accepts --server and --token and routes through the SDK.
     - Tests cover serve plus a remote create, exec and rm.
     - _Requirements: 6.4_
