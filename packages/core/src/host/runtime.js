@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { pipeline } from 'node:stream/promises';
@@ -9,7 +9,14 @@ import { fileURLToPath } from 'node:url';
 import { E } from '../errors.js';
 import { nullLogger } from '../log.js';
 import { digestTree, sha256File } from './rootfs.js';
-import { removeUnder } from './safefs.js';
+import {
+  removeUnder,
+  withLockFile,
+  lockPathFor,
+  makeStaging,
+  commitStaging,
+  fsyncDir,
+} from './safefs.js';
 
 export const RUNTIME_MANIFEST = 'manifest.json';
 export const CURRENT = 'current';
@@ -93,7 +100,7 @@ export class RuntimeManager {
     if (!fs.existsSync(this.dirRoot)) return [];
     return fs
       .readdirSync(this.dirRoot, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && !d.name.endsWith('.tmp'))
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !d.name.endsWith('.tmp'))
       .map((d) => this.get(d.name))
       .filter(Boolean)
       .sort((a, b) => a.createdAt - b.createdAt);
@@ -101,12 +108,46 @@ export class RuntimeManager {
 
   /**
    * Install a runtime. The Node tarball is taken from `nodeTarball`, else from the cache, else
-   * downloaded; its SHA-256 is always verified against SHASUMS256.txt for that release.
+   * downloaded; its SHA-256 is always verified against SHASUMS256.txt for that release. Installers
+   * of one version serialise on a lockfile and stage in a private mkdtemp directory beside the
+   * target; one that waited while another finished the same inputs returns that install.
    * @param {{nodeVersion?: string, nodeTarball?: string, shasums?: string, version?: string, force?: boolean, setCurrent?: boolean}} [opts]
    * @returns {Promise<RuntimeManifest>}
    */
-  async install(opts = {}) {
+  install(opts = {}) {
+    return this._install(opts, false);
+  }
+
+  /** @param {Parameters<RuntimeManager['install']>[0]} opts @param {boolean} ifStale */
+  async _install(opts, ifStale) {
     const nodeVersion = opts.nodeVersion ?? DEFAULT_NODE_VERSION;
+    const node = await this._verifiedNode(opts, nodeVersion);
+    const packages = this._collectPackages();
+    const version =
+      opts.version ??
+      `${nodeVersion}-${createHash('sha256')
+        .update(JSON.stringify(packages.map((p) => [p.name, p.digest])))
+        .digest('hex')
+        .slice(0, 12)}`;
+    const target = this.dir(version);
+    const seen = this.get(version);
+    return withLockFile(lockPathFor(this.dirRoot, version), async () => {
+      const fresh = ifStale ? this.isFresh() : null;
+      const done = fresh?.fresh
+        ? fresh.current
+        : this._finishedMeanwhile(version, seen, node, packages);
+      if (done) {
+        if (opts.setCurrent !== false) this.setCurrent(done.version);
+        this.log.info('runtime installed by a concurrent installer', { version: done.version });
+        return done;
+      }
+      if (fs.existsSync(target) && !opts.force)
+        throw E.conflict(`runtime ${version} already exists`, { version, path: target });
+      return this._stageAndCommit({ version, target, node, packages }, opts);
+    });
+  }
+
+  async _verifiedNode(opts, nodeVersion) {
     const tarballName = `node-v${nodeVersion}-linux-x64.tar.xz`;
     fs.mkdirSync(this.cacheDir, { recursive: true, mode: 0o755 });
     const tarball = await this._ensureCached(
@@ -123,23 +164,26 @@ export class RuntimeManager {
     const actual = sha256File(tarball);
     if (actual !== expected)
       throw E.conflict(`node tarball checksum mismatch`, { tarball, expected, actual });
+    return { version: nodeVersion, tarball, tarballName, sha256: actual };
+  }
 
-    const packages = this._collectPackages();
-    const version =
-      opts.version ??
-      `${nodeVersion}-${createHash('sha256')
-        .update(JSON.stringify(packages.map((p) => [p.name, p.digest])))
-        .digest('hex')
-        .slice(0, 12)}`;
-    const target = this.dir(version);
-    if (fs.existsSync(target) && !opts.force)
-      throw E.conflict(`runtime ${version} already exists`, { version, path: target });
-    const staging = `${target}.tmp`;
-    removeUnder(this.dirRoot, staging);
-    fs.mkdirSync(path.join(staging, 'node'), { recursive: true, mode: 0o755 });
+  /** The manifest another installer wrote for exactly these inputs while this one waited, or null. */
+  _finishedMeanwhile(version, seen, node, packages) {
+    const now = this.get(version);
+    if (!now || now.createdAt === seen?.createdAt) return null;
+    const same =
+      now.node?.sha256 === node.sha256 &&
+      packages.every((p) => now.packages?.[p.name]?.digest === p.digest);
+    return same ? now : null;
+  }
+
+  /** Build the runtime in a fresh staging directory and commit it; the caller holds the lock. */
+  async _stageAndCommit({ version, target, node, packages }, opts) {
+    const staging = makeStaging(this.dirRoot, version);
     try {
-      this.log.info('extracting node', { tarball, version });
-      await extractTarXz(tarball, path.join(staging, 'node'));
+      fs.mkdirSync(path.join(staging, 'node'), { mode: 0o755 });
+      this.log.info('extracting node', { tarball: node.tarball, version });
+      await extractTarXz(node.tarball, path.join(staging, 'node'));
       const manifestPackages = {};
       for (const pkg of packages) {
         const dest = path.join(staging, 'lib', pkg.name);
@@ -165,7 +209,7 @@ export class RuntimeManager {
       const manifest = {
         schema: 1,
         version,
-        node: { version: nodeVersion, sha256: actual, tarball: tarballName },
+        node: { version: node.version, sha256: node.sha256, tarball: node.tarballName },
         packages: manifestPackages,
         digest: tree.digest,
         files: tree.files,
@@ -176,8 +220,7 @@ export class RuntimeManager {
         `${JSON.stringify(manifest, null, 2)}\n`,
         { mode: 0o644 },
       );
-      removeUnder(this.dirRoot, target);
-      fs.renameSync(staging, target);
+      commitStaging(this.dirRoot, staging, target);
       if (opts.setCurrent !== false) this.setCurrent(version);
       this.log.info('runtime installed', { version, digest: manifest.digest });
       return manifest;
@@ -202,13 +245,14 @@ export class RuntimeManager {
 
   /**
    * Install a new runtime version when the in-box packages changed, otherwise return the current one.
+   * A concurrent caller that finds the runtime fresh once it holds the install lock returns it.
    * @param {Parameters<RuntimeManager['install']>[0]} [opts]
    */
   async ensureFresh(opts = {}) {
     const state = this.isFresh();
     if (state.fresh) return state.current;
     this.log.info('runtime stale, reinstalling', { stale: state.stale });
-    return this.install({ ...opts, force: true });
+    return this._install({ ...opts, force: true }, true);
   }
 
   /** Atomically point `current` at a version. @param {string} version */
@@ -218,6 +262,7 @@ export class RuntimeManager {
     removeUnder(this.dirRoot, tmp);
     fs.symlinkSync(version, tmp);
     fs.renameSync(tmp, this.currentPath);
+    fsyncDir(this.dirRoot);
   }
 
   /** @param {string} version */
@@ -262,9 +307,14 @@ export class RuntimeManager {
         url,
         status: res.status,
       });
-    const tmp = `${cached}.part`;
-    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp, { mode: 0o644 }));
-    fs.renameSync(tmp, cached);
+    const tmp = `${cached}.${process.pid}.${randomBytes(4).toString('hex')}.part`;
+    try {
+      await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp, { mode: 0o644 }));
+      fs.renameSync(tmp, cached);
+    } catch (e) {
+      removeUnder(this.cacheDir, tmp);
+      throw e;
+    }
     return cached;
   }
 }

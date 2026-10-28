@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { RuntimeManager, DEFAULT_NODE_VERSION } from '../../src/host/runtime.js';
 import { loadConfig } from '../../src/config.js';
 import { tmpDir } from '../helpers/tmp.js';
@@ -115,7 +115,72 @@ test('install from the cached tarball, run node and resolve @workbox/protocol fr
     edited.setCurrent('alt');
     const forced = await mgr.install({ version: 'alt', force: true });
     assert.equal(forced.version, 'alt');
-    assert.equal(fs.existsSync(`${root}.tmp`), false);
+    assert.deepEqual(
+      fs.readdirSync(cfg.paths.runtime).filter((n) => n.startsWith('.') || n.endsWith('.tmp')),
+      [],
+      'no staging directory or lockfile is left',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+const RUNTIME_MODULE = new URL('../../src/host/runtime.js', import.meta.url).href;
+const LOG_MODULE = new URL('../../src/log.js', import.meta.url).href;
+
+/** A separate node process running ensureFresh on `runtimeDir` with an info logger on stderr. */
+function ensureFreshProcess(runtimeDir) {
+  const script = `import { RuntimeManager } from ${JSON.stringify(RUNTIME_MODULE)};
+import { createLogger } from ${JSON.stringify(LOG_MODULE)};
+const mgr = new RuntimeManager({
+  paths: { runtime: process.argv[1] },
+  cacheDir: '/var/cache/workbox',
+  logger: createLogger({ level: 'info' }),
+});
+const m = await mgr.ensureFresh();
+process.stdout.write(JSON.stringify({ version: m.version, createdAt: m.createdAt }));`;
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      ['--input-type=module', '-e', script, runtimeDir],
+      { timeout: 120_000 },
+      (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, stdout, stderr }),
+    );
+  });
+}
+
+test('two processes racing ensureFresh on a stale root install once and leave no staging behind', async () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const runtimeDir = path.join(dir, 'runtime');
+    const [a, b] = await Promise.all([
+      ensureFreshProcess(runtimeDir),
+      ensureFreshProcess(runtimeDir),
+    ]);
+    assert.equal(a.code, 0, a.stderr);
+    assert.equal(b.code, 0, b.stderr);
+    const records = `${a.stderr}${b.stderr}`
+      .split('\n')
+      .filter((l) => l.startsWith('{'))
+      .map((l) => JSON.parse(l));
+    const count = (msg) => records.filter((r) => r.msg === msg).length;
+    assert.equal(count('runtime stale, reinstalling'), 2, 'both processes found the root stale');
+    assert.equal(count('extracting node'), 1, 'only one process staged an install');
+    assert.equal(count('runtime installed'), 1);
+    assert.equal(count('runtime installed by a concurrent installer'), 1, 'the other waited');
+    const [ra, rb] = [JSON.parse(a.stdout), JSON.parse(b.stdout)];
+    assert.deepEqual(ra, rb, 'both return the same finished install');
+    const mgr = new RuntimeManager({
+      paths: { runtime: runtimeDir },
+      cacheDir: '/var/cache/workbox',
+    });
+    assert.equal(mgr.current().createdAt, ra.createdAt);
+    assert.ok(mgr.isFresh().fresh);
+    assert.deepEqual(
+      fs.readdirSync(runtimeDir).sort(),
+      ['current', ra.version].sort(),
+      'no staging directory or lockfile is left',
+    );
   } finally {
     cleanup();
   }

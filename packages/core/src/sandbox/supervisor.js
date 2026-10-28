@@ -18,6 +18,7 @@ import {
   spawnSandbox,
   readHostToken,
   readLaunchLog,
+  rotateLaunchLog,
   removeDirs,
   hostMountsFor,
   RUNNER_SOCKET,
@@ -445,7 +446,11 @@ export class Supervisor extends EventEmitter {
     return health;
   }
 
-  /** @param {number} [intervalMs] */
+  /**
+   * Poll health every `intervalMs`; each tick also keeps launch.log under its cap, which costs one
+   * stat while the log is small, so a long-lived sandbox's log is bounded between launches.
+   * @param {number} [intervalMs]
+   */
   startHealthPoll(intervalMs = DEFAULT_HEALTH_INTERVAL_MS) {
     this.stopHealthPoll();
     this.healthTimer = setInterval(() => {
@@ -453,6 +458,11 @@ export class Supervisor extends EventEmitter {
         this.observeHealth();
       } catch (e) {
         this.log.warn('health poll failed', { err: e });
+      }
+      try {
+        if (rotateLaunchLog(this.dirs)) this.log.info('launch.log rotated', { log: this.dirs.log });
+      } catch (e) {
+        this.log.warn('launch.log rotation failed', { err: e });
       }
     }, intervalMs);
     this.healthTimer.unref();

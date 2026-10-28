@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   RootfsManager,
   shiftOwnership,
@@ -11,6 +12,7 @@ import {
   ROOTFS_MANIFEST,
   BUILTIN_ROOTFS_DIR,
 } from '../../../src/host/rootfs.js';
+import { withLockFile, lockPathFor } from '../../../src/host/safefs.js';
 import { tmpDir } from '../../helpers/tmp.js';
 
 const BASE = 200000;
@@ -163,6 +165,8 @@ test('list returns every built rootfs sorted by name, skipping unbuilt and stagi
     fs.mkdirSync(mgr.dir('unbuilt'));
     fs.mkdirSync(path.join(dir, 'rootfs/beta.tmp'));
     fs.writeFileSync(path.join(dir, 'rootfs/beta.tmp', ROOTFS_MANIFEST), '{"name":"beta"}');
+    fs.mkdirSync(path.join(dir, 'rootfs/.gamma.staging-Ab12Cd'));
+    fs.writeFileSync(path.join(dir, 'rootfs/.gamma.staging-Ab12Cd', ROOTFS_MANIFEST), '{}');
     assert.deepEqual(
       mgr.list().map((m) => m.name),
       ['alpha', 'mid', 'zeta'],
@@ -185,6 +189,45 @@ test('remove goes through removeUnder: a rootfs that is a link out of the root i
     assert.equal(mgr.remove('evil'), true);
     assert.equal(fs.existsSync(path.join(root, 'evil')), false);
     assert.ok(fs.existsSync(path.join(outside, ROOTFS_MANIFEST)), 'the link target is untouched');
+  } finally {
+    cleanup();
+  }
+});
+
+test('concurrent builds serialise on the lock; a waiter returns the build finished meanwhile', async () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const root = path.join(dir, 'rootfs');
+    const mgr = new RootfsManager({
+      paths: { rootfs: root },
+      uid: { base: BASE, count: 65536 },
+      docker: 'definitely-not-docker',
+    });
+    const failed = await Promise.allSettled([mgr.build('minimal'), mgr.build('minimal')]);
+    for (const r of failed) assert.equal(r.reason?.code, 'E_UNAVAILABLE');
+    assert.deepEqual(fs.readdirSync(root), [], 'no staging directory or lockfile is left');
+
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const holder = withLockFile(lockPathFor(root, 'minimal'), () => gate);
+    const waiter = mgr.build('minimal');
+    await sleep(100);
+    const finished = {
+      schema: 1,
+      name: 'minimal',
+      digest: 'd'.repeat(64),
+      createdAt: Date.now(),
+      source: { dockerfileSha256: sha256File(path.join(BUILTIN_ROOTFS_DIR, 'minimal/Dockerfile')) },
+    };
+    fs.mkdirSync(path.join(root, 'minimal'));
+    fs.writeFileSync(path.join(root, 'minimal', ROOTFS_MANIFEST), JSON.stringify(finished));
+    release();
+    await holder;
+    assert.deepEqual(await waiter, finished, 'returned without running docker again');
+    assert.deepEqual(fs.readdirSync(root), ['minimal']);
+    await assert.rejects(mgr.build('minimal'), (e) => e.code === 'E_CONFLICT');
   } finally {
     cleanup();
   }
