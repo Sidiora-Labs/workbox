@@ -236,7 +236,7 @@ reqs       = ["4.1", "4.2", "4.3"]
 
 [task.1.6]
 title      = "Manager, reconcile and operator CLI"
-status     = "pending"
+status     = "done"
 wave       = 1
 requires   = ["1.5"]
 touches    = ["packages/core/src/sandbox/manager.js", "packages/core/src/index.js", "packages/cli/src/**", "packages/cli/test/integration/cli.test.js"]

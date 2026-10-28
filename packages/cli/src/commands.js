@@ -73,19 +73,32 @@ function sandboxExec(ctx, rest) {
     : manager(ctx).exec(id, { argv: cmd });
 }
 
+async function localInspect(ctx, id) {
+  const m = manager(ctx);
+  const row = m.inspect(id);
+  const { source, sessions } = await m.sessions(id);
+  return { ...row, sessionsFrom: source, sessions };
+}
+
 /** @param {object} ctx @param {string[]} argv */
 export async function sandboxCommand(ctx, argv) {
   const [sub, ...rest] = argv;
   const remote = ctx.client;
   const byId = {
-    inspect: (id) => (remote ? remote.sandbox(id).inspect() : manager(ctx).inspect(id)),
+    inspect: (id) => (remote ? remote.sandbox(id).inspect() : localInspect(ctx, id)),
     rm: (id) => (remote ? remote.sandbox(id).destroy() : manager(ctx).destroy(id)),
     destroy: (id) => (remote ? remote.sandbox(id).destroy() : manager(ctx).destroy(id)),
     drain: (id) => (remote ? remote.sandbox(id).drain() : manager(ctx).drain(id)),
     events: (id) =>
-      remote ? remote.sandbox(id).listEvents() : { events: ctx.engine.store.listEvents(id, {}) },
+      remote
+        ? remote.sandbox(id).listEvents()
+        : {
+            transitions: manager(ctx).transitions(id),
+            events: ctx.engine.store.listEvents(id, {}),
+          },
   };
   if (sub === 'create') return sandboxCreate(ctx, rest);
+  if (sub === 'shell') return shellCommand(ctx, rest);
   if (sub === 'ls' || sub === 'list') return remote ? remote.listSandboxes() : manager(ctx).list();
   if (sub === 'exec') return sandboxExec(ctx, rest);
   const fn = byId[sub];
@@ -103,7 +116,7 @@ export async function shellCommand(ctx, argv) {
     cols: process.stdout.columns ?? 80,
     name: 'shell',
   });
-  ctx.out.write(
+  ctx.err.write(
     `shell session ${started.sessionId} (pty). Attach with: workbox sandbox exec ${id} -- true\n`,
   );
   return started;

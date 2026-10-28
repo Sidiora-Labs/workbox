@@ -22,7 +22,7 @@ Usage:
   workbox doctor [--json]
   workbox rootfs build|list [name]
   workbox runtime install|list [--node-version v]
-  workbox sandbox create|ls|inspect|rm|exec|drain|events [--server URL --token T]
+  workbox sandbox create|ls|inspect|rm|exec|shell|drain|events [--server URL --token T]
   workbox shell <id>
   workbox serve [--port 8790] [--host 127.0.0.1]
   workbox audit verify
@@ -66,6 +66,9 @@ function resultExit(result) {
   return 0;
 }
 
+/** Commands that talk to running sandboxes rediscover them from store and cgroup first. */
+const RECONCILING = new Set(['serve', 'sandbox', 'shell']);
+
 async function buildContext(deps, cmd, rest, io) {
   const conn = connectionOpts(rest);
   let client = deps.client ?? null;
@@ -78,7 +81,7 @@ async function buildContext(deps, cmd, rest, io) {
   let ownEngine = false;
   const needsEngine = !client && (cmd in COMMANDS || cmd === 'serve');
   if (needsEngine && !engine) {
-    engine = await openLocalEngine({ reconcile: cmd === 'serve' || cmd === 'sandbox' });
+    engine = await openLocalEngine({ reconcile: RECONCILING.has(cmd) });
     ownEngine = true;
   }
   return { ctx: { engine, client, ...io }, engine, ownEngine };
@@ -158,7 +161,7 @@ function restFlag(rest, flag) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  });
+  // Sandboxes launched by this process are detached from it; exit rather than wait on the
+  // launch-chain handles that would otherwise keep a one-shot command alive.
+  main(process.argv.slice(2)).then((code) => process.exit(code));
 }

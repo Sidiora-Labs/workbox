@@ -220,11 +220,36 @@ export class Manager extends EventEmitter {
       labels: s.labels,
       pid: s.pid,
       bootId: s.bootId,
+      cgroup: s.cgroup,
       version: s.version,
       createdAt: s.createdAt,
       readyAt: s.readyAt,
       deletedAt: s.deletedAt,
     };
+  }
+
+  /**
+   * Sessions of a sandbox. With a live control channel this is the runner's own list, recorded in
+   * the store so a later restart still knows about them; without one it is the store's record.
+   * @param {string} id
+   * @returns {Promise<{source: 'runner'|'store', sessions: object[]}>}
+   */
+  async sessions(id) {
+    const sup = this.supervisor(id);
+    if (!sup.peer || sup.peer.closed)
+      return { source: 'store', sessions: this.store.listSessions(id) };
+    const { sessions } = await sup.request('session.list', {});
+    for (const s of sessions) {
+      this._trackSession(id, 'session.started', s);
+      if (s.exited) this._trackSession(id, 'session.exit', { ...s.exited, sessionId: s.sessionId });
+    }
+    return { source: 'runner', sessions };
+  }
+
+  /** Recorded state transitions of a sandbox, oldest first. @param {string} id */
+  transitions(id) {
+    this.get(id);
+    return this.store.listTransitions(id);
   }
 
   /** @param {{cursor?: string, limit?: number, includeDeleted?: boolean, states?: string[]}} [opts] */

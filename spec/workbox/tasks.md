@@ -52,7 +52,7 @@
     - wb status, wb tools, wb help, wb session start|list|attach|input|stop, wb run with the evidence envelope, outbox artifact hand-off and digest verification on the host.
     - Tests run wb inside a real sandbox and assert every acceptance clause of req.4 ac_1 to ac_3.
     - _Requirements: 4.1, 4.2, 4.3_
-  - [ ] 1.6 Manager, reconcile and operator CLI
+  - [x] 1.6 Manager, reconcile and operator CLI
     - manager.js: create, list, get, destroy, drain, reconcile on start (rediscover from store and cgroup, reconnect runner, mark ABSENT when the cgroup is empty), event fan-out.
     - CLI: workbox doctor, rootfs build|list, runtime install|list, sandbox create|ls|inspect|rm|exec|shell|events; local engine mode.
     - Tests: create through the CLI, kill the manager process, restart, assert the sandbox is rediscovered with sessions intact, then destroy and assert DELETED.
