@@ -27,6 +27,13 @@ test('index re-exports the tools, the server and the entry point', () => {
     assert.equal(value, tools[name] ?? server[name] ?? entry[name], name);
   assert.deepEqual(
     [...mcp.TOOL_NAMES],
-    ['sandbox_create', 'sandbox_list', 'sandbox_exec', 'sandbox_destroy'],
+    [
+      'sandbox_create',
+      'sandbox_list',
+      'sandbox_exec',
+      'sandbox_destroy',
+      'agent_run',
+      'agent_output',
+    ],
   );
 });

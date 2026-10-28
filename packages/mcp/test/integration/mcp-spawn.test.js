@@ -8,7 +8,14 @@ import { bootServer, TOKENS } from '../../../server/test/helpers/real-server.js'
 import { MAX_OUTPUT_BYTES, TOOLS } from '../../src/tools.js';
 
 const MAIN = fileURLToPath(new URL('../../src/main.js', import.meta.url));
-const FOUR = ['sandbox_create', 'sandbox_list', 'sandbox_exec', 'sandbox_destroy'];
+const NAMES = [
+  'sandbox_create',
+  'sandbox_list',
+  'sandbox_exec',
+  'sandbox_destroy',
+  'agent_run',
+  'agent_output',
+];
 
 /**
  * `workbox-mcp` as a child process over stdio. `request` sends one JSON-RPC request and resolves
@@ -104,11 +111,11 @@ test(
         assert.deepEqual((await mcp.request('ping')).result, {});
       });
 
-      await t.test('tools/list returns exactly the four tools, verbatim', async () => {
+      await t.test('tools/list returns exactly the sandbox and agent tools, verbatim', async () => {
         const { result } = await mcp.request('tools/list', {});
         assert.deepEqual(
           result.tools.map((tool) => tool.name),
-          FOUR,
+          NAMES,
         );
         assert.deepEqual(result.tools, JSON.parse(JSON.stringify(TOOLS)));
       });
@@ -119,7 +126,7 @@ test(
           const unknown = await mcp.request('tools/call', { name: 'sandbox_shell', arguments: {} });
           assert.equal(unknown.error.code, -32602);
           assert.match(unknown.error.message, /unknown tool: sandbox_shell/);
-          assert.deepEqual(unknown.error.data.tools, FOUR);
+          assert.deepEqual(unknown.error.data.tools, NAMES);
           const missing = await mcp.request('tools/call', {
             name: 'sandbox_exec',
             arguments: { sandboxId: 'sbx-x' },
