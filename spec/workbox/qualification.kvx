@@ -5,3 +5,11 @@ exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/wave1-coverage.log"
 observed    = "178/178 tests pass and lines 92.38 and branches 83.57 meet the floor, but functions are 86.68 against 90; wave-1 files under 90 are cli main/local, manager, runner, sessions, runner fs, rootfs and redact, and the rest are unqualified wave 2-3 modules (proxy, netns, broker, server, sdk, mcp)."
 assumption  = "The wave 2-3 shortfall closes as those tasks qualify; the wave-1 files get a dedicated coverage pass that runs alongside wave 2."
+
+[finding.runner-fs-dead-realpath-loose]
+revision    = "e1d9f5e"
+command     = "node --test --experimental-test-coverage --test-coverage-include=<cli main/local, runner/fs, rootfs, redact> --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90 <cli, runner, rootfs, redact tests>"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/cov-verify.log"
+observed    = "packages/runner/src/fs.js realpathLoose (lines 120-123) and the mustExist:false branch of resolve() are unreachable: every resolve() caller uses the default mustExist=true, so fs.js stops at 12/13 functions (92.31)."
+assumption  = "It is dead code left for a write-to-new-path check that resolve(path.dirname()) now covers; left uncovered and unfixed here, for the fs owner to delete or wire up."

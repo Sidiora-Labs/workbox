@@ -30,3 +30,16 @@ test('redacts registered values, longest first, in text and nested objects', () 
   const empty = new Redactor();
   assert.equal(empty.apply('x'), 'x');
 });
+
+test('removing a value keeps the remaining values longest-first', () => {
+  const r = new Redactor();
+  r.add('abcdef', 'short');
+  r.add('abcdefgh', 'middle');
+  r.add('abcdefghij', 'long');
+  assert.equal(r.remove('abcdefgh'), true);
+  assert.equal(r.size, 2);
+  assert.equal(
+    r.apply('abcdefghij abcdefgh abcdef'),
+    '[REDACTED:long] [REDACTED:short]gh [REDACTED:short]',
+  );
+});

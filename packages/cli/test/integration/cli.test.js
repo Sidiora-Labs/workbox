@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +63,7 @@ function spawnCli(env, args) {
   child.stdout.on('data', (d) => (stdout += d));
   child.stderr.on('data', (d) => (stderr += d));
   const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
+  const out = () => stdout;
   const done = new Promise((resolve) => {
     child.on('close', (code, signal) => {
       clearTimeout(timer);
@@ -74,10 +76,22 @@ function spawnCli(env, args) {
       resolve({ code, signal, stdout, stderr, json });
     });
   });
-  return { child, done };
+  return { child, done, out };
 }
 
 const cli = (env, ...args) => spawnCli(env, args).done;
+
+/** GET `url` on a fresh connection; resolves with the HTTP status. */
+function httpStatus(url, token) {
+  const headers = token ? { authorization: `Bearer ${token}` } : {};
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, { agent: false, headers }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode));
+    });
+    req.on('error', reject);
+  });
+}
 
 function cmdlines(cgroups, cgroupPath) {
   return cgroups.procs(cgroupPath).map((pid) => {
@@ -195,6 +209,9 @@ test('operator CLI: assets, create, kill the manager, rediscover with sessions, 
     const after = await cli(env, 'sandbox', 'exec', id, '--', 'sh', '-c', 'echo after-restart');
     assert.equal(after.code, 0, after.stderr);
     assert.equal(after.json.stdout, 'after-restart\n');
+    const failing = await cli(env, 'sandbox', 'exec', id, '--', 'sh', '-c', 'exit 7');
+    assert.equal(failing.code, 7, 'the CLI exits with the command’s own exit code');
+    assert.equal(failing.json.exitCode, 7);
 
     const drained = await cli(env, 'sandbox', 'drain', id);
     assert.equal(drained.code, 0, drained.stderr);
@@ -228,6 +245,52 @@ test('operator CLI: assets, create, kill the manager, rediscover with sessions, 
     const audit = await cli(env, 'audit', 'verify');
     assert.equal(audit.code, 0, audit.stderr);
     assert.equal(audit.json.ok, true, 'the audit chain verifies across every manager process');
+  } finally {
+    await root.cleanup();
+  }
+});
+
+test('serve: keys from WORKBOX_TOKEN, WORKBOX_API_KEYS or none; SIGTERM and SIGINT stop it cleanly', async () => {
+  const root = await cliRoot('serve');
+  const base = { ...root.env };
+  for (const k of ['WORKBOX_TOKEN', 'WORKBOX_API_KEYS', 'WORKBOX_PORT']) delete base[k];
+  const keys = JSON.stringify([{ id: 'ops', token: 'tok-keys', scopes: ['read'] }]);
+  const runs = [
+    {
+      env: { WORKBOX_TOKEN: 'tok-env' },
+      args: ['--port', '0', '--host', '127.0.0.1'],
+      stop: 'SIGTERM',
+      accepted: 'tok-env',
+      refused: 'tok-keys',
+    },
+    {
+      env: { WORKBOX_API_KEYS: keys, WORKBOX_PORT: '0' },
+      args: [],
+      stop: 'SIGINT',
+      accepted: 'tok-keys',
+      refused: 'tok-env',
+    },
+    { env: { WORKBOX_API_KEYS: '{not json', WORKBOX_PORT: '0' }, args: [], stop: 'SIGTERM' },
+    { env: { WORKBOX_PORT: '0' }, args: [], stop: 'SIGINT' },
+  ];
+  try {
+    for (const run of runs) {
+      const s = spawnCli({ ...base, ...run.env }, ['serve', ...run.args]);
+      try {
+        await until(() => /listening on http:\/\/[\d.]+:\d+\n/.test(s.out()));
+        const origin = s.out().match(/listening on (http:\/\/[\d.]+:\d+)/)[1];
+        assert.match(origin, /^http:\/\/127\.0\.0\.1:\d+$/);
+        const url = `${origin}/v1/sandboxes`;
+        assert.equal(await httpStatus(url), 401);
+        assert.equal(await httpStatus(url, run.refused ?? 'tok-keys'), 401);
+        if (run.accepted) assert.equal(await httpStatus(url, run.accepted), 200);
+      } finally {
+        s.child.kill(run.stop);
+      }
+      const done = await s.done;
+      assert.equal(done.signal, null, `${run.stop} is handled, not fatal`);
+      assert.equal(done.code, 0, done.stderr);
+    }
   } finally {
     await root.cleanup();
   }
