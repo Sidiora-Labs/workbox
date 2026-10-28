@@ -99,6 +99,7 @@ export {
   stdoutChannel,
   webhookChannel,
   notifyAsk,
+  publicAsk,
 } from './broker/index.js';
 export {
   buildSeccompProgram,

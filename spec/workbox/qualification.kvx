@@ -57,3 +57,19 @@ exit_code   = 0
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/pm-{system-2,go-1,rust-1,agents-1,web-2}.log"
 observed    = "All five install with ok manifests byte-equal to the host store: system (cc 12.2.0, clang 14.0.6, cmake 3.25.1, pkgconf 1.8.1) after apt's _apt gpgv failed on the box's 0755 /tmp (exit 100, pm-system-1.log), go1.27.3, rust 1.99.1, agents (node v22.23.4, claude 2.1.312, codex-cli 0.165.0, hyperfide step skipped) on first run, web (pnpm 12.15.0, bun 1.4.4, playwright 1.64.1, Chrome for Testing 156.0.8078.4) after @browsers gained playwright.download.prss.microsoft.com (pm-web-1.log)."
 assumption  = "The launcher's bwrap --tmpfs /tmp stays 0755 (the apt steps now use a 1777 TMPDIR), rust links binaries only with the system preset's cc so its smoke stops at cargo check, and system/go/rust/agents ran before the host check moved ahead of the smoke step."
+
+[finding.3-1-node-http-not-fastify]
+revision    = "b41dc63"
+command     = "node scripts/check-tests.mjs && node --test 'packages/server/test/**/*.test.js'"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/3.1-verify-r1.log"
+observed    = "[task.3.1] do_1 names Fastify, but the server is node:http with a hand-written WebSocket and protocol v-schemas, zero third-party deps, meeting every req 6 clause."
+assumption  = "req 6 does not require Fastify; do_1 needs a wording sync to node:http (the deviation is already noted in spec.kvx)."
+
+[finding.3-1-fake-manager-left]
+revision    = "b41dc63"
+command     = "node --test test/e2e/lifecycle.test.js"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/3.1-e2e.log"
+observed    = "Server tests and e2e now run on a real Manager, but packages/sdk/test/integration/sdk-server.test.js (3.2) and packages/cli/test/integration/remote.test.js (3.4) still import packages/server/test/helpers/fake-manager.js, which lacks manager.get/sessions the new server calls; they were not run here."
+assumption  = "Tasks 3.2 and 3.4 move those tests onto test/helpers/real-server.js; delete fake-manager.js once its last user migrates."
