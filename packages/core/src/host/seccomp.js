@@ -21,7 +21,12 @@ const X32_BASE = 0x4000_0000;
 const OFF_NR = 0;
 const OFF_ARCH = 4;
 
-/** Denied syscalls by name, with x86_64 numbers. */
+/**
+ * Denied syscalls by name, with x86_64 numbers: the Docker default profile's blocked set that exists
+ * on x86_64 (req 1.6 names the first fourteen), plus io_uring and the new mount API, which Docker
+ * also refuses to an unprivileged container. Every one of them answers EPERM. Calls the Docker
+ * profile filters by argument (clone namespace flags, personality) are left to the capability set.
+ */
 export const DENIED_SYSCALLS = Object.freeze({
   mount: 165,
   umount2: 166,
@@ -37,6 +42,42 @@ export const DENIED_SYSCALLS = Object.freeze({
   bpf: 321,
   perf_event_open: 298,
   userfaultfd: 323,
+  acct: 163,
+  clock_adjtime: 305,
+  clock_settime: 227,
+  settimeofday: 164,
+  create_module: 174,
+  init_module: 175,
+  finit_module: 313,
+  delete_module: 176,
+  get_kernel_syms: 177,
+  query_module: 178,
+  ioperm: 173,
+  iopl: 172,
+  kcmp: 312,
+  kexec_file_load: 320,
+  lookup_dcookie: 212,
+  nfsservctl: 180,
+  process_vm_readv: 310,
+  process_vm_writev: 311,
+  quotactl: 179,
+  reboot: 169,
+  swapon: 167,
+  swapoff: 168,
+  sysfs: 139,
+  _sysctl: 156,
+  uselib: 134,
+  ustat: 136,
+  io_uring_setup: 425,
+  io_uring_enter: 426,
+  io_uring_register: 427,
+  open_tree: 428,
+  move_mount: 429,
+  fsopen: 430,
+  fsconfig: 431,
+  fsmount: 432,
+  fspick: 433,
+  mount_setattr: 442,
 });
 
 /** @param {number} code @param {number} jt @param {number} jf @param {number} k */
@@ -51,17 +92,14 @@ function insn(code, jt, jf, k) {
 
 /**
  * Assemble the filter. Returns the sock_fprog body bwrap expects on `--seccomp <fd>`.
- * @param {{arch?: string, extraDeny?: string[]}} [opts]
+ * @param {{arch?: string}} [opts]
  * @returns {Buffer}
  */
 export function buildSeccompProgram(opts = {}) {
   const arch = opts.arch ?? 'x86_64';
   if (arch !== 'x86_64')
     throw E.unsupported(`seccomp program is implemented for x86_64 only, not ${arch}`, { arch });
-  const denied = [...Object.values(DENIED_SYSCALLS)];
-  for (const name of opts.extraDeny ?? []) {
-    if (!(name in DENIED_SYSCALLS)) throw E.invalid(`unknown syscall ${name}`, { name });
-  }
+  const denied = Object.values(DENIED_SYSCALLS);
   const allowIdx = 4 + denied.length;
   const denyIdx = allowIdx + 1;
   const parts = [

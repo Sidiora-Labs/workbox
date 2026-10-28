@@ -262,7 +262,7 @@ reqs       = ["5.1", "5.2", "5.3", "4.6"]
 
 [task.2.2]
 title      = "Seccomp filter"
-status     = "pending"
+status     = "done"
 wave       = 2
 requires   = ["1.6"]
 touches    = ["packages/core/src/host/seccomp.js", "packages/core/src/host/launch.js", "packages/core/test/integration/seccomp.test.js"]
