@@ -10,6 +10,7 @@ import { PRESETS } from '../../../wb/src/presets.js';
 const DOCKERFILE = fileURLToPath(new URL('../../../../rootfs/agents/Dockerfile', import.meta.url));
 const EXTRAS = ['@github', '@node', '@python'];
 const STDIN_NULL = ['sh', '-c', 'exec "$@" </dev/null', 'sh'];
+const prepared = (agent) => ['sh', '-c', `${AGENTS[agent].prepare}\nexec "$@"`, 'sh'];
 
 test('AGENTS: frozen recipes for claude and codex', () => {
   assert.deepEqual(Object.keys(AGENTS), ['claude', 'codex']);
@@ -110,7 +111,7 @@ test('agentSandboxInput output passes the server create schema', () => {
 
 test('agentSessionParams: interactive on a terminal with the bypass flags', () => {
   assert.deepEqual(agentSessionParams('claude'), {
-    argv: ['claude', '--dangerously-skip-permissions'],
+    argv: [...prepared('claude'), 'claude', '--dangerously-skip-permissions'],
     cwd: '/workspace',
     env: { IS_SANDBOX: '1' },
     name: 'agent-claude',
@@ -130,7 +131,13 @@ test('agentSessionParams: interactive on a terminal with the bypass flags', () =
       cwd: '/workspace/repo',
     }),
     {
-      argv: ['codex', '--dangerously-bypass-approvals-and-sandbox', '-m', 'gpt-6.1-sol'],
+      argv: [
+        ...prepared('codex'),
+        'codex',
+        '--dangerously-bypass-approvals-and-sandbox',
+        '-m',
+        'gpt-6.1-sol',
+      ],
       cwd: '/workspace/repo',
       env: { FOO: 'bar' },
       name: 'pair',
@@ -143,6 +150,22 @@ test('agentSessionParams: interactive on a terminal with the bypass flags', () =
   assert.deepEqual(agentSessionParams('claude', { env: { IS_SANDBOX: '0' } }).env, {
     IS_SANDBOX: '1',
   });
+});
+
+test('interactive prepare steps hand a granted API key to the CLI without printing it', () => {
+  const claude = AGENTS.claude.prepare;
+  assert.match(claude, /^if \[ -n "\$ANTHROPIC_API_KEY" \]; then$/m);
+  assert.match(claude, /env\.ANTHROPIC_API_KEY\[-20:\]/, 'approvals are keyed by the last 20');
+  assert.match(claude, /customApiKeyResponses\.approved/);
+  assert.match(claude, /> "\$f\.wb" && mv "\$f\.wb" "\$f"/);
+  const codex = AGENTS.codex.prepare;
+  assert.match(codex, /^d=\$CODEX_HOME; \[ -n "\$d" \] \|\| d=\$HOME\/\.codex$/m);
+  assert.match(codex, /\[ ! -e "\$d\/auth\.json" \]/);
+  assert.match(codex, /printenv CODEX_API_KEY \| codex login --with-api-key >\/dev\/null/);
+  for (const step of [claude, codex]) {
+    assert.doesNotMatch(step, /echo "?\$(ANTHROPIC|CODEX)_API_KEY/);
+    assert.doesNotMatch(step, /\bexit\b/, 'a failed step still starts the CLI');
+  }
 });
 
 test('agentSessionParams: headless with a prompt, stdin the empty file', () => {

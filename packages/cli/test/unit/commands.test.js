@@ -14,6 +14,8 @@ import {
   doctorCommand,
   shellCommand,
   runInteractive,
+  runSession,
+  followSession,
   sessionExitCode,
 } from '../../src/commands.js';
 
@@ -49,6 +51,27 @@ test('interactive runs need a terminal; without one the shell starts detached', 
   await assert.rejects(shellCommand(ctx, ['sb-1']), (e) => e.code === 'E_UNAVAILABLE');
   assert.deepEqual(errs, [], 'nothing claims a detached session that never started');
   await assert.rejects(shellCommand(ctx, []), /workbox shell <id>/);
+});
+
+test('sandbox attach needs both ids; a server that is gone fails the follow', async () => {
+  const client = new WorkboxClient({ baseUrl: await closedUrl(), token: 't', retries: 0 });
+  const ctx = { client, in: new PassThrough(), out: new PassThrough(), err: new PassThrough() };
+  for (const argv of [['attach'], ['attach', 'sb-1']])
+    await assert.rejects(sandboxCommand(ctx, argv), {
+      message: 'workbox sandbox attach <id> <sessionId>',
+    });
+  await assert.rejects(
+    sandboxCommand(ctx, ['attach', 'sb-1', 'se-1']),
+    (e) =>
+      e.code === 'E_UNAVAILABLE' &&
+      /^connection to http:\/\/127\.0\.0\.1:\d+ lost: .*; session se-1 keeps running in sandbox sb-1$/.test(
+        e.message,
+      ),
+  );
+  await assert.rejects(followSession(ctx, 'sb-1', 'se-1'), { code: 'E_UNAVAILABLE' });
+  await assert.rejects(runSession(ctx, 'sb-1', { argv: ['true'] }), { code: 'E_UNAVAILABLE' });
+  for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP'])
+    assert.equal(process.listenerCount(s), 0, `no ${s} handler is left behind`);
 });
 
 test('option parsing and remote sandbox routing', async () => {
