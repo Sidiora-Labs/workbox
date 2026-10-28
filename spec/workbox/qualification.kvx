@@ -1,0 +1,7 @@
+[finding.wave1-coverage]
+revision    = "b7b1f3b"
+command     = "pnpm run test:coverage"
+exit_code   = 1
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/wave1-coverage.log"
+observed    = "178/178 tests pass and lines 92.38 and branches 83.57 meet the floor, but functions are 86.68 against 90; wave-1 files under 90 are cli main/local, manager, runner, sessions, runner fs, rootfs and redact, and the rest are unqualified wave 2-3 modules (proxy, netns, broker, server, sdk, mcp)."
+assumption  = "The wave 2-3 shortfall closes as those tasks qualify; the wave-1 files get a dedicated coverage pass that runs alongside wave 2."
