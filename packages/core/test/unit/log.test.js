@@ -60,6 +60,23 @@ test('child loggers extend the component; redactor scrubs the line', () => {
   }
 });
 
+test('prototype-reaching field names in log data are dropped, never assigned', () => {
+  const s = sink();
+  const log = createLogger({ component: 'core', stream: s, clock: fakeClock(0) });
+  const data = JSON.parse(
+    '{"__proto__":{"polluted":true},"constructor":{"x":1},"prototype":"p","kept":1}',
+  );
+  assert.ok(Object.hasOwn(data, '__proto__'), 'JSON.parse makes __proto__ an own key');
+  log.info('hostile', data);
+  assert.equal(Object.prototype.polluted, undefined);
+  assert.equal({}.polluted, undefined);
+  assert.equal(s.lines[0].includes('polluted'), false);
+  const rec = JSON.parse(s.lines[0]);
+  assert.deepEqual(Object.keys(rec), ['ts', 'level', 'component', 'msg', 'kept']);
+  assert.equal(Object.getPrototypeOf(rec), Object.prototype);
+  assert.equal(rec.kept, 1);
+});
+
 test('errorToJSON includes causes and tolerates missing fields', () => {
   const inner = new TypeError('inner');
   const outer = new Error('outer', { cause: inner });

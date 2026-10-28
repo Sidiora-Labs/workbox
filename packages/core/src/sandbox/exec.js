@@ -39,10 +39,37 @@ class Capture {
     this.sizes[stream] += slice.length;
   }
 
-  /** @param {'stdout'|'stderr'} stream */
+  /**
+   * The captured text. A truncated stream drops the partial character the byte cap cut through,
+   * so the result never ends in a replacement character the program did not write.
+   * @param {'stdout'|'stderr'} stream
+   */
   text(stream) {
-    return Buffer.concat(this.buffers[stream]).toString('utf8');
+    const buf = Buffer.concat(this.buffers[stream]);
+    const end = this.truncated[stream] ? utf8Boundary(buf) : buf.length;
+    return buf.subarray(0, end).toString('utf8');
   }
+}
+
+/**
+ * Length of `buf` without a trailing incomplete UTF-8 sequence: when the last lead byte within
+ * the final four bytes announces more continuation bytes than follow it, cut before that lead.
+ * Bytes that are not UTF-8 at all are left for the decoder to replace.
+ * @param {Buffer} buf
+ * @returns {number}
+ */
+export function utf8Boundary(buf) {
+  const end = buf.length;
+  for (let i = end - 1; i >= 0 && i >= end - 4; i--) {
+    const b = buf[i];
+    if ((b & 0xc0) === 0x80) continue;
+    let need = 1;
+    if ((b & 0xe0) === 0xc0) need = 2;
+    else if ((b & 0xf0) === 0xe0) need = 3;
+    else if ((b & 0xf8) === 0xf0) need = 4;
+    return i + need > end ? i : end;
+  }
+  return end;
 }
 
 /**

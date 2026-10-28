@@ -36,6 +36,37 @@ export const ENV_KEYS = Object.freeze({
 
 const INT_PATHS = new Set(['uid.base', 'uid.count']);
 
+/** Keys that could reach an object prototype; merge drops them at every depth. */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+/** Deepest config document merge accepts; real configs nest two levels. */
+export const MAX_CONFIG_DEPTH = 64;
+/** Top-level keys the code writes itself; accepted on input and always re-derived. */
+const DERIVED_KEYS = new Set(['paths']);
+
+/**
+ * Upper bounds for numeric settings, each mirroring the kernel, cgroup or wire limit the value
+ * ends up in. Larger values cannot take effect and are rejected instead of silently clamped.
+ */
+export const MAXIMA = Object.freeze({
+  /** Largest valid uid_t is 2^32 - 2; (uid_t)-1 means "no change" to the kernel. */
+  uidEnd: 2 ** 32 - 1,
+  /** MAX_PHYSMEM_BITS is at most 52 on any 64-bit Linux; memory + swap stays exact (<= 2^53). */
+  memoryBytes: 2 ** 52,
+  swapBytes: 2 ** 52,
+  /** NR_CPUS tops out at 8192 (MAXSMP); a quota above every CPU's full share means nothing. */
+  cpuMillis: 8192 * 1000,
+  /** PID_MAX_LIMIT on 64-bit kernels. */
+  pids: 4 * 1024 * 1024,
+  /** session.start spoolBytes bound in the protocol. */
+  spoolBytes: 64 * 1024 * 1024,
+  /** session.stop graceMs bound in the protocol. */
+  stopGraceMs: 600_000,
+  /** broker.lease.renew ttlMs bound in the protocol. */
+  ttlMs: 24 * 3600 * 1000,
+  /** Largest delay a Node timer honours; beyond it setTimeout fires after 1 ms. */
+  bootTimeoutMs: 2 ** 31 - 1,
+});
+
 /**
  * @typedef {object} Config
  * @property {string} root
@@ -124,18 +155,55 @@ function readConfigFile(file) {
   return parsed;
 }
 
+/**
+ * Keys absent from DEFAULTS and groups that are not objects. Checked before the field rules so
+ * a typo or a scalar in place of a group fails closed with every offending path listed.
+ * @param {object} cfg
+ * @param {object} shape
+ * @param {string} prefix
+ * @param {string[]} unknown collects dotted paths of unknown keys
+ * @param {string[]} problems
+ */
+function checkShape(cfg, shape, prefix, unknown, problems) {
+  for (const [key, val] of Object.entries(cfg)) {
+    const name = `${prefix}${key}`;
+    if (!Object.hasOwn(shape, key)) {
+      if (!(prefix === '' && DERIVED_KEYS.has(key))) unknown.push(name);
+      continue;
+    }
+    const expected = shape[key];
+    if (!isPlainObject(expected)) continue;
+    if (isPlainObject(val)) checkShape(val, expected, `${name}.`, unknown, problems);
+    else problems.push(`${name} must be an object`);
+  }
+}
+
+/** @param {object} cfg */
+function validateShape(cfg) {
+  const unknown = [];
+  const problems = [];
+  checkShape(cfg, DEFAULTS, '', unknown, problems);
+  for (const name of unknown) problems.push(`unknown key ${name}`);
+  if (problems.length)
+    throw E.invalid(`invalid configuration: ${problems.join('; ')}`, { problems, unknown });
+}
+
 /** @param {object} cfg */
 function validate(cfg) {
+  validateShape(cfg);
   const problems = [];
-  const pos = (v, name, min = 1) => {
-    if (!Number.isInteger(v) || v < min) problems.push(`${name} must be an integer >= ${min}`);
+  const pos = (v, name, min = 1, max = Number.MAX_SAFE_INTEGER) => {
+    if (!Number.isInteger(v) || v < min || v > max)
+      problems.push(`${name} must be an integer >= ${min} and <= ${max}`);
   };
   if (typeof cfg.root !== 'string' || !path.isAbsolute(cfg.root))
     problems.push('root must be an absolute path');
   if (typeof cfg.secretsFile !== 'string' || !path.isAbsolute(cfg.secretsFile))
     problems.push('secretsFile must be an absolute path');
-  pos(cfg.uid.base, 'uid.base', 65536);
-  pos(cfg.uid.count, 'uid.count', 65536);
+  pos(cfg.uid.base, 'uid.base', 65536, MAXIMA.uidEnd - 65536);
+  pos(cfg.uid.count, 'uid.count', 65536, MAXIMA.uidEnd - 65536);
+  if (cfg.uid.base + cfg.uid.count > MAXIMA.uidEnd)
+    problems.push(`uid.base + uid.count must be <= ${MAXIMA.uidEnd}`);
   if (typeof cfg.cgroup.root !== 'string' || !path.isAbsolute(cfg.cgroup.root))
     problems.push('cgroup.root must be an absolute path');
   if (
@@ -143,10 +211,10 @@ function validate(cfg) {
     !/^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/.test(cfg.cgroup.parent)
   )
     problems.push('cgroup.parent must be a single path component');
-  pos(cfg.limits.memoryBytes, 'limits.memoryBytes', 16 * 1024 * 1024);
-  pos(cfg.limits.swapBytes, 'limits.swapBytes', 0);
-  pos(cfg.limits.cpuMillis, 'limits.cpuMillis', 100);
-  pos(cfg.limits.pids, 'limits.pids', 16);
+  pos(cfg.limits.memoryBytes, 'limits.memoryBytes', 16 * 1024 * 1024, MAXIMA.memoryBytes);
+  pos(cfg.limits.swapBytes, 'limits.swapBytes', 0, MAXIMA.swapBytes);
+  pos(cfg.limits.cpuMillis, 'limits.cpuMillis', 100, MAXIMA.cpuMillis);
+  pos(cfg.limits.pids, 'limits.pids', 16, MAXIMA.pids);
   if (!NETWORK_MODES.includes(cfg.network.mode))
     problems.push(`network.mode must be one of ${NETWORK_MODES.join(', ')}`);
   if (!Array.isArray(cfg.network.allow) || cfg.network.allow.some((h) => typeof h !== 'string'))
@@ -161,10 +229,10 @@ function validate(cfg) {
     !/^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/.test(cfg.runtime)
   )
     problems.push('runtime must be a name');
-  pos(cfg.session.spoolBytes, 'session.spoolBytes', 4096);
-  pos(cfg.session.stopGraceMs, 'session.stopGraceMs', 0);
-  pos(cfg.lease.ttlMs, 'lease.ttlMs', 1000);
-  pos(cfg.bootTimeoutMs, 'bootTimeoutMs', 1000);
+  pos(cfg.session.spoolBytes, 'session.spoolBytes', 4096, MAXIMA.spoolBytes);
+  pos(cfg.session.stopGraceMs, 'session.stopGraceMs', 0, MAXIMA.stopGraceMs);
+  pos(cfg.lease.ttlMs, 'lease.ttlMs', 1000, MAXIMA.ttlMs);
+  pos(cfg.bootTimeoutMs, 'bootTimeoutMs', 1000, MAXIMA.bootTimeoutMs);
   if (problems.length)
     throw E.invalid(`invalid configuration: ${problems.join('; ')}`, { problems });
 }
@@ -187,14 +255,44 @@ function clone(x) {
 
 /**
  * Deep merge where objects recurse and everything else (arrays included) is replaced.
+ * `__proto__`, `constructor` and `prototype` keys are dropped at every depth of the patch, and
+ * a patch nested deeper than MAX_CONFIG_DEPTH is refused with a coded error.
  * @param {object} base
  * @param {object} patch
  */
 export function merge(base, patch) {
+  return mergeAt(base, patch, 0);
+}
+
+function mergeAt(base, patch, depth) {
+  guardDepth(depth);
   const out = clone(base);
   for (const [k, val] of Object.entries(patch)) {
-    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-    out[k] = isPlainObject(val) && isPlainObject(out[k]) ? merge(out[k], val) : clone(val);
+    if (UNSAFE_KEYS.has(k)) continue;
+    out[k] =
+      isPlainObject(val) && isPlainObject(out[k])
+        ? mergeAt(out[k], val, depth + 1)
+        : safeCopy(val, depth + 1);
+  }
+  return out;
+}
+
+/** @param {number} depth */
+function guardDepth(depth) {
+  if (depth > MAX_CONFIG_DEPTH)
+    throw E.invalid(`configuration nests deeper than ${MAX_CONFIG_DEPTH} levels`, {
+      maxDepth: MAX_CONFIG_DEPTH,
+    });
+}
+
+/** Copy JSON-shaped data, dropping prototype keys and refusing excessive nesting. */
+function safeCopy(val, depth) {
+  guardDepth(depth);
+  if (Array.isArray(val)) return val.map((item) => safeCopy(item, depth + 1));
+  if (!isPlainObject(val)) return clone(val);
+  const out = {};
+  for (const [k, item] of Object.entries(val)) {
+    if (!UNSAFE_KEYS.has(k)) out[k] = safeCopy(item, depth + 1);
   }
   return out;
 }
