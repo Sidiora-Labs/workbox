@@ -1,0 +1,79 @@
+# git-cliff configuration for Workbox — https://git-cliff.org/docs/configuration
+#
+# Regenerate the changelog with `make changelog` (needs git-cliff on PATH).
+#
+# Conventions it encodes: `[Unreleased]` for everything after the last tag
+# (there are no tags yet, so it is everything), one group per kind of change,
+# and a trailing `[spec:<feature>/<task>]` kept in the subject as
+# `(task <feature>/<task>)` so a commit is grouped by the wave of its task.
+# Workbox commit subjects are plain sentences, not `type:` prefixes, so the
+# groups below match on the leading verb and on the task wave.
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project are recorded here, generated from git history.
+There are no tags yet, so every change is listed under Unreleased. A group is the wave of the
+spec task a commit carries (`[spec:workbox/<wave>.<n>]`), or the kind of change when it carries none.
+
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for entry in commits | commit_groups(groups=commit_parsers_groups) %}
+### {{ entry.group | striptags | trim | upper_first }}
+{% for commit in entry.commits | unique(attribute="message") -%}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
+{% if commit.breaking %}[**breaking**] {% endif %}\
+{{ commit.message | split(pat="\n") | first | trim | upper_first }} \
+({{ commit.id | truncate(length=7, end="") }})
+{% endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+render_always = false
+postprocessors = []
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+require_conventional = false
+split_commits = false
+commit_preprocessors = [
+    # attribution trailers are not release notes
+    { pattern = '(?m)^(Co-Authored-By|Signed-off-by|Claude-Session):.*$', replace = "" },
+    # the task a commit was made under stays in the subject as `(task <feature>/<task>)`
+    { pattern = '[ \t]*\[spec:([^\]]+)\]', replace = " (task ${1})" },
+]
+protect_breaking_commits = false
+commit_parsers = [
+    { message = "^Merge ", skip = true },
+    # an interim commit that says itself it is not qualified is not a release note
+    { message = "^WIP ", skip = true },
+    # the wave of the spec task the commit carries
+    { message = "\\(task workbox/0\\.", group = "Foundation (wave 0)" },
+    { message = "\\(task workbox/1\\.", group = "Sandbox lifecycle (wave 1)" },
+    { message = "\\(task workbox/2\\.", group = "Isolation, broker and presets (wave 2)" },
+    { message = "\\(task workbox/3\\.", group = "Harness surfaces (wave 3)" },
+    { message = "\\(task workbox/4\\.", group = "Deployment, documentation and measurement (wave 4)" },
+    # commits with no task, by leading verb
+    { message = "^(Plan|Point|Record|Import)\\b", group = "Planning" },
+    { message = "^(Harden|Refuse|Close the H[0-9]|Add the H[0-9])|\\bH[0-9]+\\b", group = "Hardening" },
+    { message = "^(Fix|Restore|Make)\\b", group = "Fixes" },
+    { message = "^(Move|Mount)\\b", group = "Changes" },
+    { message = "^(Cover|Prove)\\b", group = "Tests" },
+    { message = ".*", group = "Other" },
+]
+filter_commits = false
+fail_on_unmatched_commit = false
+link_parsers = []
+use_branch_tags = false
+topo_order = false
+topo_order_commits = true
+sort_commits = "newest"
+recurse_submodules = false

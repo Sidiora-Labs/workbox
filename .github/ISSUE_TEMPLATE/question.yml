@@ -1,0 +1,49 @@
+name: Question
+description: Ask a usage or architecture question that may help other users.
+title: '[Question]: '
+labels: ['question']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read SUPPORT.md and the documentation first. Questions about Docker, your kernel's user-namespace policy, or your cloud provider belong with those projects.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Preflight
+      options:
+        - label: I reviewed the documentation and searched existing issues.
+          required: true
+        - label: This question contains no secrets, tokens, private code, or audit data.
+          required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Sandbox lifecycle
+        - wb toolkit
+        - Network policy
+        - Server, SDK, or MCP
+        - Operator CLI
+        - Deployment
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Include secret-free commands and relevant documentation links.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Revision, OS and kernel, and the output of `workbox doctor --json` if applicable.

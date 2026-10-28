@@ -1,0 +1,76 @@
+name: Bug report
+description: Report a reproducible Workbox defect.
+title: '[Bug]: '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a defect. Do not include secrets, API keys, tokens, customer code, or exploit details. Report vulnerabilities through the private security channel described in SECURITY.md.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: This report contains no secret, token, private repository data, or security exploit.
+          required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Launch chain, rootfs, or runtime install
+        - Runner or sessions
+        - wb toolkit
+        - Network policy or proxy
+        - Server (REST or WebSocket)
+        - SDK
+        - MCP server
+        - Operator CLI
+        - Deployment assets
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Revision
+      description: The output of `git rev-parse HEAD`.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Paste `workbox doctor --json`, `node -v`, `bwrap --version` and `uname -r`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: The exact commands or API calls, in order. Redact all private data.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error and, for a sandbox that did not boot, the tail of its `launch.log`.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Compatibility impact or suspected regression range.
