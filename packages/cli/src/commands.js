@@ -121,6 +121,10 @@ export async function sandboxCommand(ctx, argv) {
   };
   if (sub === 'create') return sandboxCreate(ctx, rest);
   if (sub === 'shell') return shellCommand(ctx, rest);
+  if (sub === 'attach') {
+    const usage = 'workbox sandbox attach <id> <sessionId>';
+    return followSession(ctx, need(rest[0], usage), need(rest[1], usage));
+  }
   if (sub === 'ls' || sub === 'list') return remote ? remote.listSandboxes() : manager(ctx).list();
   if (sub === 'exec') return sandboxExec(ctx, rest);
   const fn = byId[sub];
@@ -285,9 +289,19 @@ async function localLink(m, id, params, write) {
  * @param {(b: Buffer) => void} write
  */
 async function remoteLink(client, id, params, write) {
-  const sandbox = client.sandbox(id);
-  const { sessionId } = await sandbox.startSession(params);
-  const stream = sandbox.attach(sessionId);
+  const { sessionId } = await client.sandbox(id).startSession(params);
+  return remoteFollow(client, id, sessionId, (o) => write(Buffer.from(o.data, 'base64')));
+}
+
+/**
+ * A session on a remote server from its first byte, over its session WebSocket; `onOutput` gets
+ * each `session.output` params. `exited` rejects with E_UNAVAILABLE when the connection ends
+ * before the session does.
+ * @param {import('@workbox/sdk').WorkboxClient} client @param {string} id @param {string} sessionId
+ * @param {(o: {stream: string, seq: number, data: string}) => void} onOutput
+ */
+function remoteFollow(client, id, sessionId, onOutput) {
+  const stream = client.sandbox(id).attach(sessionId);
   const lost = (detail) =>
     coded(
       'E_UNAVAILABLE',
@@ -297,7 +311,7 @@ async function remoteLink(client, id, params, write) {
     try {
       for await (const ev of stream) {
         if (ev.type === 'session.output' && typeof ev.params?.data === 'string')
-          write(Buffer.from(ev.params.data, 'base64'));
+          onOutput(ev.params);
         if (ev.type === 'session.exit') return ev.params;
       }
     } catch (e) {
@@ -314,6 +328,160 @@ async function remoteLink(client, id, params, write) {
     close: () => stream.close(),
     remove: async () => undefined,
   };
+}
+
+/**
+ * A session on the local manager from its first byte; `onOutput` gets each `session.output`
+ * params in sequence order. Output that arrives while the replay is in flight is held and sorted,
+ * and the exit counts only once the replay is done, so a session that exits meanwhile loses no
+ * output. Resolves once the replay is delivered.
+ * @param {object} m @param {string} id @param {string} sessionId
+ * @param {(o: {stream: string, seq: number, data: string}) => void} onOutput
+ */
+async function localFollow(m, id, sessionId, onOutput) {
+  let settle = () => undefined;
+  const exited = new Promise((resolve) => {
+    settle = resolve;
+  });
+  let held = [];
+  let heldExit = null;
+  const onEvent = (ev) => {
+    if (ev.sandboxId !== id || ev.params?.sessionId !== sessionId) return;
+    if (ev.method === 'session.output' && typeof ev.params.data === 'string') {
+      if (held) held.push(ev.params);
+      else onOutput(ev.params);
+    }
+    if (ev.method === 'session.exit') {
+      if (held) heldExit ??= ev.params;
+      else settle(ev.params);
+    }
+  };
+  const call = (method, p) => m.request(id, method, { sessionId, ...p }).catch(() => undefined);
+  m.on('event', onEvent);
+  let attached;
+  try {
+    attached = await m.request(id, 'session.attach', { sessionId, fromSeq: 0 });
+  } catch (e) {
+    m.off('event', onEvent);
+    throw e;
+  }
+  const replay = held.sort((a, b) => a.seq - b.seq);
+  held = null;
+  for (const o of replay) onOutput(o);
+  const done = attached.exited ?? heldExit;
+  if (done) settle(done);
+  return {
+    sessionId,
+    exited,
+    input: (d) => call('session.input', { data: d.toString('base64') }),
+    resize: (rows, cols) => call('session.resize', { rows, cols }),
+    signal: (signal) => call('session.signal', { signal }),
+    close: () => m.off('event', onEvent),
+  };
+}
+
+/**
+ * Wait for a session to exit. SIGINT/SIGTERM/SIGHUP to this process send the session
+ * `hangup(signal)`, wait up to HANGUP_GRACE_MS for it to exit and give 128 + that signal's number.
+ * @param {{exited: Promise<object>, signal: (s: string) => unknown}} link
+ * @param {(signal: string) => string} hangup
+ * @returns {Promise<{exit: object|null, exitCode: number}>}
+ */
+async function untilExit(link, hangup) {
+  let onSignal = () => undefined;
+  const signalled = new Promise((resolve) => {
+    onSignal = resolve;
+  });
+  let exit = null;
+  const settled = link.exited.then(
+    (e) => (exit = e),
+    () => undefined,
+  );
+  for (const s of HANGUPS) process.on(s, onSignal);
+  try {
+    const signal = await Promise.race([link.exited.then((e) => ((exit = e), null)), signalled]);
+    if (!signal) return { exit, exitCode: sessionExitCode(exit) };
+    link.signal(hangup(signal));
+    let timer;
+    const grace = new Promise((resolve) => {
+      timer = setTimeout(resolve, HANGUP_GRACE_MS);
+    });
+    await Promise.race([settled, grace]);
+    clearTimeout(timer);
+    return { exit, exitCode: 128 + os.constants.signals[signal] };
+  } finally {
+    for (const s of HANGUPS) process.off(s, onSignal);
+  }
+}
+
+/**
+ * Follow a running or finished session from its first byte until it exits, against the local
+ * engine or `ctx.client`: `pty` and `stdout` output goes to `out`, `stderr` output to `err`. Once
+ * the session shows terminal output and stdin is a terminal, that terminal goes raw and carries
+ * keystrokes and window resizes to the session, as in {@link runInteractive}, and is restored on
+ * every way out. SIGINT/SIGTERM/SIGHUP hang up a terminal session and are passed on to any other.
+ * @param {object} ctx `{engine}` or `{client}`
+ * @param {string} id sandbox id
+ * @param {string} sessionId
+ * @param {{input?: NodeJS.ReadStream, out?: NodeJS.WritableStream, err?: NodeJS.WritableStream}} [io]
+ * @returns {Promise<{text: true, sessionId: string, exitCode: number}>}
+ */
+export async function followSession(ctx, id, sessionId, io = {}) {
+  const input = io.input ?? ctx.in ?? process.stdin;
+  const out = io.out ?? ctx.out ?? process.stdout;
+  const err = io.err ?? ctx.err ?? process.stderr;
+  let link = null;
+  let pty = false;
+  let raw = false;
+  const onData = (d) => link.input(d);
+  const onResize = () => {
+    if (out.rows && out.columns) link.resize(out.rows, out.columns);
+  };
+  const enterRaw = () => {
+    if (raw || !input.isTTY || typeof input.setRawMode !== 'function') return;
+    raw = true;
+    input.setRawMode(true);
+    input.on('data', onData);
+    input.resume();
+    out.on('resize', onResize);
+  };
+  const onOutput = (o) => {
+    const buf = Buffer.from(o.data, 'base64');
+    if (o.stream === 'stderr') err.write(buf);
+    else out.write(buf);
+    if (o.stream !== 'pty' || pty) return;
+    pty = true;
+    if (link) enterRaw();
+  };
+  link = ctx.client
+    ? remoteFollow(ctx.client, id, sessionId, onOutput)
+    : await localFollow(manager(ctx), id, sessionId, onOutput);
+  try {
+    if (pty) enterRaw();
+    const { exitCode } = await untilExit(link, (signal) => (pty ? 'SIGHUP' : signal));
+    return { text: true, sessionId, exitCode };
+  } finally {
+    if (raw) {
+      out.off('resize', onResize);
+      input.off('data', onData);
+      if (input.isRaw) input.setRawMode(false);
+      input.pause();
+    }
+    link.close();
+  }
+}
+
+/**
+ * Start a session and follow it with {@link followSession} until it exits.
+ * @param {object} ctx `{engine}` or `{client}`
+ * @param {string} id sandbox id
+ * @param {object} params session.start params
+ * @param {{input?: NodeJS.ReadStream, out?: NodeJS.WritableStream, err?: NodeJS.WritableStream}} [io]
+ * @returns {Promise<{text: true, sessionId: string, exitCode: number}>}
+ */
+export async function runSession(ctx, id, params, io = {}) {
+  const { sessionId } = await managerOrRemoteStart(ctx, id, params);
+  return followSession(ctx, id, sessionId, io);
 }
 
 function coded(code, message) {

@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { WorkboxClient } from '@workbox/sdk';
 import { openLocalEngine } from './local.js';
 import { serveCommand } from './serve.js';
+import { agentCommand } from './agent.js';
 import {
   connectionOpts,
   withoutConnection,
@@ -26,12 +27,21 @@ Usage:
   workbox rootfs build|list [name]
   workbox runtime install|list [--node-version v]
   workbox sandbox create|ls|inspect|rm|exec|shell|drain|events [--server URL --token T]
+  workbox sandbox attach <id> <sessionId> [--server URL --token T]
   workbox shell <id>
+  workbox agent <claude|codex> [<sandbox-id>] [-p|--prompt TEXT] [--name N]
+        [--network allowlist|egress|none] [--allow HOST|@set]... [--secret REF[=ENV]]...
+        [--no-secret] [--detach] [--server URL --token T]
   workbox serve [--config server.json] [--port 8790] [--host 127.0.0.1]
   workbox audit verify
   workbox --help | --version
 
 Sandbox commands talk to a local engine by default, or to a remote server with --server/--token.
+\`agent\` runs Claude Code or Codex in a box of the agents rootfs (a new one unless a sandbox id is
+given): interactive on this terminal, headless with -p, or detached with --detach (local only with
+--network none). It grants the agent's API key host secret (claude ANTHROPIC_API_KEY, codex
+OPENAI_API_KEY as CODEX_API_KEY); --secret replaces it, --no-secret grants none so you can sign in
+inside the box. \`sandbox attach\` replays a session from its start and follows it to its exit.
 The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames"}.
 Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable/busy (and doctor on a
 host that is not ready), 5 timeout. Local sandbox commands refuse a root another engine drives.`;
@@ -53,6 +63,7 @@ export function exitCodeForError(e) {
  */
 const COMMANDS = {
   doctor: doctorCommand,
+  agent: agentCommand,
   sandbox: sandboxCommand,
   shell: shellCommand,
   rootfs: rootfsCommand,
@@ -73,7 +84,7 @@ function resultExit(result) {
 }
 
 /** Commands that talk to running sandboxes rediscover them from store and cgroup first. */
-const RECONCILING = new Set(['serve', 'sandbox', 'shell']);
+const RECONCILING = new Set(['serve', 'sandbox', 'shell', 'agent']);
 
 async function buildContext(deps, cmd, rest, io) {
   const conn = connectionOpts(rest);

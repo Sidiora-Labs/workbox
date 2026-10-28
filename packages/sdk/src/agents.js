@@ -26,9 +26,28 @@ const credential = (ref, env, summary) => freeze({ ref, env, summary });
  * @property {readonly AgentCredential[]} credentials what the CLI reads, in its order of preference
  * @property {string} signIn the in-box command of a subscription sign-in by code, no browser needed
  * @property {Readonly<Record<string, string>>} env non-secret session environment
+ * @property {string} prepare shell step an interactive session runs before the CLI, so a granted
+ *   API key is used without the CLI's own sign-in or key-approval screen; it never prints the key
  * @property {readonly string[]} interactive argv of the interactive CLI
  * @property {readonly string[]} headless argv prefix of a one-shot run; the prompt follows `--`
  */
+
+const CLAUDE_APPROVE_KEY = [
+  'if [ -n "$ANTHROPIC_API_KEY" ]; then',
+  '  f="$HOME/.claude.json"',
+  `  { cat "$f" 2>/dev/null || echo '{}'; } | jq '(env.ANTHROPIC_API_KEY[-20:]) as $k`,
+  '    | .customApiKeyResponses.approved = ((.customApiKeyResponses.approved // []) - [$k] + [$k])',
+  `    | .customApiKeyResponses.rejected = ((.customApiKeyResponses.rejected // []) - [$k])' \\`,
+  '    > "$f.wb" && mv "$f.wb" "$f"',
+  'fi',
+].join('\n');
+
+const CODEX_LOGIN_KEY = [
+  'd=$CODEX_HOME; [ -n "$d" ] || d=$HOME/.codex',
+  'if [ -n "$CODEX_API_KEY" ] && [ ! -e "$d/auth.json" ]; then',
+  '  printenv CODEX_API_KEY | codex login --with-api-key >/dev/null',
+  'fi',
+].join('\n');
 
 /** The bundled agents, by name. @type {Readonly<Record<string, Agent>>} */
 export const AGENTS = freeze({
@@ -52,6 +71,9 @@ export const AGENTS = freeze({
     signIn: 'claude setup-token',
     // Claude Code refuses bypassPermissions as root (box sessions are uid 0) unless IS_SANDBOX=1.
     env: freeze({ IS_SANDBOX: '1' }),
+    // Interactive claude asks whether to use an ANTHROPIC_API_KEY from the environment, default
+    // No; it records the answer by the key's last 20 characters in ~/.claude.json.
+    prepare: CLAUDE_APPROVE_KEY,
     interactive: freeze(['claude', '--dangerously-skip-permissions']),
     headless: freeze(['claude', '--dangerously-skip-permissions', '-p']),
   }),
@@ -66,6 +88,9 @@ export const AGENTS = freeze({
     ]),
     signIn: 'codex login --device-auth',
     env: freeze({}),
+    // Interactive codex ignores CODEX_API_KEY (only `codex exec` reads it) and offers sign-in
+    // instead; with no saved credentials, the key is stored by `codex login --with-api-key`.
+    prepare: CODEX_LOGIN_KEY,
     interactive: freeze(['codex', '--dangerously-bypass-approvals-and-sandbox']),
     headless: freeze([
       'codex',
@@ -142,7 +167,7 @@ export function agentSandboxInput(agent, opts = {}) {
 
 /**
  * The `session.start` params that run an agent in its box: the interactive CLI on a terminal,
- * or with `prompt` a one-shot headless run (`claude -p`, `codex exec`) on plain pipes whose
+ * after the agent's `prepare` step, or with `prompt` a one-shot headless run (`claude -p`, `codex exec`) on plain pipes whose
  * stdin is the empty file, so neither CLI waits for piped input.
  * @param {string} agent `claude` or `codex`
  * @param {{prompt?: string, args?: string[], rows?: number, cols?: number, name?: string, cwd?: string, env?: Record<string, string>, secretRefs?: string[]}} [opts]
@@ -169,7 +194,7 @@ export function agentSessionParams(agent, opts = {}) {
     };
   }
   return {
-    argv: [...a.interactive, ...args],
+    argv: ['sh', '-c', `${a.prepare}\nexec "$@"`, 'sh', ...a.interactive, ...args],
     ...common,
     pty: true,
     rows: opts.rows ?? 24,
