@@ -273,7 +273,7 @@ reqs       = ["1.6"]
 
 [task.2.3]
 title      = "Broker: asks, secrets, events, leases, checkpoints, artifacts"
-status     = "in_progress"
+status     = "done"
 wave       = 2
 requires   = ["1.6"]
 touches    = ["packages/core/src/broker/**", "packages/core/src/secrets.js", "packages/wb/src/commands.js", "packages/core/test/integration/broker.test.js"]
@@ -298,7 +298,7 @@ reqs       = ["4.7"]
 
 [task.2.5]
 title      = "PTY sessions and interactive shell"
-status     = "in_progress"
+status     = "done"
 wave       = 2
 requires   = ["1.6"]
 touches    = ["packages/runner/src/pty.js", "packages/runner/src/sessions.js", "packages/core/src/host/runtime.js", "packages/cli/src/commands.js", "packages/core/test/integration/pty.test.js"]

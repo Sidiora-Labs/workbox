@@ -66,7 +66,7 @@
     - seccomp.js assembles a classic BPF program for x86_64: validate arch, deny the x32 ABI, return EPERM for the denylist, allow otherwise; the program is passed to bwrap --seccomp through an inherited fd.
     - Tests: denied syscalls fail with EPERM inside a real sandbox, apt-style operations (fork, exec, chown, setuid, socket, epoll, io_uring absent) still work, and the filter is reported in /proc/self/status.
     - _Requirements: 1.6_
-  - [-] 2.3 Broker: asks, secrets, events, leases, checkpoints, artifacts
+  - [x] 2.3 Broker: asks, secrets, events, leases, checkpoints, artifacts
     - Asks: raise with kind and payload, status, list, wait with timeout; answers through the manager API; channel plugins stdout and webhook; audit.
     - Secrets: host-side provider reading a 0600 JSON file or environment; per-sandbox policy of allowed refs; secret exec resolves refs and the runner injects them only into the child env; redaction of registered values in spool and audit.
     - Events with sequence and causation; leases issued per sandbox with TTL, renew and status including the derived offline deadline; checkpoints as tar of upper plus envelope JSON with digest, list and restore into a new sandbox; artifact put via outbox, get and list.
@@ -77,7 +77,7 @@
     - wb preset list|install writes /var/lib/workbox-preset/<name>.json with versions and digests and mirrors it to the host store through the broker.
     - The test installs python in a real sandbox with egress and asserts the manifest and that uv and python3 run.
     - _Requirements: 4.7_
-  - [-] 2.5 PTY sessions and interactive shell
+  - [x] 2.5 PTY sessions and interactive shell
     - Add node-pty to the runtime bundle with its prebuilt binary verified against the rootfs glibc; sessions accept pty with rows and cols and support resize.
     - workbox shell opens an interactive PTY session with raw mode and resize forwarding; tests assert isatty inside and resize propagation.
     - _Requirements: 3.5_
