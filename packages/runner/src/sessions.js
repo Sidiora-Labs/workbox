@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
-import { ProtocolError, Codes, newId } from '@workbox/protocol';
+import { ProtocolError, Codes, newId, Redactor } from '@workbox/protocol';
 import { RingSpool, DEFAULT_SPOOL_BYTES } from './spool.js';
 import { spawnPty, resizePty, signalPtyGroup } from './pty.js';
 
@@ -14,42 +14,17 @@ const SPAWN_ERRORS = Object.freeze({
   EPERM: Codes.DENIED,
 });
 
-/** Injected values shorter than this are not redacted: doing so would destroy ordinary output. */
-export const MIN_REDACT_LENGTH = 6;
-
 /**
- * Redaction table for a session's injected secret env, longest value first.
+ * Redactor for a session's injected secret env, each value labelled with its variable name, or
+ * null when nothing was injected. Session output is redacted through one byte-wise stream of it
+ * per output stream, so a value (or an encoded form of it) split across writes is still caught.
  * @param {Record<string, string>|undefined} secretEnv
- * @returns {Array<{value: Buffer, marker: Buffer}>}
+ * @returns {Redactor|null}
  */
-export function redactions(secretEnv) {
-  return Object.entries(secretEnv ?? {})
-    .filter(([, v]) => typeof v === 'string' && v.length >= MIN_REDACT_LENGTH)
-    .sort(([, a], [, b]) => b.length - a.length)
-    .map(([name, v]) => ({ value: Buffer.from(v), marker: Buffer.from(`[REDACTED:${name}]`) }));
-}
-
-/**
- * Replace every occurrence of a registered value in one output chunk, byte-wise.
- * @param {Buffer} data @param {Array<{value: Buffer, marker: Buffer}>} table
- * @returns {Buffer}
- */
-export function redactChunk(data, table) {
-  let out = data;
-  for (const { value, marker } of table ?? []) {
-    let i = out.indexOf(value);
-    if (i === -1) continue;
-    const parts = [];
-    let from = 0;
-    while (i !== -1) {
-      parts.push(out.subarray(from, i), marker);
-      from = i + value.length;
-      i = out.indexOf(value, from);
-    }
-    parts.push(out.subarray(from));
-    out = Buffer.concat(parts);
-  }
-  return out;
+export function secretRedactor(secretEnv) {
+  const redactor = new Redactor();
+  for (const [name, value] of Object.entries(secretEnv ?? {})) redactor.add(value, name);
+  return redactor.size ? redactor : null;
 }
 
 /**
@@ -65,6 +40,8 @@ export function redactChunk(data, table) {
  * @property {Set<import('@workbox/protocol').Peer>} subscribers
  * @property {import('node:child_process').ChildProcess} child
  * @property {boolean} stdinClosed
+ * @property {Redactor|null} redact the injected secret values, null when there are none
+ * @property {Map<string, import('@workbox/protocol').RedactStream>} redactStreams per output stream
  */
 
 /**
@@ -164,13 +141,15 @@ export class SessionManager extends EventEmitter {
       child,
       pty: Boolean(params.pty),
       stdinClosed: false,
-      redact: redactions(params.secretEnv),
+      redact: secretRedactor(params.secretEnv),
+      redactStreams: new Map(),
     };
     this.sessions.set(sessionId, session);
     child.stdout.on('data', (d) => this._output(session, session.pty ? 'pty' : 'stdout', d));
     if (child.stderr) child.stderr.on('data', (d) => this._output(session, 'stderr', d));
     child.stdin.on('error', (e) => this.log.debug('stdin error', { sessionId, err: e }));
     child.on('close', (code, signal) => {
+      this._flushRedaction(session);
       session.exited = { code, signal, at: this.clock() };
       const info = { sessionId, code, signal, seq: session.spool.nextSeq, at: session.exited.at };
       this.log.info('session exit', info);
@@ -186,7 +165,29 @@ export class SessionManager extends EventEmitter {
   }
 
   _output(session, stream, raw) {
-    const data = redactChunk(raw, session.redact);
+    if (!session.redact) {
+      this._record(session, stream, raw);
+      return;
+    }
+    let rs = session.redactStreams.get(stream);
+    if (!rs) {
+      rs = session.redact.stream({ binary: true });
+      session.redactStreams.set(stream, rs);
+    }
+    this._record(session, stream, rs.push(raw));
+  }
+
+  /**
+   * Emit what each redacting stream still holds. Runs once the child's stdio has closed, before
+   * the exit is reported, so a held tail is neither lost nor delivered after `session.exit`.
+   * @param {Session} session
+   */
+  _flushRedaction(session) {
+    for (const [stream, rs] of session.redactStreams) this._record(session, stream, rs.end());
+  }
+
+  _record(session, stream, data) {
+    if (data.length === 0) return;
     const seq = session.spool.append(stream, data, this.clock());
     const event = { sessionId: session.sessionId, stream, seq, data: data.toString('base64') };
     for (const peer of session.subscribers)

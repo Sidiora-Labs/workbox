@@ -284,12 +284,17 @@ test('leases issue, renew, expire and reject bad tokens', () => {
     const digest = `sha256:${createHash('sha256').update('t1').digest('hex')}`;
     assert.equal(store.db.prepare('SELECT token FROM leases').get().token, digest);
     assert.equal(l1.token, digest);
-    for (const bad of ['bad', '', 't1t1t1t1t1t1t1t1', digest.slice(0, -1)])
-      assert.throws(
-        () => store.renewLease(s.id, bad, 1000),
-        (e) => e.code === 'E_DENIED',
-      );
-    assert.equal(store.renewLease(s.id, digest, 1000).generation, 1);
+    const mismatch = { code: 'E_DENIED', message: 'lease token mismatch' };
+    for (const bad of ['bad', '', 't1t1t1t1t1t1t1t1', digest.slice(0, -1), digest, null])
+      assert.throws(() => store.renewLease(s.id, bad, 1000), mismatch);
+    assert.equal(store.getLease(s.id).renewedAt, null, 'a refused renew changes nothing');
+    assert.throws(
+      () => store.extendLease('sb-missing', 1000),
+      (e) => e.code === 'E_NOT_FOUND',
+    );
+    clock.advance(100);
+    const ext = store.extendLease(s.id, 1000);
+    assert.deepEqual([ext.renewedAt, ext.expiresAt, ext.token], [clock(), clock() + 1000, digest]);
     clock.advance(500);
     const r = store.renewLease(s.id, 't1', 2000);
     assert.equal(r.renewedAt, clock());
@@ -299,11 +304,63 @@ test('leases issue, renew, expire and reject bad tokens', () => {
       () => store.renewLease(s.id, 't1', 1000),
       (e) => e.code === 'E_STATE',
     );
+    assert.throws(
+      () => store.extendLease(s.id, 1000),
+      (e) => e.code === 'E_STATE',
+    );
     const l2 = store.issueLease(s.id, { token: 't2', ttlMs: 10 });
     assert.equal(l2.generation, 2);
     assert.equal(l2.renewedAt, null);
   } finally {
     cleanup();
+  }
+});
+
+test('a lease digest read from the database file renews nothing; only the plaintext does', () => {
+  const t = tmpDir();
+  try {
+    const file = path.join(t.dir, 'workbox.db');
+    const token = 'lease-plaintext-7c41e09b2d';
+    const clock = fakeClock();
+    const first = Store.open(file, { clock });
+    const s = first.createSandbox(base);
+    first.issueLease(s.id, { token, ttlMs: 60_000 });
+    first.close();
+    const onDisk = fs
+      .readdirSync(t.dir)
+      .map((f) => fs.readFileSync(path.join(t.dir, f), 'latin1'))
+      .join('');
+    assert.equal(onDisk.includes(token), false, 'the plaintext never reaches the disk');
+    const stolen = [...new Set(onDisk.match(/sha256:[0-9a-f]{64}/g))];
+    assert.deepEqual(stolen, [`sha256:${createHash('sha256').update(token).digest('hex')}`]);
+
+    const store = Store.open(file, { clock });
+    const refusal = (e) => ({ code: e.code, message: e.message, data: e.data });
+    let wrong;
+    let digest;
+    assert.throws(
+      () => store.renewLease(s.id, 'lease-plaintext-7c41e09b2e', 1000),
+      (e) => {
+        wrong = refusal(e);
+        return true;
+      },
+    );
+    assert.throws(
+      () => store.renewLease(s.id, stolen[0], 1000),
+      (e) => {
+        digest = refusal(e);
+        return true;
+      },
+    );
+    assert.equal(wrong.code, 'E_DENIED');
+    assert.deepEqual(digest, wrong, 'the digest is refused exactly like a wrong token');
+    assert.equal(store.getLease(s.id).renewedAt, null);
+    clock.advance(10);
+    const renewed = store.renewLease(s.id, token, 5000);
+    assert.deepEqual([renewed.renewedAt, renewed.expiresAt], [clock(), clock() + 5000]);
+    store.close();
+  } finally {
+    t.cleanup();
   }
 });
 

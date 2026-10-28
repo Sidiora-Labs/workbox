@@ -15,7 +15,7 @@ export function hashToken(token) {
 export function issueLease(ctx, opts = {}) {
   const token = randomBytes(24).toString('hex');
   const ttlMs = opts.ttlMs ?? ctx.leaseTtlMs ?? 300_000;
-  const lease = ctx.store.issueLease(ctx.sandboxId, { token: hashToken(token), ttlMs });
+  const lease = ctx.store.issueLease(ctx.sandboxId, { token, ttlMs });
   return { ...leaseView(ctx, lease), token };
 }
 
@@ -26,19 +26,21 @@ export function leaseStatus(ctx) {
   return { lease: leaseView(ctx, lease) };
 }
 
-/** @param {object} ctx @param {{ttlMs?: number, token?: string}} params */
+/**
+ * Renew the lease. A presented token goes to the store exactly as presented, and the store accepts
+ * only the plaintext: the stored digest is refused like any wrong token. Without a token the
+ * caller is the sandbox on its own broker channel (wb never holds the plaintext), and that
+ * channel is the credential; the stored digest is never used as one.
+ * @param {object} ctx @param {{ttlMs?: number, token?: string}} params
+ */
 export function leaseRenew(ctx, params) {
-  const lease = ctx.store.getLease(ctx.sandboxId);
-  if (!lease) throw E.notFound('sandbox has no lease', { sandboxId: ctx.sandboxId });
+  if (!ctx.store.getLease(ctx.sandboxId))
+    throw E.notFound('sandbox has no lease', { sandboxId: ctx.sandboxId });
   const ttlMs = params.ttlMs ?? ctx.leaseTtlMs ?? 300_000;
-  // wb renews without holding the plaintext token: the broker channel is the sandbox's own
-  // control channel, so renewal re-issues under the same stored hash.
-  const stored = lease.token;
-  const renewed = ctx.store.renewLease(
-    ctx.sandboxId,
-    params.token ? hashToken(params.token) : stored,
-    ttlMs,
-  );
+  const renewed =
+    params.token === undefined
+      ? ctx.store.extendLease(ctx.sandboxId, ttlMs)
+      : ctx.store.renewLease(ctx.sandboxId, params.token, ttlMs);
   ctx.audit?.append({
     actor: 'broker',
     action: 'lease.renew',
