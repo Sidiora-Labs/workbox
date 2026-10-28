@@ -2,8 +2,8 @@ import { createInterface } from 'node:readline';
 import { TOOLS, ToolCallError, callTool } from './tools.js';
 
 /**
- * A stdio MCP server (JSON-RPC 2.0, one message per line) exposing exactly the four sandbox
- * tools. Handles `initialize`, `ping`, `tools/list` and `tools/call`; notifications get no reply.
+ * A stdio MCP server (JSON-RPC 2.0, one message per line) exposing exactly the sandbox and agent
+ * tools of TOOLS. Handles `initialize`, `ping`, `tools/list` and `tools/call`; notifications get no reply.
  */
 
 /** Server version reported in `initialize`. */
