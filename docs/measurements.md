@@ -7,7 +7,7 @@ Recorded by `test/e2e/lifecycle.test.js`: 20 sandboxes created concurrently thro
 | Field | Value |
 |---|---|
 | Date | 2026-10-28T07:46:28.712Z |
-| Revision | ef4377745cd8ea8ce18b056606bad10b5ed0adb9 plus uncommitted working-tree changes |
+| Revision | 09b6f1fd28f618ed74150a87eade0b2cf70a2cb5 plus uncommitted working-tree changes |
 | Kernel | Linux 6.8.0-147-generic x64 |
 | CPUs | 8 (AMD EPYC Processor (with IBPB)) |
 | Memory | 23.5 GiB |

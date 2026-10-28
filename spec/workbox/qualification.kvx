@@ -1,14 +1,14 @@
 [finding.wave1-coverage]
-revision    = "b7b1f3b"
+revision    = "e9e77be"
 command     = "pnpm run test:coverage"
 exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/wave1-coverage.log"
 observed    = "178/178 tests pass and lines 92.38 and branches 83.57 meet the floor, but functions are 86.68 against 90; wave-1 files under 90 are cli main/local, manager, runner, sessions, runner fs, rootfs and redact, and the rest are unqualified wave 2-3 modules (proxy, netns, broker, server, sdk, mcp)."
 assumption  = "The wave 2-3 shortfall closes as those tasks qualify; the wave-1 files get a dedicated coverage pass that runs alongside wave 2."
-resolved    = "681b2bd: pnpm run test:coverage exit 0, 301/301 tests, lines 94.03, branches 87.91, functions 91.04"
+resolved    = "508bbb5: pnpm run test:coverage exit 0, 301/301 tests, lines 94.03, branches 87.91, functions 91.04"
 
 [finding.2.5-node-pty]
-revision    = "e1d9f5e"
+revision    = "24d1cfe"
 command     = "node scripts/check-tests.mjs && node --test packages/core/test/integration/pty.test.js"
 exit_code   = 0
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.5-verify.log"
@@ -16,7 +16,7 @@ observed    = "node-pty ships no Linux prebuild, so do_1 would need a host node-
 assumption  = "The rootfs keeps util-linux script and coreutils stty (Debian essential), and do_1's node-pty wording is satisfied by this recorded fallback per IMPLEMENTATION-PLAN P0-7."
 
 [finding.2.5-touches-path]
-revision    = "e1d9f5e"
+revision    = "24d1cfe"
 command     = "hyperfide spec done 2.5 --root /root/workbox/.claude/worktrees/agent-a677b281d35fe4424"
 exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.5-verify.log"
@@ -24,7 +24,7 @@ observed    = "spec done reran verify_cmd green but refused: touched packages/cl
 assumption  = "The [task.2.5] touches entry needs a spec-wording sync to packages/cli/src/commands.js before spec done can pass without --force."
 
 [finding.runner-fs-dead-realpath-loose]
-revision    = "e1d9f5e"
+revision    = "24d1cfe"
 command     = "node --test --experimental-test-coverage --test-coverage-include=<cli main/local, runner/fs, rootfs, redact> --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90 <cli, runner, rootfs, redact tests>"
 exit_code   = 0
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/cov-verify.log"
@@ -33,7 +33,7 @@ assumption  = "It is dead code left for a write-to-new-path check that resolve(p
 resolved    = "Add the H14 removeUnder choke point for host deletes, cap launch.log and fix wb attach on exited sessions"
 
 [finding.2-3-wb-attach-exited]
-revision    = "e1d9f5e"
+revision    = "24d1cfe"
 command     = "node --test packages/core/test/integration/broker.test.js"
 exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.3-verify-1.log"
@@ -42,7 +42,7 @@ assumption  = "This is a task 1.5 wb client defect outside 2.3 touches; the brok
 resolved    = "Add the H14 removeUnder choke point for host deletes, cap launch.log and fix wb attach on exited sessions"
 
 [finding.runtime-install-staging-race]
-revision    = "dc1962a"
+revision    = "b4cdaea"
 command     = "WORKBOX_TEST_ASSETS=/var/tmp/workbox-test-assets-hc node --test <H14 unit tests> packages/core/test/integration/launch.test.js packages/core/test/integration/wb.test.js"
 exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/hc-verify-1.log"
@@ -51,7 +51,7 @@ assumption  = "Pre-existing: install stages into a fixed name with no cross-proc
 resolved    = "Lock runtime and rootfs installs across processes, route the last stray deletes through removeUnder and rotate live launch logs"
 
 [finding.4-7-preset-matrix]
-revision    = "b41dc63+worktree"
+revision    = "82fbd15+worktree"
 command     = "WORKBOX_TEST_ASSETS=/var/tmp/workbox-test-assets-pm WORKBOX_PRESET_MATRIX=1 node --test --test-name-pattern=<preset> packages/core/test/integration/presets-matrix.test.js"
 exit_code   = 0
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/pm-{system-2,go-1,rust-1,agents-1,web-2}.log"
@@ -59,7 +59,7 @@ observed    = "All five install with ok manifests byte-equal to the host store: 
 assumption  = "The launcher's bwrap --tmpfs /tmp stays 0755 (the apt steps now use a 1777 TMPDIR), rust links binaries only with the system preset's cc so its smoke stops at cargo check, and system/go/rust/agents ran before the host check moved ahead of the smoke step."
 
 [finding.3-1-node-http-not-fastify]
-revision    = "b41dc63"
+revision    = "82fbd15"
 command     = "node scripts/check-tests.mjs && node --test 'packages/server/test/**/*.test.js'"
 exit_code   = 0
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/3.1-verify-r1.log"
@@ -67,7 +67,7 @@ observed    = "[task.3.1] do_1 names Fastify, but the server is node:http with a
 assumption  = "req 6 does not require Fastify; do_1 needs a wording sync to node:http (the deviation is already noted in spec.kvx)."
 
 [finding.3-1-fake-manager-left]
-revision    = "b41dc63"
+revision    = "82fbd15"
 command     = "node --test test/e2e/lifecycle.test.js"
 exit_code   = 0
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/3.1-e2e.log"

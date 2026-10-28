@@ -12,7 +12,7 @@ config keys and CLI/exit behaviour are only added to, never removed or repurpose
 
 | Measure | Value |
 |---|---|
-| Commits | 8 (`1a64bcb..781dc68`) = tasks 0.1–0.5, 1.1–1.3 done |
+| Commits | 8 (`82dd8b4..ccad99d`) = tasks 0.1–0.5, 1.1–1.3 done |
 | Working tree | Dirty: task 1.4 WIP — 8 modified + 9 untracked (runner sessions/spool, core exec, tests) |
 | Real packages | protocol (1105 lines, 8 unit + 1 integration), core (config/log/errors/redact/store 971L/audit/host/supervisor 512L), runner (main/runner/checks/log + WIP sessions 308L/spool 83L) |
 | Stub packages | `wb`, `cli`, `server`, `sdk`, `mcp` — each `src/index.js` is exactly `export {};` |
