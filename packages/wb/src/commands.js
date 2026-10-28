@@ -5,7 +5,13 @@ import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { ProtocolError, Codes } from '@workbox/protocol';
 import { OUTBOX_DIR, INBOX_DIR } from './client.js';
-import { listPresets, getPreset } from './presets.js';
+import {
+  PRESET_DIR,
+  assertPresetNetwork,
+  getPreset,
+  listPresets,
+  recipeDigest,
+} from './presets.js';
 
 /**
  * Every wb subcommand implementation. Handlers receive `(ctx, argv)` where ctx is
@@ -387,53 +393,167 @@ export async function netCommand(ctx, argv) {
   throw new ProtocolError(Codes.INVALID_PARAMS, `unknown net subcommand ${sub ?? ''}`);
 }
 
-/** @param {object} ctx @param {string[]} argv */
+const PIN_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
+
+/** Run argv to completion, keeping stdout and stderr apart. @param {string[]} argv @param {object} env */
+async function capture(argv, env) {
+  const out = [];
+  const err = [];
+  const r = await runProcess(argv, {
+    env,
+    out: { write: (d) => out.push(d) },
+    err: { write: (d) => err.push(d) },
+  });
+  return {
+    exitCode: exitStatus(r.exitCode, r.envelope.signal),
+    stdout: Buffer.concat(out).toString('utf8'),
+    stderr: Buffer.concat(err).toString('utf8'),
+  };
+}
+
+const firstLine = (text) =>
+  text
+    .split('\n')
+    .map((l) => l.trim())
+    .find(Boolean);
+
+/** sha256 of a file's bytes, streamed. @param {string} file */
+async function fileSha256(file) {
+  const hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+/**
+ * Resolve the preset's floating versions, reusing every one a previous manifest recorded: a
+ * re-install never re-resolves silently.
+ * @param {import('./presets.js').Preset} preset @param {Record<string, string>} previous @param {object} env
+ */
+async function resolvePins(preset, previous, env) {
+  const pins = {};
+  for (const [key, argv] of Object.entries(preset.resolve ?? {})) {
+    const known = previous?.[key];
+    if (typeof known === 'string' && PIN_RE.test(known)) {
+      pins[key] = known;
+      continue;
+    }
+    const r = await capture(argv, env);
+    const value = firstLine(r.stdout) ?? '';
+    if (r.exitCode !== 0 || !PIN_RE.test(value))
+      throw new ProtocolError(Codes.UNAVAILABLE, `cannot resolve the ${key} version`, {
+        exitCode: r.exitCode,
+        stderr: r.stderr.slice(-2000),
+      });
+    pins[key] = value;
+  }
+  return pins;
+}
+
+/**
+ * Version and digest of one installed tool.
+ * @param {string} name @param {import('./presets.js').ToolCheck} check @param {object} env
+ */
+async function checkTool(name, check, env) {
+  const r = await capture(check.verify, env);
+  const version = firstLine(r.stdout) ?? firstLine(r.stderr);
+  if (r.exitCode !== 0 || !version)
+    throw new ProtocolError(Codes.UNAVAILABLE, `${name} does not verify`, {
+      exitCode: r.exitCode,
+      stderr: r.stderr.slice(-2000),
+    });
+  const file = fs.realpathSync(check.bin);
+  return { version, path: file, sha256: await fileSha256(file) };
+}
+
+async function runSteps(ctx, preset, manifest, env) {
+  for (const [index, step] of preset.steps.entries()) {
+    if (step.when && !process.env[step.when]) continue;
+    manifest.failed = { step: index, tools: Object.keys(step.tools) };
+    const r = await runProcess(step.argv, { env, out: ctx.err, err: ctx.err });
+    const exitCode = exitStatus(r.exitCode, r.envelope.signal);
+    if (exitCode !== 0) {
+      manifest.failed.exitCode = exitCode;
+      return;
+    }
+    for (const [name, check] of Object.entries(step.tools))
+      manifest.tools[name] = await checkTool(name, check, env);
+  }
+  delete manifest.failed;
+  manifest.status = 'ok';
+}
+
+/**
+ * Install a preset into a fresh manifest: `failed` until every step and every tool check passed,
+ * so a failure never leaves a partial `ok`.
+ */
+async function installPreset(ctx, name, preset, previous) {
+  const manifest = {
+    name,
+    status: 'failed',
+    recipe: recipeDigest(preset),
+    hosts: [...preset.hosts],
+    resolved: {},
+    tools: {},
+    startedAt: Date.now(),
+  };
+  const env = { PATH: `/usr/local/sbin:/usr/local/bin:${process.env.PATH ?? '/usr/bin:/bin'}` };
+  try {
+    manifest.failed = { step: 'resolve' };
+    manifest.resolved = await resolvePins(preset, previous?.resolved, env);
+    for (const [key, value] of Object.entries(manifest.resolved))
+      env[`WB_PIN_${key.toUpperCase()}`] = value;
+    await runSteps(ctx, preset, manifest, env);
+  } catch (e) {
+    manifest.failed = { ...manifest.failed, error: e.message };
+  }
+  manifest.endedAt = Date.now();
+  manifest.digest = createHash('sha256')
+    .update(JSON.stringify([manifest.recipe, manifest.resolved, manifest.tools]))
+    .digest('hex');
+  return manifest;
+}
+
+function readManifest(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeManifest(file, manifest) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * `wb preset list|install <name>`. Install writes `/var/lib/workbox-preset/<name>.json` and
+ * mirrors the same manifest to the host store; an `ok` manifest of the same recipe makes a
+ * re-install a no-op. The sandbox network is checked first and never widened from inside.
+ * @param {object} ctx @param {string[]} argv
+ */
 export async function presetCommand(ctx, argv) {
   const [sub, name] = argv;
   if (sub === 'list') return { presets: listPresets() };
   if (sub !== 'install')
     throw new ProtocolError(Codes.INVALID_PARAMS, `unknown preset subcommand ${sub ?? ''}`);
   const preset = getPreset(need(name, 'wb preset install <name>'));
-  const manifestDir = ctx.presetDir ?? '/var/lib/workbox-preset';
-  const manifestFile = path.join(manifestDir, `${name}.json`);
-  if (fs.existsSync(manifestFile)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
-      if (existing.status === 'ok')
-        return { name, status: 'ok', unchanged: true, manifest: existing };
-    } catch {
-      // unreadable manifest: reinstall
-    }
-  }
-  const manifest = { name, status: 'failed', tools: {}, startedAt: Date.now() };
-  try {
-    for (const step of preset.steps) {
-      const r = await runProcess(step.argv, { out: ctx.out, err: ctx.err });
-      if (r.exitCode !== 0)
-        throw new ProtocolError(Codes.UNAVAILABLE, `preset step failed: ${step.argv[0]}`);
-      if (step.verify) {
-        const v = await runProcess(step.verify, { out: sink(), err: sink() });
-        manifest.tools[step.tool ?? step.verify[0]] = {
-          version: v.log.toString('utf8').split('\n')[0].trim(),
-          verifyExit: v.exitCode,
-        };
-      }
-    }
-    manifest.status = 'ok';
-  } finally {
-    manifest.endedAt = Date.now();
-    manifest.digest = createHash('sha256').update(JSON.stringify(manifest.tools)).digest('hex');
-    fs.mkdirSync(manifestDir, { recursive: true });
-    fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
-    await ctx.client.request('broker.preset.manifest', { name, manifest }).catch(() => undefined);
-  }
+  const file = path.join(ctx.presetDir ?? PRESET_DIR, `${name}.json`);
+  const previous = readManifest(file);
+  if (previous?.status === 'ok' && previous.recipe === recipeDigest(preset))
+    return { name, status: 'ok', unchanged: true, manifest: previous };
+  assertPresetNetwork(name, preset, await ctx.client.request('broker.net.policy'));
+  const manifest = await installPreset(ctx, name, preset, previous);
+  writeManifest(file, manifest);
+  await ctx.client.request('broker.preset.manifest', { name, manifest });
   if (manifest.status !== 'ok')
-    throw new ProtocolError(Codes.UNAVAILABLE, `preset ${name} install failed`);
-  return { name, status: manifest.status, manifest };
-}
-
-function sink() {
-  return { write() {} };
+    throw new ProtocolError(Codes.UNAVAILABLE, `preset ${name} install failed`, {
+      manifest: file,
+      failed: manifest.failed,
+    });
+  return { name, status: 'ok', unchanged: false, manifest };
 }
 
 function need(value, usage) {

@@ -3,6 +3,7 @@ import net from 'node:net';
 import os from 'node:os';
 import dns from 'node:dns';
 import { E } from '../errors.js';
+import { expandHostSets, hostSet, isHostSetEntry } from './hostsets.js';
 
 /**
  * The host forward proxy (req 5.2): HTTP CONNECT + absolute-URI. One proxy serves one sandbox on
@@ -108,14 +109,18 @@ export function hostAddresses() {
 }
 
 /**
- * Normalise an allowlist entry: a hostname, `*.hostname`, or a CIDR (a bare IP becomes a /32 or
- * /128). Lower-cased.
+ * Normalise an allowlist entry: a hostname, `*.hostname`, a CIDR (a bare IP becomes a /32 or
+ * /128), or a named host set `@name` (hostsets.js), which must exist. Lower-cased.
  * @param {string} entry
  */
 export function normalizeAllowEntry(entry) {
   if (typeof entry !== 'string' || entry.length === 0 || entry.length > 253)
     throw E.invalid(`invalid allowlist entry ${String(entry)}`);
   const lower = entry.toLowerCase();
+  if (isHostSetEntry(lower)) {
+    hostSet(lower);
+    return lower;
+  }
   const [addr, bits, extra] = lower.split('/');
   if (net.isIP(addr)) {
     const max = net.isIPv6(addr) ? 128 : 32;
@@ -166,7 +171,7 @@ export function parseTarget(target, defPort = 443) {
 export function compilePolicy(policy, local = hostAddresses()) {
   if (!['egress', 'allowlist'].includes(policy?.mode))
     throw E.invalid(`proxy policy mode must be egress or allowlist, got ${String(policy?.mode)}`);
-  const allow = (policy.allow ?? []).map(normalizeAllowEntry);
+  const allow = expandHostSets((policy.allow ?? []).map(normalizeAllowEntry));
   const ports = new Set(DEFAULT_PORTS);
   for (const p of policy.ports ?? []) {
     if (!Number.isInteger(p) || p < 1 || p > 65535)

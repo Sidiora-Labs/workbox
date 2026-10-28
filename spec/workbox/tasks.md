@@ -72,7 +72,7 @@
     - Events with sequence and causation; leases issued per sandbox with TTL, renew and status including the derived offline deadline; checkpoints as tar of upper plus envelope JSON with digest, list and restore into a new sandbox; artifact put via outbox, get and list.
     - Tests exercise each command inside a real sandbox and assert the negative cases: refused ref, value absent from store, audit and spool, second nonce refused, lease expiry.
     - _Requirements: 4.4, 4.5, 4.6, 2.2_
-  - [ ] 2.4 Presets
+  - [x] 2.4 Presets
     - Preset recipes as data: web (Node 22, pnpm, bun, Chromium with Playwright deps), python (3.12, uv), rust (rustup stable), go (latest stable tarball), system (build-essential, clang, cmake, pkg-config), agents (Claude Code and Codex CLIs plus the hyperfide binary when provided); each step is an argv with a verification command and version capture.
     - wb preset list|install writes /var/lib/workbox-preset/<name>.json with versions and digests and mirrors it to the host store through the broker.
     - The test installs python in a real sandbox with egress and asserts the manifest and that uv and python3 run.

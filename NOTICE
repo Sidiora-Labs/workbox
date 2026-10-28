@@ -5,7 +5,8 @@ tryboxi (https://github.com/karthikponna/tryboxi)
 
 The proxy destination policy in packages/core/src/host/proxy.js and the IPv6
 and always-blocked range rules in packages/core/src/host/nft.js are derived
-from tryboxi internal/network/policy.
+from tryboxi internal/network/policy. The allowlist host sets in
+packages/core/src/host/hostsets.js are taken from its Presets.
 
 MIT License
 

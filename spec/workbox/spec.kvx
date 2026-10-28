@@ -286,7 +286,7 @@ reqs       = ["4.4", "4.5", "4.6", "2.2"]
 
 [task.2.4]
 title      = "Presets"
-status     = "pending"
+status     = "done"
 wave       = 2
 requires   = ["2.1"]
 touches    = ["packages/wb/src/presets.js", "packages/wb/src/commands.js", "packages/core/src/broker/presets.js", "packages/core/test/integration/presets.test.js"]
