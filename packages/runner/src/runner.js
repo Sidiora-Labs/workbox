@@ -2,9 +2,19 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import { EventEmitter, once } from 'node:events';
-import { Peer, ProtocolError, Codes, PROTOCOL_VERSION, validateParams } from '@workbox/protocol';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import {
+  Peer,
+  ProtocolError,
+  Codes,
+  PROTOCOL_VERSION,
+  validateParams,
+  methodNames,
+} from '@workbox/protocol';
 import { selfChecks } from './checks.js';
 import { createLog } from './log.js';
+import { SessionManager } from './sessions.js';
+import { createFs } from './fs.js';
 
 export const RUNNER_VERSION = '0.1.0-dev';
 
@@ -45,6 +55,22 @@ export class Runner extends EventEmitter {
     this.env = {};
     this.network = { mode: 'none' };
     this.checks = null;
+    this.sessions = new SessionManager({
+      log: this.log,
+      clock: this.clock,
+      defaultSpoolBytes: opts.spoolBytes,
+      stopGraceMs: opts.stopGraceMs,
+      baseEnv: () => ({ ...process.env, ...this.env }),
+    });
+    this.maxPeers = opts.maxPeers ?? 64;
+    this.fs = createFs({ root: opts.fsRoot });
+    this.sessions.on('started', (info) => this._toControl('session.started', info));
+    this.sessions.on('exit', (info) => this._toControl('session.exit', info));
+  }
+
+  _toControl(method, params) {
+    if (this.control && !this.control.closed)
+      this.control.notify(method, params).catch(() => undefined);
   }
 
   /** Bind the socket and accept connections. */
@@ -74,6 +100,7 @@ export class Runner extends EventEmitter {
     if (this.phase === 'stopped') return;
     this.phase = 'stopping';
     this.log.info('stopping', { reason: opts.reason ?? 'requested' });
+    await this.sessions.stopAll({ graceMs: opts.graceMs });
     for (const peer of this.peers) peer.close();
     this.peers.clear();
     this.control = null;
@@ -105,7 +132,7 @@ export class Runner extends EventEmitter {
       hostname: os.hostname(),
       connections: this.peers.size,
       control: this.control !== null,
-      sessions: 0,
+      sessions: this.sessions.liveCount,
       network: this.network,
     };
   }
@@ -113,6 +140,10 @@ export class Runner extends EventEmitter {
   // ── connections ──
 
   _accept(socket) {
+    if (this.peers.size >= this.maxPeers) {
+      socket.destroy();
+      return;
+    }
     const peer = new Peer(socket, { name: 'runner-peer' });
     peer.role = 'local';
     this.peers.add(peer);
@@ -135,11 +166,103 @@ export class Runner extends EventEmitter {
     guarded('runner.hello', (p) => this._hello(peer, p));
     guarded('runner.go', (p) => this._go(peer, p));
     guarded('runner.status', () => this.status());
-    guarded('runner.shutdown', () => {
+    guarded('runner.shutdown', (p) => {
       this._requireControl(peer);
-      setImmediate(() => this.stop({ reason: 'runner.shutdown' }));
+      setImmediate(() => this.stop({ reason: 'runner.shutdown', graceMs: p.graceMs }));
       return { stopping: true };
     });
+    const ready = (fn) => (p, ctx) => {
+      this._requireReady();
+      return fn(p, ctx);
+    };
+    guarded(
+      'session.start',
+      ready((p) => this._sessionStart(p)),
+    );
+    guarded(
+      'session.list',
+      ready(() => ({ sessions: this.sessions.list() })),
+    );
+    guarded(
+      'session.attach',
+      ready((p) => this.sessions.attach(p.sessionId, peer, p.fromSeq ?? 0)),
+    );
+    guarded(
+      'session.detach',
+      ready((p) => this.sessions.detach(p.sessionId, peer)),
+    );
+    guarded(
+      'session.input',
+      ready((p) => this.sessions.input(p.sessionId, p)),
+    );
+    guarded(
+      'session.signal',
+      ready((p) => this.sessions.signal(p.sessionId, p.signal)),
+    );
+    guarded(
+      'session.stop',
+      ready((p) => this.sessions.stop(p.sessionId, { graceMs: p.graceMs })),
+    );
+    guarded(
+      'session.resize',
+      ready((p) => this.sessions.resize(p.sessionId, p.rows, p.cols)),
+    );
+    guarded(
+      'session.remove',
+      ready((p) => this.sessions.remove(p.sessionId)),
+    );
+    guarded(
+      'fs.read',
+      ready((p) => this.fs.read(p)),
+    );
+    guarded(
+      'fs.write',
+      ready((p) => this.fs.write(p)),
+    );
+    guarded(
+      'fs.list',
+      ready((p) => this.fs.list(p)),
+    );
+    guarded(
+      'fs.stat',
+      ready((p) => this.fs.stat(p)),
+    );
+    guarded(
+      'fs.mkdir',
+      ready((p) => this.fs.mkdir(p)),
+    );
+    guarded(
+      'fs.remove',
+      ready((p) => this.fs.remove(p)),
+    );
+    for (const method of methodNames().filter((m) => m.startsWith('broker.'))) {
+      guarded(
+        method,
+        ready((p) => this._relay(peer, method, p)),
+      );
+    }
+  }
+
+  async _sessionStart(p) {
+    if (!p.secretRefs?.length) return this.sessions.start(p);
+    if (!this.control || this.control.closed)
+      throw new ProtocolError(Codes.UNAVAILABLE, 'no control channel for secret resolution');
+    const resolved = await this.control.request(
+      'broker.secret.resolve',
+      { refs: p.secretRefs },
+      { timeoutMs: 10_000 },
+    );
+    return this.sessions.start({ ...p, secretEnv: resolved.env ?? {} });
+  }
+
+  _relay(peer, method, params) {
+    if (method === 'broker.secret.resolve' && peer !== this.control)
+      throw new ProtocolError(Codes.DENIED, 'secret resolution is runner-internal only');
+    if (!this.control || this.control.closed)
+      throw new ProtocolError(Codes.UNAVAILABLE, 'no control channel for broker relay');
+    if (peer === this.control)
+      throw new ProtocolError(Codes.DENIED, 'broker methods are served by the host, not relayed');
+    return this.control.request(method, params, { timeoutMs: 30_000 });
   }
 
   _requireControl(peer) {
@@ -165,6 +288,14 @@ export class Runner extends EventEmitter {
     const role = p.role ?? 'local';
     let nonce = null;
     if (role === 'host') {
+      if (this.boot.hostTokenHash) {
+        const given = p.hostToken
+          ? createHash('sha256').update(p.hostToken).digest()
+          : Buffer.alloc(0);
+        const want = Buffer.from(this.boot.hostTokenHash, 'hex');
+        if (given.length !== want.length || !timingSafeEqual(given, want))
+          throw new ProtocolError(Codes.DENIED, 'invalid host token');
+      }
       if (this.control && this.control !== peer)
         throw new ProtocolError(Codes.BUSY, 'a control channel is already attached');
       this.control = peer;

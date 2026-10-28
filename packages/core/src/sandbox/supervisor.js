@@ -7,12 +7,15 @@ import { Peer, PROTOCOL_VERSION } from '@workbox/protocol';
 import { E, WorkboxError } from '../errors.js';
 import { nullLogger } from '../log.js';
 import { States, Health } from './state.js';
+import { exec as execCommand } from './exec.js';
+import { buildSeccompProgram } from '../host/seccomp.js';
 import {
   sandboxDirs,
   prepareDirs,
   writeBootFile,
   hashNonce,
   spawnSandbox,
+  readHostToken,
   readLaunchLog,
   removeDirs,
   hostMountsFor,
@@ -38,6 +41,16 @@ export function evaluateChecks(checks, expect) {
     ...mapProblems(checks, expect.uid),
   ];
   if (checks.mountDenied !== true) problems.push('mount(2) not denied inside the sandbox');
+  if (expect.seccomp && checks.seccomp !== 2)
+    problems.push(`seccomp mode ${checks.seccomp} != 2 (filter)`);
+  if (
+    !expect.seccomp &&
+    checks.seccomp !== undefined &&
+    checks.seccomp !== null &&
+    checks.seccomp !== 0 &&
+    checks.seccomp !== 2
+  )
+    problems.push(`unexpected seccomp mode ${checks.seccomp}`);
   if (checks.pid !== 2) problems.push(`runner pid ${checks.pid} != 2`);
   return { ok: problems.length === 0, problems: [...new Set(problems)] };
 }
@@ -142,6 +155,25 @@ export class Supervisor extends EventEmitter {
     this.checks = null;
     this.healthTimer = null;
     this.closed = false;
+    this.hostToken = null;
+    this.peerHandlers = null;
+  }
+
+  /**
+   * Register handlers (e.g. broker methods) on every control peer, present and future.
+   * @param {(peer: Peer, sup: Supervisor) => void} fn
+   */
+  registerPeerHandlers(fn) {
+    this.peerHandlers = fn;
+    if (this.peer) fn(this.peer, this);
+  }
+
+  /**
+   * Run a command to completion in this sandbox.
+   * @param {Parameters<typeof execCommand>[1]} opts
+   */
+  exec(opts) {
+    return execCommand(this, opts);
   }
 
   get id() {
@@ -162,6 +194,16 @@ export class Supervisor extends EventEmitter {
 
   get networkMode() {
     return this.profile.network?.mode ?? this.config.network.mode;
+  }
+
+  _buildSeccomp() {
+    if (this.seccompProgram !== undefined) return this.seccompProgram;
+    if (process.arch !== 'x64') return null;
+    try {
+      return buildSeccompProgram();
+    } catch {
+      return null;
+    }
   }
 
   /** Refresh the cached row from the store. */
@@ -223,6 +265,8 @@ export class Supervisor extends EventEmitter {
         uidBase: this.config.uid.base,
         runtimeVersion: runtimeManifest.version,
       });
+      this.hostToken = boot.hostToken ?? null;
+      this.seccompProgram = this._buildSeccomp();
       const { pid } = spawnSandbox({
         sandboxId: this.id,
         hostname,
@@ -232,6 +276,7 @@ export class Supervisor extends EventEmitter {
         cgroupPath: this.cgroupPath,
         uid: this.config.uid,
         env: this.profile.env ?? {},
+        seccompProgram: this.seccompProgram ?? undefined,
       });
       this.store.createBoot({
         bootId: boot.bootId,
@@ -255,7 +300,7 @@ export class Supervisor extends EventEmitter {
       this._attachPeer(socket);
       const hello = await this.peer.request(
         'runner.hello',
-        { protocol: PROTOCOL_VERSION, role: 'host' },
+        { protocol: PROTOCOL_VERSION, role: 'host', hostToken: this.hostToken ?? undefined },
         { timeoutMs: 10_000 },
       );
       this.hello = hello;
@@ -282,7 +327,10 @@ export class Supervisor extends EventEmitter {
         { timeoutMs: 30_000 },
       );
       this.checks = go.checks;
-      const verdict = evaluateChecks(go.checks, { uid: this.config.uid });
+      const verdict = evaluateChecks(go.checks, {
+        uid: this.config.uid,
+        seccomp: Boolean(this.seccompProgram),
+      });
       if (!verdict.ok)
         throw E.quarantined(`sandbox self-checks failed: ${verdict.problems.join('; ')}`, {
           problems: verdict.problems,
@@ -310,6 +358,7 @@ export class Supervisor extends EventEmitter {
    */
   async attach() {
     this.refresh();
+    this.hostToken = this.hostToken ?? readHostToken(this.dirs);
     const procs = this.cgroups.exists(this.cgroupPath) ? this.cgroups.procs(this.cgroupPath) : [];
     if (procs.length === 0) {
       this._observe(Health.ABSENT);
@@ -323,7 +372,7 @@ export class Supervisor extends EventEmitter {
       this._attachPeer(socket);
       const hello = await this.peer.request(
         'runner.hello',
-        { protocol: PROTOCOL_VERSION, role: 'host' },
+        { protocol: PROTOCOL_VERSION, role: 'host', hostToken: this.hostToken ?? undefined },
         { timeoutMs: 10_000 },
       );
       this.hello = hello;
@@ -347,7 +396,10 @@ export class Supervisor extends EventEmitter {
           { timeoutMs: 30_000 },
         );
         this.checks = go.checks;
-        const verdict = evaluateChecks(go.checks, { uid: this.config.uid });
+        const verdict = evaluateChecks(go.checks, {
+          uid: this.config.uid,
+          seccomp: Boolean(this.seccompProgram),
+        });
         if (!verdict.ok)
           throw E.quarantined(`sandbox self-checks failed: ${verdict.problems.join('; ')}`, {
             problems: verdict.problems,
@@ -473,6 +525,7 @@ export class Supervisor extends EventEmitter {
   _attachPeer(socket) {
     this.closePeer();
     this.peer = new Peer(socket, { name: `host->${this.id.slice(-6)}` });
+    if (this.peerHandlers) this.peerHandlers(this.peer, this);
     this.peer.on('event', (method, params) => this.emit('event', method, params));
     this.peer.on('close', () => {
       this.log.warn('control channel closed');

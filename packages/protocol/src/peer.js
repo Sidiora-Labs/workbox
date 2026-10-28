@@ -38,6 +38,8 @@ export class Peer extends EventEmitter {
     this.name = opts.name ?? 'peer';
     this.stream = stream;
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.maxPending = opts.maxPending ?? 1024;
+    this.maxInflight = opts.maxInflight ?? 1024;
     this.decoder = new LineDecoder({ maxLineBytes: opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES });
     /** @type {Map<string, {resolve: Function, reject: Function, timer: NodeJS.Timeout|null, method: string}>} */
     this.pending = new Map();
@@ -82,6 +84,12 @@ export class Peer extends EventEmitter {
   request(method, params, opts = {}) {
     if (this.closed)
       return Promise.reject(new ProtocolError(Codes.CLOSED, `${this.name} is closed`));
+    if (this.pending.size >= (this.maxPending ?? 1024))
+      return Promise.reject(
+        new ProtocolError(Codes.BUSY, `${this.name} has too many pending requests`, {
+          pending: this.pending.size,
+        }),
+      );
     const id = newId();
     const timeoutMs = opts.timeoutMs ?? this.defaultTimeoutMs;
     return new Promise((resolve, reject) => {
@@ -99,6 +107,7 @@ export class Peer extends EventEmitter {
         this._send(mkEvent(CANCEL_METHOD, { id })).catch(() => {});
         entry.reject(new ProtocolError(Codes.CANCELLED, `${method} cancelled`));
       };
+      this.pending.set(id, entry);
       if (opts.signal) {
         if (opts.signal.aborted) {
           onAbort();
@@ -117,7 +126,6 @@ export class Peer extends EventEmitter {
           );
         }, timeoutMs);
       }
-      this.pending.set(id, entry);
       this._send(mkRequest(id, method, params)).catch((e) => entry.reject(ProtocolError.from(e)));
     });
   }
@@ -220,6 +228,11 @@ export class Peer extends EventEmitter {
     this.inflight.set(msg.id, ac);
     try {
       const result = await fn(msg.p, { id: msg.id, method: msg.m, signal: ac.signal, peer: this });
+      try {
+        JSON.stringify(result ?? null);
+      } catch {
+        throw new ProtocolError(Codes.INTERNAL, `handler for ${msg.m} returned a non-JSON result`);
+      }
       if (!ac.signal.aborted) await this._safeSend(mkOk(msg.id, result));
     } catch (e) {
       const pe = ProtocolError.from(e);

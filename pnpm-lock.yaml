@@ -172,19 +172,40 @@ importers:
       eslint:
         specifier: 9.18.0
         version: 9.18.0(supports-color@7.2.0)
+      eslint-formatter-compact:
+        specifier: 9.0.1
+        version: 9.0.1
       prettier:
         specifier: 3.4.2
         version: 3.4.2
 
-  packages/cli: {}
+  packages/cli:
+    dependencies:
+      '@workbox/core':
+        specifier: workspace:*
+        version: link:../core
+      '@workbox/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@workbox/server':
+        specifier: workspace:*
+        version: link:../server
 
   packages/core:
     dependencies:
       '@workbox/protocol':
         specifier: workspace:*
         version: link:../protocol
+    devDependencies:
+      '@workbox/runner':
+        specifier: workspace:*
+        version: link:../runner
 
-  packages/mcp: {}
+  packages/mcp:
+    dependencies:
+      '@workbox/sdk':
+        specifier: workspace:*
+        version: link:../sdk
 
   packages/protocol: {}
 
@@ -194,11 +215,33 @@ importers:
         specifier: workspace:*
         version: link:../protocol
 
-  packages/sdk: {}
+  packages/sdk:
+    devDependencies:
+      '@workbox/server':
+        specifier: workspace:*
+        version: link:../server
 
-  packages/server: {}
+  packages/server:
+    dependencies:
+      '@workbox/core':
+        specifier: workspace:*
+        version: link:../core
+      '@workbox/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
-  packages/wb: {}
+  packages/wb:
+    dependencies:
+      '@workbox/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@workbox/core':
+        specifier: workspace:*
+        version: link:../core
+      '@workbox/runner':
+        specifier: workspace:*
+        version: link:../runner
 
 packages:
 
@@ -329,6 +372,10 @@ packages:
   escape-string-regexp@4.0.0:
     resolution: {integrity: sha512-TtpcNJ3XAzx3Gq8sWRzJaVajRs0uVxA2YAkdb1jm2YkPz4G6egUFAyA3n5vtEIZefPk5Wa4UXbKuS5fKkJWdgA==}
     engines: {node: '>=10'}
+
+  eslint-formatter-compact@9.0.1:
+    resolution: {integrity: sha512-mBAti2tb403dQGMyilQTYHU80stem3N7jdtKW+tmn5gj3JNF7ki0rgCZtJFw4iMayTH862FTUIqCdp70ug0S0Q==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
   eslint-scope@8.4.0:
     resolution: {integrity: sha512-sNXOfKCn74rt8RICKMvJS7XKV/Xk9kA7DyJr8mJik3S7Cwgy3qlkkmyS2uQB3jiJg6VNdZd/pDBJu0nvG2NlTg==}
@@ -669,6 +716,8 @@ snapshots:
   deep-is@0.1.4: {}
 
   escape-string-regexp@4.0.0: {}
+
+  eslint-formatter-compact@9.0.1: {}
 
   eslint-scope@8.4.0:
     dependencies:

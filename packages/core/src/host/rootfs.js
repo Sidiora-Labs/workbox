@@ -10,7 +10,7 @@ import { nullLogger } from '../log.js';
 
 export const ROOTFS_MANIFEST = 'manifest.json';
 export const MANIFEST_SCHEMA = 1;
-const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const NAME_RE = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const S_IFMT = 0o170000;
 const S_SUID_SGID = 0o6000;
 

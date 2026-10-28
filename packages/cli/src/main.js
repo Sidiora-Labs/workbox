@@ -1,0 +1,164 @@
+#!/usr/bin/env node
+import { pathToFileURL } from 'node:url';
+import { WorkboxClient } from '@workbox/sdk';
+import { openLocalEngine } from './local.js';
+import {
+  connectionOpts,
+  doctorCommand,
+  sandboxCommand,
+  shellCommand,
+  rootfsCommand,
+  runtimeCommand,
+  auditCommand,
+} from './commands.js';
+
+/** CLI version. */
+export const CLI_VERSION = '0.1.0-dev';
+
+/** Top-level help text. */
+export const HELP = `workbox — operator CLI
+
+Usage:
+  workbox doctor [--json]
+  workbox rootfs build|list [name]
+  workbox runtime install|list [--node-version v]
+  workbox sandbox create|ls|inspect|rm|exec|drain|events [--server URL --token T]
+  workbox shell <id>
+  workbox serve [--port 8790] [--host 127.0.0.1]
+  workbox audit verify
+  workbox --help | --version
+
+Sandbox commands talk to a local engine by default, or to a remote server with --server/--token.
+Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable, 5 timeout.`;
+
+/** @param {unknown} e */
+export function exitCodeForError(e) {
+  const code = e?.code ?? '';
+  if (code === 'E_INVALID_PARAMS' || code === 'E_PARSE') return 2;
+  if (code === 'E_NOT_FOUND') return 3;
+  if (['E_DENIED', 'E_QUARANTINED', 'E_UNAVAILABLE', 'E_CLOSED'].includes(code)) return 4;
+  if (code === 'E_TIMEOUT') return 5;
+  return 1;
+}
+
+/**
+ * @param {string[]} argv
+ * @param {{out?: NodeJS.WriteStream, err?: NodeJS.WriteStream, engine?: object, client?: object, serve?: Function}} [deps]
+ * @returns {Promise<number>}
+ */
+const COMMANDS = {
+  doctor: doctorCommand,
+  sandbox: sandboxCommand,
+  shell: shellCommand,
+  rootfs: rootfsCommand,
+  runtime: runtimeCommand,
+  audit: auditCommand,
+};
+
+function printResult(out, result, rest) {
+  if (result !== undefined && typeof result?.text !== 'boolean')
+    out.write(`${JSON.stringify(result, null, rest.includes('--json') ? 0 : 2)}\n`);
+}
+
+function resultExit(result) {
+  if (typeof result?.exitCode === 'number' && result.exitCode !== 0) return result.exitCode;
+  if (result?.exited && typeof result.exited.code === 'number') return result.exited.code;
+  return 0;
+}
+
+async function buildContext(deps, cmd, rest, io) {
+  const conn = connectionOpts(rest);
+  let client = deps.client ?? null;
+  if (!client && conn.server)
+    client = new WorkboxClient({
+      baseUrl: conn.server,
+      token: conn.token ?? process.env.WORKBOX_TOKEN ?? '',
+    });
+  let engine = deps.engine ?? null;
+  let ownEngine = false;
+  const needsEngine = !client && (cmd in COMMANDS || cmd === 'serve');
+  if (needsEngine && !engine) {
+    engine = await openLocalEngine({ reconcile: cmd === 'serve' || cmd === 'sandbox' });
+    ownEngine = true;
+  }
+  return { ctx: { engine, client, ...io }, engine, ownEngine };
+}
+
+export async function main(argv, deps = {}) {
+  const out = deps.out ?? process.stdout;
+  const err = deps.err ?? process.stderr;
+  if (argv.includes('--version') || argv[0] === 'version') {
+    out.write(`workbox ${CLI_VERSION}\n`);
+    return 0;
+  }
+  const [cmd, ...rest] = argv;
+  if (!cmd || cmd === '--help' || cmd === 'help') {
+    out.write(`${HELP}\n`);
+    return 0;
+  }
+  let engine = null;
+  let ownEngine = false;
+  try {
+    const built = await buildContext(deps, cmd, rest, { out, err });
+    engine = built.engine;
+    ownEngine = built.ownEngine;
+    if (cmd === 'serve') {
+      await (deps.serve ?? serveDefault)(built.ctx, rest);
+      return 0;
+    }
+    const fn = COMMANDS[cmd];
+    if (!fn) {
+      err.write(`workbox: unknown command ${cmd}\n\n${HELP}\n`);
+      return 2;
+    }
+    const result = await fn(built.ctx, rest);
+    printResult(out, result, rest);
+    return resultExit(result);
+  } catch (e) {
+    err.write(`workbox: ${e.message}${e.code ? ` (${e.code})` : ''}\n`);
+    return exitCodeForError(e);
+  } finally {
+    if (ownEngine && cmd !== 'serve') engine?.close();
+  }
+}
+
+async function serveDefault(ctx, rest) {
+  const { createServer } = await import('@workbox/server');
+  const port = Number(restFlag(rest, '--port') ?? process.env.WORKBOX_PORT ?? 8790);
+  const host = restFlag(rest, '--host') ?? '127.0.0.1';
+  const token = process.env.WORKBOX_TOKEN;
+  const keys = token
+    ? [{ id: 'env', token, scopes: ['admin', 'read', 'exec', 'answer'] }]
+    : readKeysEnv();
+  const app = createServer({ manager: ctx.engine.manager, keys, audit: ctx.engine.audit });
+  const addr = await app.listen(port, host);
+  ctx.out.write(`workbox server listening on http://${addr.address}:${addr.port}\n`);
+  await new Promise((resolve) => {
+    const stop = async () => {
+      await app.close();
+      ctx.engine.close();
+      resolve();
+    };
+    process.once('SIGTERM', stop);
+    process.once('SIGINT', stop);
+  });
+}
+
+function readKeysEnv() {
+  try {
+    return process.env.WORKBOX_API_KEYS ? JSON.parse(process.env.WORKBOX_API_KEYS) : [];
+  } catch {
+    return [];
+  }
+}
+
+function restFlag(rest, flag) {
+  const i = rest.indexOf(flag);
+  return i === -1 ? undefined : rest[i + 1];
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  });
+}

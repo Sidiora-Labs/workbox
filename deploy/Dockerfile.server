@@ -1,0 +1,17 @@
+# Workbox server image.
+# WARNING: the daemon must run privileged (user namespaces, cgroup v2 delegation, bwrap,
+# slirp4netns, nft). Run with: docker run --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup ...
+FROM node:22-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bubblewrap util-linux slirp4netns nftables uidmap ca-certificates git curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/workbox-src
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages ./packages
+COPY rootfs ./rootfs
+COPY scripts ./scripts
+RUN corepack enable && pnpm install --frozen-lockfile --prod=false
+ENV WORKBOX_ROOT=/var/lib/workbox
+VOLUME ["/var/lib/workbox"]
+EXPOSE 8790
+CMD ["node", "packages/cli/src/main.js", "serve", "--host", "0.0.0.0", "--port", "8790"]

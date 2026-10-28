@@ -22,7 +22,13 @@ export const Methods = Object.freeze({
   'runner.hello': {
     doc: 'Open the control channel; the runner answers with its boot identity and, once per boot, the boot nonce.',
     params: v.object(
-      { protocol: v.integer({ min: 1 }), role: v.optional(v.enum(['host', 'local'])) },
+      {
+        protocol: v.integer({ min: 1 }),
+        role: v.optional(v.enum(['host', 'local'])),
+        hostToken: v.optional(v.string({ max: 128 })),
+        minProtocol: v.optional(v.integer({ min: 1 })),
+        maxProtocol: v.optional(v.integer({ min: 1 })),
+      },
       { required: ['protocol'] },
     ),
   },
@@ -299,6 +305,16 @@ export const Events = Object.freeze({
       data: base64,
     },
     { required: ['sessionId', 'stream', 'seq', 'data'] },
+  ),
+  'session.started': v.object(
+    {
+      sessionId,
+      name: v.nullable(v.string()),
+      pid: v.integer({ min: 1 }),
+      argv: v.array(v.string()),
+      startedAt: v.integer({ min: 0 }),
+    },
+    { required: ['sessionId', 'pid', 'argv', 'startedAt'] },
   ),
   'session.exit': v.object(
     {

@@ -4,8 +4,19 @@
   "description": "JavaScript client for the Workbox API.",
   "type": "module",
   "license": "UNLICENSED",
-  "engines": { "node": ">=22.13.0" },
-  "exports": { ".": "./src/index.js" },
-  "files": ["src"],
-  "scripts": { "test": "node --test 'test/**/*.test.js'" }
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "devDependencies": {
+    "@workbox/server": "workspace:*"
+  }
 }

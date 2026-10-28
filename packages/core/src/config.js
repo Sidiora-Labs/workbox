@@ -138,7 +138,10 @@ function validate(cfg) {
   pos(cfg.uid.count, 'uid.count', 65536);
   if (typeof cfg.cgroup.root !== 'string' || !path.isAbsolute(cfg.cgroup.root))
     problems.push('cgroup.root must be an absolute path');
-  if (typeof cfg.cgroup.parent !== 'string' || !/^[A-Za-z0-9._-]+$/.test(cfg.cgroup.parent))
+  if (
+    typeof cfg.cgroup.parent !== 'string' ||
+    !/^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/.test(cfg.cgroup.parent)
+  )
     problems.push('cgroup.parent must be a single path component');
   pos(cfg.limits.memoryBytes, 'limits.memoryBytes', 16 * 1024 * 1024);
   pos(cfg.limits.swapBytes, 'limits.swapBytes', 0);
@@ -148,9 +151,15 @@ function validate(cfg) {
     problems.push(`network.mode must be one of ${NETWORK_MODES.join(', ')}`);
   if (!Array.isArray(cfg.network.allow) || cfg.network.allow.some((h) => typeof h !== 'string'))
     problems.push('network.allow must be an array of hostnames');
-  if (typeof cfg.rootfs !== 'string' || !/^[A-Za-z0-9._-]+$/.test(cfg.rootfs))
+  if (
+    typeof cfg.rootfs !== 'string' ||
+    !/^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/.test(cfg.rootfs)
+  )
     problems.push('rootfs must be a name');
-  if (typeof cfg.runtime !== 'string' || !/^[A-Za-z0-9._-]+$/.test(cfg.runtime))
+  if (
+    typeof cfg.runtime !== 'string' ||
+    !/^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/.test(cfg.runtime)
+  )
     problems.push('runtime must be a name');
   pos(cfg.session.spoolBytes, 'session.spoolBytes', 4096);
   pos(cfg.session.stopGraceMs, 'session.stopGraceMs', 0);
@@ -184,6 +193,7 @@ function clone(x) {
 export function merge(base, patch) {
   const out = clone(base);
   for (const [k, val] of Object.entries(patch)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
     out[k] = isPlainObject(val) && isPlainObject(out[k]) ? merge(out[k], val) : clone(val);
   }
   return out;

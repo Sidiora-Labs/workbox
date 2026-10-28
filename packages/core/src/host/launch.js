@@ -57,7 +57,11 @@ export const SANDBOX_PATH =
  * @returns {SandboxDirs}
  */
 export function sandboxDirs(sandboxesDir, id) {
-  const root = path.join(sandboxesDir, id);
+  if (typeof id !== 'string' || !/^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id))
+    throw E.invalid(`invalid sandbox id ${id}`, { id });
+  const root = path.resolve(sandboxesDir, id);
+  if (!root.startsWith(`${path.resolve(sandboxesDir)}${path.sep}`))
+    throw E.invalid(`sandbox id ${id} escapes its directory`, { id });
   return {
     root,
     upper: path.join(root, 'upper'),
@@ -114,10 +118,12 @@ export function prepareDirs(dirs, opts) {
 export function writeBootFile(dirs, opts) {
   const bootId = newId();
   const nonce = randomBytes(32).toString('hex');
+  const hostToken = randomBytes(32).toString('hex');
   const file = path.join(dirs.run, BOOT_FILE);
   const body = {
     bootId,
     nonce,
+    hostTokenHash: hashNonce(hostToken),
     sandboxId: opts.sandboxId,
     protocol: PROTOCOL_VERSION,
     runtime: opts.runtimeVersion,
@@ -126,7 +132,18 @@ export function writeBootFile(dirs, opts) {
   };
   fs.writeFileSync(file, `${JSON.stringify(body)}\n`, { mode: 0o600 });
   fs.chownSync(file, opts.uidBase, opts.uidBase);
-  return { bootId, nonce, nonceHash: hashNonce(nonce) };
+  // Host-only token file: dirs.root is not bind-mounted into the box (only dirs.run is).
+  fs.writeFileSync(path.join(dirs.root, 'host-token'), `${hostToken}\n`, { mode: 0o600 });
+  return { bootId, nonce, nonceHash: hashNonce(nonce), hostToken };
+}
+
+/** Read the host-only control token written by writeBootFile, if present. @param {SandboxDirs} dirs */
+export function readHostToken(dirs) {
+  try {
+    return fs.readFileSync(path.join(dirs.root, 'host-token'), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /** @param {string} nonce */
@@ -145,6 +162,7 @@ export function hashNonce(nonce) {
  * @property {{base: number, count: number}} uid
  * @property {Record<string, string>} [env] extra environment for the runner
  * @property {number} [seccompFd] file descriptor carrying a compiled seccomp program
+ * @property {Buffer} [seccompProgram] compiled program; spawnSandbox passes it on fd 3
  */
 
 /**
@@ -241,17 +259,28 @@ export function spawnSandbox(spec) {
   if (!fs.existsSync(LAUNCH_SCRIPT))
     throw E.unavailable(`launch script missing at ${LAUNCH_SCRIPT}`, { path: LAUNCH_SCRIPT });
   const logFd = fs.openSync(spec.dirs.log, 'a', 0o600);
+  let seccompFd = spec.seccompFd;
+  let seccompFileFd = null;
+  if (seccompFd === undefined && Buffer.isBuffer(spec.seccompProgram)) {
+    const file = path.join(spec.dirs.run, 'seccomp.bpf');
+    fs.writeFileSync(file, spec.seccompProgram, { mode: 0o600 });
+    seccompFileFd = fs.openSync(file, 'r');
+    seccompFd = 3;
+  }
   try {
-    const child = spawn('/bin/sh', [LAUNCH_SCRIPT, ...bwrapArgs(spec)], {
+    const stdio = ['ignore', 'ignore', logFd];
+    if (seccompFileFd !== null) stdio.push(seccompFileFd);
+    const child = spawn('/bin/sh', [LAUNCH_SCRIPT, ...bwrapArgs({ ...spec, seccompFd })], {
       env: launchEnv(spec),
       detached: true,
-      stdio: ['ignore', 'ignore', logFd],
+      stdio,
     });
-    if (spec.seccompFd === undefined) child.unref();
+    if (seccompFd === undefined) child.unref();
     if (!child.pid) throw E.unavailable('launch chain did not start', { log: spec.dirs.log });
     return { pid: child.pid, child };
   } finally {
     fs.closeSync(logFd);
+    if (seccompFileFd !== null) fs.closeSync(seccompFileFd);
   }
 }
 

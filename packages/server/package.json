@@ -4,8 +4,20 @@
   "description": "REST and WebSocket API with auth, audit and metrics; the provider-adapter surface.",
   "type": "module",
   "license": "UNLICENSED",
-  "engines": { "node": ">=22.13.0" },
-  "exports": { ".": "./src/index.js" },
-  "files": ["src"],
-  "scripts": { "test": "node --test 'test/**/*.test.js'" }
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "dependencies": {
+    "@workbox/core": "workspace:*",
+    "@workbox/protocol": "workspace:*"
+  }
 }

@@ -42,7 +42,7 @@
     - supervisor.js connects, consumes the nonce, refuses a second presentation, drives transitions PROVISIONING -> BOOTSTRAPPING -> READY, polls cgroup health, and destroys via cgroup.kill with directory cleanup.
     - Tests: a sandbox boots and reports ready with the expected uid map, caps, NoNewPrivs and mount(2) EPERM; cgroup limits are applied before the chain starts; no sandbox mounts remain on the host after destroy; the rootfs digest is unchanged; a launch failure quarantines with its log. The in-sandbox OOM-kill proof runs as a session in task 1.4.
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.2, 2.4_
-  - [ ] 1.4 Durable sessions and exec
+  - [-] 1.4 Durable sessions and exec
     - Sessions: start with argv, cwd, env, uid, name; per-session 8 MiB ring spool with sequence numbers; attach from seq with explicit gap; input, signal, detach, stop with TERM then KILL after grace; list.
     - exec.js runs to completion with timeout and bounded capture and a truncated flag.
     - Tests: output ordering, attach replay, gap reporting after overflow, survival across host disconnect and reconnect, stop escalation, exec timeout.

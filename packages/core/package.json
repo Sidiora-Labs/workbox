@@ -18,5 +18,8 @@
   },
   "dependencies": {
     "@workbox/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@workbox/runner": "workspace:*"
   }
 }

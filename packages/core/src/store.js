@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { newId } from '@workbox/protocol';
 import { E } from './errors.js';
@@ -478,7 +479,7 @@ export class Store {
     return this.tx(() => {
       const boot = this.getBoot(bootId);
       if (!boot) return 'missing';
-      if (boot.nonceHash !== nonceHash) return 'mismatch';
+      if (!safeEqual(boot.nonceHash, nonceHash)) return 'mismatch';
       if (boot.nonceConsumedAt !== null) return 'already';
       this.db
         .prepare(`UPDATE boots SET nonce_consumed_at = ?, runner_version = ? WHERE boot_id = ?`)
@@ -745,7 +746,7 @@ export class Store {
     return this.tx(() => {
       const lease = this.getLease(sandboxId);
       if (!lease) throw E.notFound(`sandbox ${sandboxId} has no lease`, { sandboxId });
-      if (lease.token !== token)
+      if (!safeEqual(lease.token, token))
         throw E.denied('lease token mismatch', { sandboxId, generation: lease.generation });
       const now = this.clock();
       if (lease.expiresAt <= now)
@@ -900,6 +901,12 @@ export class Store {
       .all(sandboxId)
       .map((r) => r.ref);
   }
+}
+
+function safeEqual(a, b) {
+  const ba = Buffer.from(String(a ?? ''));
+  const bb = Buffer.from(String(b ?? ''));
+  return ba.length === bb.length && ba.length > 0 && timingSafeEqual(ba, bb);
 }
 
 function sandboxRow(r) {

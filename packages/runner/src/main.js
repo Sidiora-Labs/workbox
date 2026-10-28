@@ -17,7 +17,9 @@ export function parseArgs(argv) {
       if (i + 1 >= argv.length) throw new Error(`${a} needs a value`);
       return argv[++i];
     };
-    if (a === '--boot') out.boot = next();
+    if (a === '--help') out.help = true;
+    else if (a === '--version') out.version = true;
+    else if (a === '--boot') out.boot = next();
     else if (a === '--socket') out.socket = next();
     else if (a === '--keep-boot-file') out.keepBootFile = true;
     else if (a === '--log-level') out.logLevel = next();
@@ -48,6 +50,16 @@ export function readBootFile(file) {
  */
 export async function main(argv, deps = {}) {
   const args = parseArgs(argv);
+  if (args.version) {
+    process.stdout.write('workbox-runner 0.1.0-dev\n');
+    return null;
+  }
+  if (args.help) {
+    process.stdout.write(
+      'workbox-runner --boot <file> --socket <path> [--keep-boot-file] [--log-level <level>]\n',
+    );
+    return null;
+  }
   const log = deps.log ?? createLog({ level: args.logLevel });
   const boot = readBootFile(args.boot);
   if (!args.keepBootFile) fs.unlinkSync(args.boot);

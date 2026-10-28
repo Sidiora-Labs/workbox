@@ -4,8 +4,24 @@
   "description": "Operator command line: doctor, rootfs, runtime, sandboxes, serve.",
   "type": "module",
   "license": "UNLICENSED",
-  "engines": { "node": ">=22.13.0" },
-  "exports": { ".": "./src/index.js" },
-  "files": ["src"],
-  "scripts": { "test": "node --test 'test/**/*.test.js'" }
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "dependencies": {
+    "@workbox/core": "workspace:*",
+    "@workbox/sdk": "workspace:*",
+    "@workbox/server": "workspace:*"
+  },
+  "bin": {
+    "workbox": "./src/main.js"
+  }
 }

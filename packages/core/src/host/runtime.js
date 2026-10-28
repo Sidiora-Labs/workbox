@@ -17,7 +17,7 @@ export const DEFAULT_CACHE_DIR = '/var/cache/workbox';
 export const NODE_DIST = 'https://nodejs.org/dist';
 /** Packages copied into the runtime; they must stay dependency-free. */
 export const RUNTIME_PACKAGES = Object.freeze(['protocol', 'runner', 'wb']);
-const VERSION_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const VERSION_RE = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** The monorepo root, resolved from this file: packages/core/src/host -> repo */
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');

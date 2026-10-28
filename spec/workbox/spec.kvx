@@ -212,7 +212,7 @@ reqs       = ["1.1", "1.2", "1.3", "1.4", "1.5", "2.2", "2.4"]
 
 [task.1.4]
 title      = "Durable sessions and exec"
-status     = "pending"
+status     = "in_progress"
 wave       = 1
 requires   = ["1.3"]
 touches    = ["packages/runner/src/sessions.js", "packages/runner/src/spool.js", "packages/core/src/sandbox/exec.js", "packages/core/test/integration/sessions.test.js"]
@@ -385,3 +385,18 @@ touches    = ["test/e2e/**", "docs/measurements.md"]
 verify_cmd = "node scripts/check-tests.mjs && node --test 'test/e2e/*.test.js'"
 do_1       = "e2e: through the SDK create a sandbox, run wb run, raise and answer an ask, create and restore a checkpoint, destroy; then create 20 sandboxes concurrently and record create-to-ready p50 and p95 and runner RSS per sandbox into docs/measurements.md."
 reqs       = ["7.5"]
+
+# Implementation notes (recorded 2026-10-27; statuses above remain the task driver):
+# - Control channel: runner.hello role=host must present the per-boot host token; only its
+#   SHA-256 travels in boot.json, the token lives in a host-only file outside the run mount.
+# - Exit codes (wb and workbox): 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable,
+#   5 timeout; wb run propagates the wrapped command's exit code.
+# - Deviation, task 2.5: PTY uses util-linux script(1) instead of node-pty to keep the runner
+#   dependency-free; resize records the size and delivers SIGWINCH (no winsize ioctl).
+# - Deviation, task 3.1: the server is built on node:http, not Fastify, keeping the same route,
+#   auth, schema-400 and audit contract without a framework dependency.
+# - Seccomp (task 2.2): ptrace is denied outright (non-descendant scoping is not expressible in
+#   plain seccomp); the program is x86_64 only in v1.
+# - Spec-gap defaults adopted: create rejects unknown fields; idempotency key + different
+#   profile is a conflict; lease expiry never auto-kills; ask answers are validated per kind;
+#   REST error envelope is {error:{code,message,details?,requestId}}.

@@ -4,8 +4,26 @@
   "description": "The agent-native CLI inside the sandbox.",
   "type": "module",
   "license": "UNLICENSED",
-  "engines": { "node": ">=22.13.0" },
-  "exports": { ".": "./src/index.js" },
-  "files": ["src"],
-  "scripts": { "test": "node --test 'test/**/*.test.js'" }
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "dependencies": {
+    "@workbox/protocol": "workspace:*"
+  },
+  "bin": {
+    "wb": "./bin/wb"
+  },
+  "devDependencies": {
+    "@workbox/runner": "workspace:*",
+    "@workbox/core": "workspace:*"
+  }
 }

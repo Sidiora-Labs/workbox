@@ -1,0 +1,22 @@
+[Unit]
+Description=Workbox sandbox daemon
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=WORKBOX_ROOT=/var/lib/workbox
+EnvironmentFile=-/etc/workbox/workbox.env
+ExecStart=/usr/bin/node /opt/workbox-src/packages/cli/src/main.js serve --host 127.0.0.1 --port 8790
+Restart=on-failure
+RestartSec=2s
+# The launch chain needs user namespaces, cgroup delegation and bwrap; do not add
+# NoNewPrivileges/PrivateUsers here — they break unshare --map-users. Containment comes
+# from the per-sandbox namespaces plus the seccomp filter, not from unit sandboxing.
+ProtectSystem=full
+ReadWritePaths=/var/lib/workbox /sys/fs/cgroup/workbox
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

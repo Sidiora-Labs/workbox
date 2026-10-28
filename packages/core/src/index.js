@@ -63,10 +63,60 @@ export {
   DEFAULT_NODE_VERSION,
   REPO_ROOT,
 } from './host/runtime.js';
+export { exec, DEFAULT_EXEC_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from './sandbox/exec.js';
+export { Manager, sandboxInput, validateCreate } from './sandbox/manager.js';
+export { SecretProvider, parseRef, assertRef } from './secrets.js';
+export {
+  registerBrokerHandlers,
+  BROKER_HANDLERS,
+  brokerStatus,
+  recordEvidence,
+  validateEnvelope,
+  artifactPut,
+  artifactGet,
+  artifactList,
+  askRaise,
+  askStatus,
+  askList,
+  askWait,
+  answerAskHost,
+  secretList,
+  secretResolve,
+  eventEmit,
+  leaseStatus,
+  leaseRenew,
+  issueLease,
+  checkpointCreate,
+  checkpointList,
+  checkpointRestore,
+  presetManifest,
+  PRESET_NAMES,
+  netPolicy,
+  netTest,
+  acceptOutboxFile,
+  deliverToInbox,
+  artifactPath,
+} from './broker/index.js';
+export {
+  buildSeccompProgram,
+  openSeccompFd,
+  decodeProgram,
+  DENIED_SYSCALLS,
+} from './host/seccomp.js';
+export {
+  renderRuleset,
+  installArgv as nftInstallArgv,
+  assertIpv4,
+  isPrivateIpv4,
+  DENIED_CIDRS,
+} from './host/nft.js';
+export { SandboxNet, slirpArgv, proxyEnv, NET_DEFAULTS } from './host/netns.js';
+export { createProxy, hostAllowed, normalizeAllowEntry, parseTarget } from './host/proxy.js';
 export {
   sandboxDirs,
   prepareDirs,
   writeBootFile,
+  readHostToken,
   hashNonce,
   bwrapArgs,
   launchEnv,

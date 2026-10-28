@@ -92,6 +92,15 @@ test('event schemas accept the runner event shapes', () => {
       at: 1,
     }).ok,
   );
+  assert.ok(
+    validate(Events['session.started'], {
+      sessionId: 's',
+      name: null,
+      pid: 4,
+      argv: ['sh'],
+      startedAt: 1,
+    }).ok,
+  );
   assert.ok(validate(Events['runner.log'], { level: 'info', msg: 'hi' }).ok);
   assert.ok(validate(Events['ask.answered'], { askId: 'a', answer: 'yes' }).ok);
 });
