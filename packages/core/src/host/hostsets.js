@@ -5,6 +5,14 @@ import { E } from '../errors.js';
  * the set. The lists include the CDNs real installs hit; `@ubuntu` also carries the Debian
  * mirrors the rootfs apt uses, and `@browsers` the Microsoft mirror `playwright install` also
  * fetches from.
+ *
+ * `@anthropic` and `@openai` are the hosts the coding agents in the `agents` rootfs need for API
+ * use and sign-in, without telemetry. `@anthropic` covers the API and the claude.ai and Console
+ * sign-in hosts from Claude Code's network requirements (code.claude.com/docs/en/network-config);
+ * Claude Code sends its OAuth token exchange to platform.claude.com and everything else to
+ * api.anthropic.com. `@openai` covers what Codex reaches: the API (api.openai.com), the ChatGPT
+ * sign-in issuer with its device-code and token endpoints (auth.openai.com) and the ChatGPT
+ * backend a signed-in Codex talks to (chatgpt.com).
  */
 export const HOST_SETS = Object.freeze({
   node: Object.freeze([
@@ -81,6 +89,8 @@ export const HOST_SETS = Object.freeze({
     'dl.google.com',
   ]),
   huggingface: Object.freeze(['huggingface.co', '*.huggingface.co', '*.hf.co']),
+  anthropic: Object.freeze(['api.anthropic.com', 'claude.ai', 'platform.claude.com']),
+  openai: Object.freeze(['api.openai.com', 'auth.openai.com', 'chatgpt.com']),
 });
 
 /** @param {unknown} entry @returns {boolean} true for an `@name` allowlist entry */

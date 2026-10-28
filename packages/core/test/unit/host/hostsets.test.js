@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import { HOST_SETS, expandHostSets, hostSet, isHostSetEntry } from '../../../src/host/hostsets.js';
 import { compilePolicy, hostAllowed, normalizeAllowEntry } from '../../../src/host/proxy.js';
 
-test('the nine host sets exist and every host is a valid allowlist entry', () => {
+test('the eleven host sets exist and every host is a valid allowlist entry', () => {
   assert.deepEqual(Object.keys(HOST_SETS).sort(), [
+    'anthropic',
     'browsers',
     'docker',
     'github',
     'go',
     'huggingface',
     'node',
+    'openai',
     'python',
     'rust',
     'ubuntu',
@@ -21,6 +23,26 @@ test('the nine host sets exist and every host is a valid allowlist entry', () =>
   }
   assert.ok(HOST_SETS.ubuntu.includes('deb.debian.org'), 'the rootfs apt mirror is in @ubuntu');
   assert.ok(HOST_SETS.browsers.includes('cdn.playwright.dev'));
+});
+
+test('@anthropic and @openai: exactly the API and sign-in hosts of the bundled agents', () => {
+  assert.deepEqual(HOST_SETS.anthropic, ['api.anthropic.com', 'claude.ai', 'platform.claude.com']);
+  assert.deepEqual(HOST_SETS.openai, ['api.openai.com', 'auth.openai.com', 'chatgpt.com']);
+  assert.ok(Object.isFrozen(HOST_SETS.anthropic) && Object.isFrozen(HOST_SETS.openai));
+  const compiled = compilePolicy(
+    { mode: 'allowlist', allow: ['@Anthropic', '@openai'] },
+    new Set(),
+  );
+  assert.deepEqual(compiled.hosts, [...HOST_SETS.anthropic, ...HOST_SETS.openai]);
+  for (const host of ['api.anthropic.com', 'platform.claude.com', 'auth.openai.com', 'chatgpt.com'])
+    assert.ok(hostAllowed(host, compiled.hosts), host);
+  for (const host of [
+    'statsig.anthropic.com',
+    'http-intake.logs.us5.datadoghq.com',
+    'ab.chatgpt.com',
+    'example.com',
+  ])
+    assert.ok(!hostAllowed(host, compiled.hosts), `${host} is not in the agent sets`);
 });
 
 test('@name entries: recognised, case-insensitive, unknown sets are coded errors', () => {
