@@ -250,7 +250,7 @@ reqs       = ["2.1", "2.3", "2.4", "6.4"]
 
 [task.2.1]
 title      = "Network namespaces, egress policy and proxy"
-status     = "pending"
+status     = "in_progress"
 wave       = 2
 requires   = ["1.6"]
 touches    = ["packages/core/src/host/netns.js", "packages/core/src/host/proxy.js", "packages/core/src/host/nft.js", "packages/core/src/broker/net.js", "packages/wb/src/commands/net.js", "packages/core/test/integration/network.test.js"]

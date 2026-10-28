@@ -1,27 +1,54 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
-import { once } from 'node:events';
 import { Store } from '../../../src/store.js';
+import { Audit } from '../../../src/audit.js';
+import { createProxy } from '../../../src/host/proxy.js';
 import { netPolicy, netTest } from '../../../src/broker/net.js';
+import { tmpDir } from '../../helpers/tmp.js';
 
-test('policy reflects profile; test probes a real listener and a closed port', async () => {
+test('policy reflects profile; test decides like the proxy and audits every call', async () => {
   const store = Store.open(':memory:');
+  const t = tmpDir('workbox-net-');
+  const audit = new Audit({ dir: t.dir }).open();
   const sb = store.createSandbox({
     rootfs: 'minimal',
     runtime: 'current',
-    profile: { network: { mode: 'allowlist', allow: ['example.com'] } },
+    profile: { network: { mode: 'egress', allow: [], ports: [8443] } },
   });
-  const c = { store, sandboxId: sb.id };
-  assert.equal(netPolicy(c).mode, 'allowlist');
-  assert.deepEqual(netPolicy(c).allow, ['example.com']);
-  const srv = net.createServer((s) => s.end());
-  srv.listen(0, '127.0.0.1');
-  await once(srv, 'listening');
-  const up = await netTest(c, { host: '127.0.0.1', port: srv.address().port });
-  assert.equal(up.reachable, true);
-  const down = await netTest(c, { host: '127.0.0.1', port: 1, timeoutMs: 500 });
-  assert.equal(down.reachable, false);
-  srv.close();
+  const proxy = createProxy({ policy: { mode: 'egress' } });
+  const state = { proxyUrl: 'http://192.0.2.10:41000', check: (target) => proxy.check(target) };
+  const c = { store, audit, sandboxId: sb.id, netState: () => state };
+  assert.deepEqual(netPolicy(c), {
+    mode: 'egress',
+    allow: [],
+    ports: [8443],
+    proxy: 'http://192.0.2.10:41000',
+  });
+  const meta = await netTest(c, { host: '169.254.169.254', port: 80 });
+  assert.equal(meta.allowed, false);
+  assert.equal(meta.reason, 'blocked-address');
+  assert.equal(meta.reachable, false);
+  const loop = await netTest(c, { host: 'localhost', port: 80 });
+  assert.equal(loop.reason, 'denied-name');
+  const detached = await netTest({ ...c, netState: () => null }, { host: '8.8.8.8', port: 53 });
+  assert.equal(detached.reason, 'network-detached');
+  const none = await netTest(
+    { store, audit, sandboxId: sb.id, network: { mode: 'none' } },
+    { host: '8.8.8.8', port: 53 },
+  );
+  assert.equal(none.reason, 'network-none');
+  await assert.rejects(netTest(c, { host: '', port: 80 }));
+  const entries = Audit.verify(t.dir).entries.filter((e) => e.sandboxId === sb.id);
+  assert.deepEqual(
+    entries.map((e) => [e.action, e.data.reason ?? null]),
+    [
+      ['net.policy', null],
+      ['net.test', 'blocked-address'],
+      ['net.test', 'denied-name'],
+      ['net.test', 'network-detached'],
+      ['net.test', 'network-none'],
+    ],
+  );
   store.close();
+  t.cleanup();
 });

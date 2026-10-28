@@ -363,10 +363,11 @@ export async function netCommand(ctx, argv) {
   if (sub === 'policy') return ctx.client.request('broker.net.policy');
   if (sub === 'test') {
     const [host, port] = rest;
-    return ctx.client.request('broker.net.test', {
-      host: need(host, 'wb net test <host> <port>'),
-      port: Number(port),
-    });
+    const usage = 'wb net test <host> <port>';
+    const n = Number(need(port, usage));
+    if (!Number.isInteger(n) || n < 1 || n > 65535)
+      throw new ProtocolError(Codes.INVALID_PARAMS, `port must be in 1..65535: ${usage}`);
+    return ctx.client.request('broker.net.test', { host: need(host, usage), port: n });
   }
   throw new ProtocolError(Codes.INVALID_PARAMS, `unknown net subcommand ${sub ?? ''}`);
 }

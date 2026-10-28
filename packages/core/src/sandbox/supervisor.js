@@ -9,6 +9,7 @@ import { nullLogger } from '../log.js';
 import { States, Health } from './state.js';
 import { exec as execCommand } from './exec.js';
 import { buildSeccompProgram } from '../host/seccomp.js';
+import { NET_DEFAULTS } from '../host/netns.js';
 import {
   sandboxDirs,
   prepareDirs,
@@ -257,8 +258,8 @@ export class Supervisor extends EventEmitter {
       prepareDirs(this.dirs, {
         uidBase: this.config.uid.base,
         hostname,
-        nameservers: this.networkMode === 'none' ? [] : ['10.0.2.3'],
-        address: this.networkMode === 'none' ? undefined : '10.0.2.100',
+        nameservers: this.networkMode === 'none' ? [] : [NET_DEFAULTS.dns],
+        address: this.networkMode === 'none' ? undefined : NET_DEFAULTS.address,
       });
       const boot = writeBootFile(this.dirs, {
         sandboxId: this.id,

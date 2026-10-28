@@ -11,7 +11,8 @@ import {
   checkpointRestore,
 } from '../broker/index.js';
 import { sandboxDirs } from '../host/launch.js';
-import { SandboxNet, proxyEnv } from '../host/netns.js';
+import { SandboxNet } from '../host/netns.js';
+import { normalizeAllowEntry } from '../host/proxy.js';
 import { buildSeccompProgram } from '../host/seccomp.js';
 
 /**
@@ -33,7 +34,9 @@ export class Manager extends EventEmitter {
    * @param {import('../audit.js').Audit} [deps.audit]
    * @param {import('../log.js').Logger} [deps.logger]
    * @param {import('../secrets.js').SecretProvider} [deps.secrets]
-   * @param {boolean} [deps.enableNetwork] attach slirp+nft for egress/allowlist sandboxes
+   * @param {boolean} [deps.enableNetwork] install nft (every mode) and attach slirp + proxy (egress/allowlist)
+   * @param {string[]} [deps.netResolver] DNS servers the sandbox proxies resolve with (default: system)
+   * @param {string} [deps.proxyHost] host IPv4 the sandbox proxies bind to (default: first non-loopback)
    * @param {boolean} [deps.enableSeccomp] supply the seccomp program at launch (default true on x64)
    * @param {number} [deps.maxSandboxes] admission cap (0/absent = unlimited)
    * @param {(deps: object) => Supervisor} [deps.supervisorFactory] test seam
@@ -49,6 +52,8 @@ export class Manager extends EventEmitter {
     this.logger = deps.logger;
     this.secrets = deps.secrets ?? null;
     this.enableNetwork = deps.enableNetwork ?? true;
+    this.netResolver = deps.netResolver;
+    this.proxyHost = deps.proxyHost;
     this.enableSeccomp = deps.enableSeccomp ?? process.arch === 'x64';
     this.maxSandboxes = deps.maxSandboxes ?? 0;
     this.supervisorFactory = deps.supervisorFactory ?? ((d) => new Supervisor(d));
@@ -107,13 +112,37 @@ export class Manager extends EventEmitter {
         sup.seccompProgram = null;
       }
     }
-    if (!this.enableNetwork || mode === 'none') return { network: { mode } };
+    if (!this.enableNetwork) return { network: { mode } };
     const pid = sup.sandbox.pid;
-    if (!pid) return { network: { mode } };
-    const sbNet = new SandboxNet({ pid, mode });
-    const { env } = await sbNet.start();
+    if (!pid) throw E.state(`sandbox ${sup.id} has no pid before go`, { sandboxId: sup.id });
+    const sbNet = new SandboxNet({
+      pid,
+      sandboxId: sup.id,
+      policy: this.networkPolicy(sup),
+      audit: this.audit ?? undefined,
+      resolver: this.netResolver,
+      proxyHost: this.proxyHost,
+    });
+    this.nets.get(sup.id)?.stop();
     this.nets.set(sup.id, sbNet);
-    return { env, network: { mode, proxy: env.HTTP_PROXY } };
+    try {
+      const { env, proxy } = await sbNet.start();
+      return { env, network: proxy ? { mode, proxy } : { mode } };
+    } catch (e) {
+      sbNet.stop();
+      this.nets.delete(sup.id);
+      throw e;
+    }
+  }
+
+  /** Effective network policy of a supervised sandbox. @param {Supervisor} sup */
+  networkPolicy(sup) {
+    const net = sup.profile.network ?? {};
+    return {
+      mode: sup.networkMode,
+      allow: net.allow ?? this.config.network.allow ?? [],
+      ports: net.ports ?? [],
+    };
   }
 
   async _afterStop(sup) {
@@ -138,6 +167,7 @@ export class Manager extends EventEmitter {
       secrets: this.secrets ?? undefined,
       limits: sup.limits,
       network: sandbox.profile?.network ?? this.config.network,
+      netState: () => this.nets.get(sup.id) ?? null,
       leaseTtlMs: this.config.lease.ttlMs,
       usage: () => {
         try {
@@ -332,9 +362,10 @@ export class Manager extends EventEmitter {
     return checkpointRestore(ctx, checkpointId, dirs.upper);
   }
 
-  /** Proxy env for a sandbox profile (exposed for CLI/server reporting). @param {string} id */
+  /** Proxy env of a running sandbox (exposed for CLI/server reporting). @param {string} id */
   networkEnv(id) {
-    return proxyEnv({ mode: this.supervisor(id).networkMode });
+    this.get(id);
+    return { ...(this.nets.get(id)?.env ?? {}) };
   }
 
   /** Detach from every sandbox without touching them (daemon shutdown). */
@@ -382,13 +413,28 @@ export function validateCreate(input) {
   if (net !== undefined) {
     if (!['none', 'egress', 'allowlist'].includes(net.mode))
       throw E.invalid('profile.network.mode is invalid', { field: 'profile.network.mode' });
-    if (
-      net.allow !== undefined &&
-      (!Array.isArray(net.allow) || net.allow.some((h) => typeof h !== 'string'))
-    )
-      throw E.invalid('profile.network.allow must be hostnames', {
+    if (net.allow !== undefined && !validAllow(net.allow))
+      throw E.invalid('profile.network.allow must be hostnames, *.domains or CIDRs', {
         field: 'profile.network.allow',
+      });
+    if (
+      net.ports !== undefined &&
+      (!Array.isArray(net.ports) ||
+        net.ports.some((p) => !Number.isInteger(p) || p < 1 || p > 65535))
+    )
+      throw E.invalid('profile.network.ports must be ports in 1..65535', {
+        field: 'profile.network.ports',
       });
   }
   return input;
+}
+
+function validAllow(allow) {
+  if (!Array.isArray(allow)) return false;
+  try {
+    allow.forEach((h) => normalizeAllowEntry(h));
+    return true;
+  } catch {
+    return false;
+  }
 }
