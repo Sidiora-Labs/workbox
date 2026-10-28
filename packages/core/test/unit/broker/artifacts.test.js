@@ -28,6 +28,16 @@ test('put/get/list round-trip through the CAS', () => {
   assert.equal(artifactList(ctx, {}).items.length, 1);
   const got = artifactGet(ctx, { sha256 });
   assert.equal(fs.readFileSync(path.join(ctx.inboxDir, got.inboxName), 'utf8'), 'artifact bytes');
+
+  const other = store.createSandbox({ rootfs: 'minimal', runtime: 'current', profile: {} });
+  const otherInbox = path.join(t.dir, 'inbox-other');
+  assert.throws(
+    () => artifactGet({ ...ctx, sandboxId: other.id, inboxDir: otherInbox }, { sha256 }),
+    {
+      code: 'E_NOT_FOUND',
+    },
+  );
+  assert.equal(fs.existsSync(path.join(otherInbox, sha256)), false);
   store.close();
   t.cleanup();
 });

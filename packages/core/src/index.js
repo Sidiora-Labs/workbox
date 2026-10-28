@@ -65,7 +65,7 @@ export {
 } from './host/runtime.js';
 export { exec, DEFAULT_EXEC_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from './sandbox/exec.js';
 export { Manager, sandboxInput, validateCreate } from './sandbox/manager.js';
-export { SecretProvider, parseRef, assertRef } from './secrets.js';
+export { SecretProvider, parseRef, assertRef, secretRedactor } from './secrets.js';
 export {
   registerBrokerHandlers,
   BROKER_HANDLERS,
@@ -96,6 +96,9 @@ export {
   acceptOutboxFile,
   deliverToInbox,
   artifactPath,
+  stdoutChannel,
+  webhookChannel,
+  notifyAsk,
 } from './broker/index.js';
 export {
   buildSeccompProgram,

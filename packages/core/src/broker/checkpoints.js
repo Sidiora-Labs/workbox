@@ -52,6 +52,39 @@ export function assertSafeTarNames(names) {
   return names;
 }
 
+async function waitFrozen(cgroupPath, want, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const events = fs.readFileSync(path.join(cgroupPath, 'cgroup.events'), 'utf8');
+    if (new RegExp(`(^|\\n)frozen ${want}(\\n|$)`).test(events)) return;
+    if (Date.now() >= deadline)
+      throw E.busy(`sandbox cgroup did not reach frozen=${want} within ${timeoutMs} ms`);
+    await new Promise((r) => {
+      setTimeout(r, 10);
+    });
+  }
+}
+
+/**
+ * Run `fn` with every process of the sandbox cgroup frozen, so a running writer cannot tear the
+ * archive. A context without a cgroup has no live processes and runs `fn` directly; a cgroup that
+ * cannot be frozen refuses the checkpoint rather than archiving it live.
+ * @param {string|undefined} cgroupPath @param {() => Promise<unknown>} fn
+ */
+export async function withQuiesced(cgroupPath, fn) {
+  if (!cgroupPath) return fn();
+  const freeze = path.join(cgroupPath, 'cgroup.freeze');
+  if (!fs.existsSync(freeze))
+    throw E.unavailable('sandbox cannot be quiesced for a consistent checkpoint');
+  fs.writeFileSync(freeze, '1');
+  try {
+    await waitFrozen(cgroupPath, 1, 5_000);
+    return await fn();
+  } finally {
+    fs.writeFileSync(freeze, '0');
+  }
+}
+
 /** @param {object} ctx @param {{name?: string, summary?: string, paths?: string[]}} params */
 export async function checkpointCreate(ctx, params) {
   if (!ctx.upperDir || !fs.existsSync(ctx.upperDir))
@@ -61,7 +94,14 @@ export async function checkpointCreate(ctx, params) {
   const tarFile = path.join(ctx.checkpointsDir, `${ctx.sandboxId}-${stamp}.tar`);
   const members = params.paths?.length ? params.paths.map((p) => p.replace(/^\//, '')) : ['.'];
   assertSafeTarNames(members);
-  await run(['tar', '-cf', tarFile, '-C', ctx.upperDir, ...members]);
+  try {
+    await withQuiesced(ctx.cgroupPath, () =>
+      run(['tar', '-cf', tarFile, '-C', ctx.upperDir, ...members]),
+    );
+  } catch (e) {
+    fs.rmSync(tarFile, { force: true });
+    throw e;
+  }
   const sha256 = await sha256OfFile(tarFile);
   const size = fs.statSync(tarFile).size;
   const envelope = {

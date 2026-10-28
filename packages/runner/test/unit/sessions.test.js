@@ -4,8 +4,33 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { PassThrough, Duplex } from 'node:stream';
 import { Peer } from '@workbox/protocol';
-import { SessionManager, DEFAULT_STOP_GRACE_MS } from '../../src/sessions.js';
+import {
+  SessionManager,
+  DEFAULT_STOP_GRACE_MS,
+  redactions,
+  redactChunk,
+} from '../../src/sessions.js';
 import { bootFixture } from '../helpers/boot.js';
+
+test('injected secret values are redacted byte-wise from session output', () => {
+  const table = redactions({
+    DEPLOY_TOKEN: 'tok-123456',
+    SHORT: 'abc',
+    LONGER_TOKEN: 'tok-1234567',
+  });
+  assert.deepEqual(
+    table.map((r) => r.marker.toString()),
+    ['[REDACTED:LONGER_TOKEN]', '[REDACTED:DEPLOY_TOKEN]'],
+  );
+  const out = redactChunk(Buffer.from('a tok-123456 b tok-1234567 c abc tok-123456'), table);
+  assert.equal(
+    out.toString(),
+    'a [REDACTED:DEPLOY_TOKEN] b [REDACTED:LONGER_TOKEN] c abc [REDACTED:DEPLOY_TOKEN]',
+  );
+  const binary = Buffer.from([0xff, 0xfe, 0x00]);
+  assert.equal(redactChunk(binary, table), binary, 'chunks without a value pass through untouched');
+  assert.equal(redactions(undefined).length, 0);
+});
 
 /** A Peer whose far side records every event it receives. */
 function recordingPeer() {

@@ -273,7 +273,7 @@ reqs       = ["1.6"]
 
 [task.2.3]
 title      = "Broker: asks, secrets, events, leases, checkpoints, artifacts"
-status     = "pending"
+status     = "in_progress"
 wave       = 2
 requires   = ["1.6"]
 touches    = ["packages/core/src/broker/**", "packages/core/src/secrets.js", "packages/wb/src/commands/ask.js", "packages/wb/src/commands/secret.js", "packages/wb/src/commands/event.js", "packages/wb/src/commands/lease.js", "packages/wb/src/commands/checkpoint.js", "packages/wb/src/commands/artifact.js", "packages/core/test/integration/broker.test.js"]

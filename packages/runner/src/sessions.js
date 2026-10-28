@@ -14,6 +14,44 @@ const SPAWN_ERRORS = Object.freeze({
   EPERM: Codes.DENIED,
 });
 
+/** Injected values shorter than this are not redacted: doing so would destroy ordinary output. */
+export const MIN_REDACT_LENGTH = 6;
+
+/**
+ * Redaction table for a session's injected secret env, longest value first.
+ * @param {Record<string, string>|undefined} secretEnv
+ * @returns {Array<{value: Buffer, marker: Buffer}>}
+ */
+export function redactions(secretEnv) {
+  return Object.entries(secretEnv ?? {})
+    .filter(([, v]) => typeof v === 'string' && v.length >= MIN_REDACT_LENGTH)
+    .sort(([, a], [, b]) => b.length - a.length)
+    .map(([name, v]) => ({ value: Buffer.from(v), marker: Buffer.from(`[REDACTED:${name}]`) }));
+}
+
+/**
+ * Replace every occurrence of a registered value in one output chunk, byte-wise.
+ * @param {Buffer} data @param {Array<{value: Buffer, marker: Buffer}>} table
+ * @returns {Buffer}
+ */
+export function redactChunk(data, table) {
+  let out = data;
+  for (const { value, marker } of table ?? []) {
+    let i = out.indexOf(value);
+    if (i === -1) continue;
+    const parts = [];
+    let from = 0;
+    while (i !== -1) {
+      parts.push(out.subarray(from, i), marker);
+      from = i + value.length;
+      i = out.indexOf(value, from);
+    }
+    parts.push(out.subarray(from));
+    out = Buffer.concat(parts);
+  }
+  return out;
+}
+
 /**
  * @typedef {object} Session
  * @property {string} sessionId
@@ -126,6 +164,7 @@ export class SessionManager extends EventEmitter {
       child,
       pty: Boolean(params.pty),
       stdinClosed: false,
+      redact: redactions(params.secretEnv),
     };
     this.sessions.set(sessionId, session);
     child.stdout.on('data', (d) => this._output(session, session.pty ? 'pty' : 'stdout', d));
@@ -146,7 +185,8 @@ export class SessionManager extends EventEmitter {
     return info;
   }
 
-  _output(session, stream, data) {
+  _output(session, stream, raw) {
+    const data = redactChunk(raw, session.redact);
     const seq = session.spool.append(stream, data, this.clock());
     const event = { sessionId: session.sessionId, stream, seq, data: data.toString('base64') };
     for (const peer of session.subscribers)

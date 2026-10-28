@@ -9,7 +9,10 @@ import {
   issueLease,
   answerAskHost,
   checkpointRestore,
+  notifyAsk,
+  publicAsk,
 } from '../broker/index.js';
+import { secretRedactor } from '../secrets.js';
 import { sandboxDirs } from '../host/launch.js';
 import { SandboxNet, proxyEnv } from '../host/netns.js';
 import { buildSeccompProgram } from '../host/seccomp.js';
@@ -36,6 +39,7 @@ export class Manager extends EventEmitter {
    * @param {boolean} [deps.enableNetwork] attach slirp+nft for egress/allowlist sandboxes
    * @param {boolean} [deps.enableSeccomp] supply the seccomp program at launch (default true on x64)
    * @param {number} [deps.maxSandboxes] admission cap (0/absent = unlimited)
+   * @param {Array<{name: string, deliver: (ask: object) => unknown}>} [deps.askChannels] ask notifiers
    * @param {(deps: object) => Supervisor} [deps.supervisorFactory] test seam
    */
   constructor(deps) {
@@ -51,6 +55,9 @@ export class Manager extends EventEmitter {
     this.enableNetwork = deps.enableNetwork ?? true;
     this.enableSeccomp = deps.enableSeccomp ?? process.arch === 'x64';
     this.maxSandboxes = deps.maxSandboxes ?? 0;
+    this.askChannels = deps.askChannels ?? [];
+    if (this.audit && this.secrets)
+      this.audit.redactor = secretRedactor(this.secrets, this.audit.redactor);
     this.supervisorFactory = deps.supervisorFactory ?? ((d) => new Supervisor(d));
     /** @type {Map<string, Supervisor>} */
     this.supervisors = new Map();
@@ -134,6 +141,7 @@ export class Manager extends EventEmitter {
       artifactsDir: this.config.paths.artifacts,
       checkpointsDir: this.config.paths.checkpoints,
       upperDir: dirs.upper,
+      cgroupPath: sup.cgroupPath,
       uidRange: this.config.uid,
       secrets: this.secrets ?? undefined,
       limits: sup.limits,
@@ -146,13 +154,21 @@ export class Manager extends EventEmitter {
           return {};
         }
       },
-      onAsk: (ask) => this.emit('ask', ask),
+      onAsk: (ask) => {
+        this.emit('ask', ask);
+        notifyAsk(
+          { audit: this.audit ?? undefined, sandboxId: sup.id },
+          this.askChannels,
+          publicAsk(ask),
+        );
+      },
     };
   }
 
   /**
    * Create and launch a sandbox.
-   * @param {{name?: string, rootfs?: string, runtime?: string, profile?: object, labels?: object, idempotencyKey?: string, secretRefs?: string[]}} [input]
+   * @param {{name?: string, rootfs?: string, runtime?: string, profile?: object, labels?: object, idempotencyKey?: string, secretRefs?: string[], fromCheckpoint?: string}} [input]
+   *   `fromCheckpoint` restores that checkpoint into the new sandbox's upper before launch.
    */
   async create(input = {}) {
     validateCreate(input);
@@ -189,6 +205,12 @@ export class Manager extends EventEmitter {
       this.store.setSecretPolicy(row.id, input.profile.secretRefs);
     issueLease({ store: this.store, sandboxId: row.id, leaseTtlMs: this.config.lease.ttlMs });
     const sup = this._makeSupervisor(row);
+    if (input.fromCheckpoint)
+      await checkpointRestore(
+        this.brokerContextFor(sup),
+        input.fromCheckpoint,
+        sandboxDirs(this.config.paths.sandboxes, row.id).upper,
+      );
     const ready = await sup.launch();
     this.audit?.append({
       actor: 'manager',
@@ -370,9 +392,12 @@ export function validateCreate(input) {
     'labels',
     'idempotencyKey',
     'secretRefs',
+    'fromCheckpoint',
   ]);
   for (const k of Object.keys(input))
     if (!allowed.has(k)) throw E.invalid(`unknown create field ${k}`, { field: k });
+  if (input.fromCheckpoint !== undefined && typeof input.fromCheckpoint !== 'string')
+    throw E.invalid('fromCheckpoint must be a checkpoint id', { field: 'fromCheckpoint' });
   if (
     input.name !== undefined &&
     (typeof input.name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.name))

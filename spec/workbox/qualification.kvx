@@ -5,3 +5,11 @@ exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/wave1-coverage.log"
 observed    = "178/178 tests pass and lines 92.38 and branches 83.57 meet the floor, but functions are 86.68 against 90; wave-1 files under 90 are cli main/local, manager, runner, sessions, runner fs, rootfs and redact, and the rest are unqualified wave 2-3 modules (proxy, netns, broker, server, sdk, mcp)."
 assumption  = "The wave 2-3 shortfall closes as those tasks qualify; the wave-1 files get a dedicated coverage pass that runs alongside wave 2."
+
+[finding.2-3-wb-attach-exited]
+revision    = "e1d9f5e"
+command     = "node --test packages/core/test/integration/broker.test.js"
+exit_code   = 1
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.3-verify-1.log"
+observed    = "wb session attach on an already-exited session crashes with TypeError at wb/src/client.js:80 (this.peer.off on a null peer) once the runner reply closes the client."
+assumption  = "This is a task 1.5 wb client defect outside 2.3 touches; the broker test replays the spool through the host attach path instead."

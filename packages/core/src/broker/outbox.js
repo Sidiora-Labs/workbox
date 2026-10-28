@@ -98,8 +98,9 @@ export function acceptOutboxFile(opts) {
 }
 
 /**
- * Copy a CAS artifact into the sandbox inbox for `wb artifact get`.
- * @param {{artifactsDir: string, inboxDir: string, sha256: string}} opts
+ * Copy a CAS artifact into the sandbox inbox for `wb artifact get`. With a mapped uid range the
+ * copy is owned by the sandbox root so the box can read it.
+ * @param {{artifactsDir: string, inboxDir: string, sha256: string, uidRange?: {base: number, count: number}}} opts
  * @returns {{sha256: string, inboxName: string, size: number}}
  */
 export function deliverToInbox(opts) {
@@ -109,7 +110,9 @@ export function deliverToInbox(opts) {
     throw E.notFound(`artifact ${opts.sha256} not in the store`, { sha256: opts.sha256 });
   fs.mkdirSync(opts.inboxDir, { recursive: true });
   const inboxName = opts.sha256;
-  fs.copyFileSync(src, path.join(opts.inboxDir, inboxName));
+  const dest = path.join(opts.inboxDir, inboxName);
+  fs.copyFileSync(src, dest);
+  if (opts.uidRange) fs.chownSync(dest, opts.uidRange.base, opts.uidRange.base);
   return { sha256: opts.sha256, inboxName, size: fs.statSync(src).size };
 }
 

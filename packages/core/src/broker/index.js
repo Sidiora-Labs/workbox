@@ -31,7 +31,9 @@ export {
   checkpointRestore,
   assertSafeTarNames,
   sha256OfFile,
+  withQuiesced,
 } from './checkpoints.js';
+export { stdoutChannel, webhookChannel, notifyAsk } from './channels.js';
 export { presetManifest, PRESET_NAMES } from './presets.js';
 export { netPolicy, netTest } from './net.js';
 export {
@@ -52,6 +54,7 @@ export {
  * @property {string} artifactsDir content-addressed store root
  * @property {string} checkpointsDir
  * @property {string} [upperDir] sandbox upper layer (checkpoints)
+ * @property {string} [cgroupPath] sandbox cgroup, frozen while a checkpoint is archived
  * @property {{base: number, count: number}} [uidRange] mapped owner range for outbox files
  * @property {import('../secrets.js').SecretProvider} [secrets]
  * @property {object} [limits]
