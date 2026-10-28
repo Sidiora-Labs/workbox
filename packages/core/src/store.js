@@ -151,7 +151,7 @@ const MIGRATIONS = [
   (db) => {
     const update = db.prepare(`UPDATE leases SET token = ? WHERE sandbox_id = ?`);
     for (const r of db.prepare(`SELECT sandbox_id, token FROM leases`).all())
-      if (!TOKEN_DIGEST.test(r.token)) update.run(tokenDigest(r.token), r.sandbox_id);
+      if (!TOKEN_DIGEST.test(r.token)) update.run(leaseDigest(r.token), r.sandbox_id);
   },
 ];
 
@@ -739,8 +739,7 @@ export class Store {
   // ── leases ──
 
   /**
-   * Issue or re-issue the lease. The token is stored as its `sha256:` digest; a token already in
-   * that form (the broker hashes before calling) is stored as given.
+   * Issue or re-issue the lease. The plaintext token is stored only as its `sha256:` digest.
    * @param {string} sandboxId @param {{token: string, ttlMs: number}} l
    */
   issueLease(sandboxId, l) {
@@ -753,7 +752,7 @@ export class Store {
           `INSERT INTO leases (sandbox_id, token, generation, issued_at, renewed_at, expires_at) VALUES (?, ?, ?, ?, NULL, ?)
            ON CONFLICT(sandbox_id) DO UPDATE SET token = excluded.token, generation = excluded.generation, issued_at = excluded.issued_at, renewed_at = NULL, expires_at = excluded.expires_at`,
         )
-        .run(sandboxId, tokenDigest(l.token), generation, now, now + l.ttlMs);
+        .run(sandboxId, leaseDigest(l.token), generation, now, now + l.ttlMs);
       return this.getLease(sandboxId);
     });
   }
@@ -778,25 +777,51 @@ export class Store {
   }
 
   /**
-   * Renew when the token (plaintext or its digest) matches and the lease has not expired.
+   * Renew when the presented plaintext token hashes to the stored digest (compared in constant
+   * time) and the lease has not expired. Only the plaintext is accepted: the stored digest itself,
+   * as anyone who can read the database sees it, is refused with the same E_DENIED as any wrong
+   * token.
    * @param {string} sandboxId
-   * @param {string} token
+   * @param {string} token the plaintext returned at issue
    * @param {number} ttlMs
    */
   renewLease(sandboxId, token, ttlMs) {
     return this.tx(() => {
       const lease = this.getLease(sandboxId);
       if (!lease) throw E.notFound(`sandbox ${sandboxId} has no lease`, { sandboxId });
-      if (!safeEqual(lease.token, tokenDigest(token)))
+      if (typeof token !== 'string' || !safeEqual(lease.token, leaseDigest(token)))
         throw E.denied('lease token mismatch', { sandboxId, generation: lease.generation });
-      const now = this.clock();
-      if (lease.expiresAt <= now)
-        throw E.state('lease expired', { sandboxId, expiresAt: lease.expiresAt, now });
-      this.db
-        .prepare(`UPDATE leases SET renewed_at = ?, expires_at = ? WHERE sandbox_id = ?`)
-        .run(now, now + ttlMs, sandboxId);
-      return this.getLease(sandboxId);
+      return this._extendLease(lease, ttlMs);
     });
+  }
+
+  /**
+   * Renew for the sandbox itself, which its own broker channel authenticates (wb never holds the
+   * token). No credential is taken, so nothing read from the database can be presented here.
+   * @param {string} sandboxId
+   * @param {number} ttlMs
+   */
+  extendLease(sandboxId, ttlMs) {
+    return this.tx(() => {
+      const lease = this.getLease(sandboxId);
+      if (!lease) throw E.notFound(`sandbox ${sandboxId} has no lease`, { sandboxId });
+      return this._extendLease(lease, ttlMs);
+    });
+  }
+
+  /** @param {{sandboxId: string, expiresAt: number}} lease @param {number} ttlMs */
+  _extendLease(lease, ttlMs) {
+    const now = this.clock();
+    if (lease.expiresAt <= now)
+      throw E.state('lease expired', {
+        sandboxId: lease.sandboxId,
+        expiresAt: lease.expiresAt,
+        now,
+      });
+    this.db
+      .prepare(`UPDATE leases SET renewed_at = ?, expires_at = ? WHERE sandbox_id = ?`)
+      .run(now, now + ttlMs, lease.sandboxId);
+    return this.getLease(lease.sandboxId);
   }
 
   // ── asks ──
@@ -973,9 +998,9 @@ function safeEqual(a, b) {
   return timingSafeEqual(digestOf(sa), digestOf(sb)) && sa.length > 0 && sb.length > 0;
 }
 
-function tokenDigest(token) {
-  const s = String(token ?? '');
-  return TOKEN_DIGEST.test(s) ? s : `sha256:${digestOf(s).toString('hex')}`;
+/** The at-rest form of a plaintext lease token. Never passes a digest through as already hashed. */
+function leaseDigest(token) {
+  return `sha256:${digestOf(String(token ?? '')).toString('hex')}`;
 }
 
 function pageSize(limit, fallback) {

@@ -27,6 +27,8 @@ test('index exports the public surface', () => {
     'Peer',
     'CANCEL_METHOD',
     'DEFAULT_TIMEOUT_MS',
+    'Redactor',
+    'RedactStream',
     'Methods',
     'Events',
     'PROTOCOL_VERSION',
