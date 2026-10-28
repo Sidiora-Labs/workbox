@@ -10,9 +10,13 @@ import {
   compareVersions,
   parseSubid,
   coversRange,
+  subidOverlaps,
   findInPath,
   formatReport,
   withProbeCgroup,
+  nodeCheck,
+  proxyLinkCheck,
+  MIN_NODE,
   Status,
 } from '../../../src/host/doctor.js';
 import { CgroupManager } from '../../../src/host/cgroup.js';
@@ -36,6 +40,16 @@ test('pure helpers', async () => {
   assert.ok(coversRange(ranges, 200000, 65536));
   assert.equal(coversRange(ranges, 1_199_999, 2), false);
   assert.equal(coversRange([], 1, 1), false);
+  assert.deepEqual(
+    subidOverlaps(
+      'root:200000:65536\nbob:165536:65536\ncarol:265536:65536\neve:100000:100000\nx:y\n',
+      ['root', '0'],
+      200000,
+      65536,
+    ),
+    ['bob:165536:65536'],
+  );
+  assert.deepEqual(subidOverlaps('0:200000:1\n:5:5\n', ['root', '0'], 200000, 65536), []);
   assert.ok(findInPath('sh').endsWith('/sh'));
   assert.equal(findInPath('definitely-not-a-binary-xyz'), null);
   assert.equal(findInPath('sh', '/nonexistent::'), null);
@@ -79,10 +93,18 @@ test('the real host passes every blocking check', async () => {
       'cgroup',
       'tool.slirp4netns',
       'tool.nft',
+      'node',
       'disk',
     ]) {
       assert.equal(byId[id].status, 'pass', `${id}: ${byId[id].detail}`);
     }
+    assert.notEqual(byId['proxy-link'].status, 'fail');
+    const subuidText = fs.readFileSync('/etc/subuid', 'utf8');
+    const shared = subidOverlaps(subuidText, ['0', 'root'], cfg.uid.base, cfg.uid.count);
+    assert.equal(byId['subuid.exclusive'].status, shared.length ? 'warn' : 'pass');
+    assert.ok(byId['subgid.exclusive']);
+    for (const c of report.checks.filter((x) => x.status !== 'pass'))
+      assert.ok(c.remedy, `${c.id} reports ${c.status} without a remedy`);
     assert.equal(byId.rootfs.status, 'warn');
     assert.match(byId.rootfs.remedy, /workbox rootfs build/);
     assert.equal(byId.runtime.status, 'warn');
@@ -123,6 +145,8 @@ test('misconfiguration surfaces as failures with remedies', async () => {
     assert.match(byId.subuid.remedy, /5000000:65536/);
     assert.equal(byId.overlay.status, 'fail');
     assert.equal(byId.cgroup.status, 'fail');
+    for (const c of report.checks.filter((x) => x.status !== 'pass'))
+      assert.ok(c.remedy, `${c.id} reports ${c.status} without a remedy`);
     assert.match(formatReport(report), /host is NOT ready$/);
     const warnKernel = await runDoctor(
       loadConfig({
@@ -131,6 +155,7 @@ test('misconfiguration surfaces as failures with remedies', async () => {
       { release: '5.12.1' },
     );
     assert.equal(warnKernel.checks.find((c) => c.id === 'kernel').status, 'warn');
+    assert.match(warnKernel.checks.find((c) => c.id === 'kernel').remedy, /5\.14/);
     fs.rmdirSync(`/sys/fs/cgroup/workbox-doctor2-${process.pid}`);
     const noTools = await runDoctor(
       loadConfig({
@@ -182,4 +207,37 @@ test('a doctor probe check that fails midway leaves no probe cgroup, even with a
     for (const child of cg.list()) await cg.remove(cg.childPath(child)).catch(() => undefined);
     if (fs.existsSync(cg.parentPath)) fs.rmdirSync(cg.parentPath);
   }
+});
+
+test('the Node.js probe passes at the engines floor and fails below it with a remedy', () => {
+  assert.equal(nodeCheck(process.versions.node).status, 'pass');
+  assert.equal(nodeCheck(MIN_NODE).status, 'pass');
+  const old = nodeCheck('20.18.1');
+  assert.equal(old.status, 'fail');
+  assert.equal(old.id, 'node');
+  assert.match(old.remedy, /Install Node\.js 22\.13\.0 or newer/);
+  assert.equal(nodeCheck(undefined).status, 'fail');
+});
+
+test('the proxy link probe only reads links: present, missing address and absent', async () => {
+  const before = fs.readdirSync('/sys/class/net').sort();
+  const lo = await proxyLinkCheck('lo', '127.0.0.1');
+  assert.equal(lo.status, 'pass', lo.detail);
+  assert.equal(lo.id, 'proxy-link');
+  assert.equal(lo.detail, 'lo has 127.0.0.1/8');
+  const noAddr = await proxyLinkCheck('lo', '198.18.0.250');
+  assert.equal(noAddr.status, 'warn');
+  assert.equal(noAddr.remedy, 'ip addr replace 198.18.0.250/32 dev lo');
+  const name = `wbdoc${process.pid % 100000}`;
+  const absent = await proxyLinkCheck(name, '198.18.0.1');
+  assert.equal(absent.status, 'warn');
+  assert.match(absent.detail, new RegExp(`${name} absent`));
+  assert.match(
+    absent.remedy,
+    new RegExp(`ip link add ${name} type dummy && ip addr replace 198.18.0.1/32 dev ${name}`),
+  );
+  assert.deepEqual(fs.readdirSync('/sys/class/net').sort(), before, 'no link created');
+  const host = await proxyLinkCheck();
+  assert.equal(host.title, 'Proxy link workbox0 with 198.18.0.1');
+  assert.equal(host.status === 'pass', fs.existsSync('/sys/class/net/workbox0'));
 });

@@ -98,7 +98,7 @@
     - workbox serve starts the server with a config file; every sandbox command accepts --server and --token and routes through the SDK.
     - Tests cover serve plus a remote create, exec and rm.
     - _Requirements: 6.4_
-  - [ ] 4.1 Deployment assets
+  - [x] 4.1 Deployment assets
     - systemd unit with hardening directives compatible with the launch chain, a server Dockerfile that is documented as needing privileged mode, install.sh that creates the Workbox root, subordinate ranges and the cgroup parent, and deploy/check.sh that validates the unit and Dockerfile syntax and runs workbox doctor.
     - _Requirements: 7.3_
   - [ ] 4.2 Documentation

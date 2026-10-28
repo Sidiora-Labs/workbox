@@ -4,8 +4,12 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { CgroupManager, REQUIRED_CONTROLLERS } from './cgroup.js';
 import { removeUnder } from './safefs.js';
+import { PROXY_LINK, NET_DEFAULTS, proxyLinkArgv } from './netns.js';
 
 export const Status = Object.freeze({ PASS: 'pass', FAIL: 'fail', WARN: 'warn' });
+
+/** Oldest Node.js the daemon and CLI support (package.json engines). */
+export const MIN_NODE = '22.13.0';
 
 /**
  * @typedef {object} Check
@@ -79,6 +83,25 @@ export function parseSubid(text, identities) {
   return out;
 }
 
+/**
+ * Entries of users other than `identities` whose range overlaps base..base+count-1.
+ * @param {string} text
+ * @param {string[]} identities
+ * @param {number} base
+ * @param {number} count
+ * @returns {string[]} the overlapping lines, e.g. ["alice:150000:65536"]
+ */
+export function subidOverlaps(text, identities, base, count) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    const [who, start, n] = line.trim().split(':');
+    if (!who || identities.includes(who) || !/^\d+$/.test(start ?? '') || !/^\d+$/.test(n ?? ''))
+      continue;
+    if (Number(start) < base + count && Number(start) + Number(n) > base) out.push(line.trim());
+  }
+  return out;
+}
+
 /** @param {{start: number, count: number}[]} ranges */
 export function coversRange(ranges, base, count) {
   return ranges.some((r) => r.start <= base && r.start + r.count >= base + count);
@@ -109,7 +132,7 @@ const check = (id, title, status, detail, remedy) => ({
 /**
  * Probe every host prerequisite. Fails are blocking; warns are degraded or optional features.
  * @param {import('../config.js').Config} config
- * @param {{uid?: number, release?: string, env?: NodeJS.ProcessEnv}} [opts]
+ * @param {{uid?: number, release?: string, env?: NodeJS.ProcessEnv, nodeVersion?: string}} [opts]
  * @returns {Promise<{ok: boolean, checks: Check[]}>}
  */
 export async function runDoctor(config, opts = {}) {
@@ -117,19 +140,22 @@ export async function runDoctor(config, opts = {}) {
     uid: opts.uid ?? process.getuid(),
     release: opts.release ?? os.release(),
     env: opts.env ?? process.env,
+    node: opts.nodeVersion ?? process.versions.node,
   };
   const checks = [
     privilegesCheck(ctx.uid),
     kernelCheck(ctx.release),
+    nodeCheck(ctx.node),
     await bwrapCheck(),
     await unshareCheck(),
     ...toolChecks(ctx.env),
-    subidCheck('subuid', '/etc/subuid', config.uid, ctx.uid),
-    subidCheck('subgid', '/etc/subgid', config.uid, ctx.uid),
+    ...subidChecks('subuid', '/etc/subuid', config.uid, ctx.uid),
+    ...subidChecks('subgid', '/etc/subgid', config.uid, ctx.uid),
     usernsCheck(),
     await overlayProbe(config.uid),
     await cgroupCheck(config),
     ...(await networkToolChecks(config.network.mode)),
+    await proxyLinkCheck(),
     await dockerCheck(),
     ...assetChecks(config),
     diskCheck(config.paths.root),
@@ -165,8 +191,28 @@ function kernelCheck(release) {
       title,
       Status.WARN,
       `kernel ${release}: cgroup.kill absent, per-pid SIGKILL fallback in use`,
+      'Upgrade to Linux 5.14 or newer for cgroup.kill.',
     );
   return check('kernel', title, Status.PASS, `kernel ${release}`);
+}
+
+/**
+ * The Node.js running the daemon and CLI against MIN_NODE.
+ * @param {string} version e.g. process.versions.node
+ * @returns {Check}
+ */
+export function nodeCheck(version) {
+  const title = `Node.js ${MIN_NODE} or newer`;
+  const nv = parseVersion(version);
+  if (nv && compareVersions(nv, MIN_NODE) >= 0)
+    return check('node', title, Status.PASS, `node ${nv}`);
+  return check(
+    'node',
+    title,
+    Status.FAIL,
+    `node ${version ?? 'unknown'}`,
+    `Install Node.js ${MIN_NODE} or newer (Node 22 LTS) and run Workbox with it.`,
+  );
 }
 
 async function bwrapCheck() {
@@ -251,6 +297,39 @@ async function networkToolChecks(mode) {
   return out;
 }
 
+/**
+ * Read-only probe of the host-only dummy link the sandbox proxies bind to: reports whether
+ * `link` exists and carries `address`, and never creates or changes it.
+ * @param {string} [link]
+ * @param {string} [address] IPv4
+ * @returns {Promise<Check>}
+ */
+export async function proxyLinkCheck(link = PROXY_LINK, address = NET_DEFAULTS.proxyHost) {
+  const title = `Proxy link ${link} with ${address}`;
+  const create = proxyLinkArgv(address)
+    .map((argv) => argv.join(' ').replace(PROXY_LINK, link))
+    .join(' && ');
+  const r = await run('ip', ['-o', '-4', 'addr', 'show', 'dev', link]);
+  if (r.code !== 0)
+    return check(
+      'proxy-link',
+      title,
+      Status.WARN,
+      `${link} absent (${(r.error ?? r.stderr).trim() || `exit ${r.code}`}); the daemon creates it on the first egress or allowlist sandbox`,
+      `Let the daemon create it, or run as root: ${create}`,
+    );
+  const inet = r.stdout.split(/\s+/).find((w) => w.split('/')[0] === address);
+  if (!inet)
+    return check(
+      'proxy-link',
+      title,
+      Status.WARN,
+      `${link} present without ${address}`,
+      `ip addr replace ${address}/32 dev ${link}`,
+    );
+  return check('proxy-link', title, Status.PASS, `${link} has ${inet}`);
+}
+
 async function dockerCheck() {
   const title = 'Docker available for rootfs builds';
   const r = await run('docker', ['version', '--format', '{{.Server.Version}}']);
@@ -289,18 +368,20 @@ function assetChecks(config) {
   ];
 }
 
-function subidCheck(id, file, uidCfg, uid) {
+function subidChecks(id, file, uidCfg, uid) {
   let text;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (e) {
-    return check(
-      id,
-      `${file} covers the sandbox range`,
-      Status.FAIL,
-      e.message,
-      `echo "root:${uidCfg.base}:${uidCfg.count}" >> ${file}`,
-    );
+    return [
+      check(
+        id,
+        `${file} covers the sandbox range`,
+        Status.FAIL,
+        e.message,
+        `echo "root:${uidCfg.base}:${uidCfg.count}" >> ${file}`,
+      ),
+    ];
   }
   const identities = [String(uid)];
   try {
@@ -308,6 +389,27 @@ function subidCheck(id, file, uidCfg, uid) {
   } catch {
     // numeric identity is enough
   }
+  return [
+    coverageCheck(id, file, uidCfg, text, identities),
+    exclusiveCheck(id, file, uidCfg, text, identities),
+  ];
+}
+
+function exclusiveCheck(id, file, uidCfg, text, identities) {
+  const span = `${uidCfg.base}..${uidCfg.base + uidCfg.count - 1}`;
+  const title = `${file} sandbox range not shared with other users`;
+  const others = subidOverlaps(text, identities, uidCfg.base, uidCfg.count);
+  if (!others.length) return check(`${id}.exclusive`, title, Status.PASS, `${span} exclusive`);
+  return check(
+    `${id}.exclusive`,
+    title,
+    Status.WARN,
+    `${others.join(', ')} overlaps ${span}; those users can map sandbox-owned ids`,
+    `Move the overlapping entries in ${file} off ${span}, or set uid.base to a free range.`,
+  );
+}
+
+function coverageCheck(id, file, uidCfg, text, identities) {
   const ranges = parseSubid(text, identities);
   const ok = coversRange(ranges, uidCfg.base, uidCfg.count);
   return ok
@@ -421,11 +523,19 @@ async function cgroupCheck(config) {
         `parent lacks ${missing.join(', ')}`,
         'Enable the controllers in the root cgroup.subtree_control.',
       );
+    if (!hasKill)
+      return check(
+        'cgroup',
+        title,
+        Status.WARN,
+        `${parent.path} delegates ${parent.controllers.join(', ')}, cgroup.kill absent`,
+        'Upgrade to Linux 5.14 or newer for cgroup.kill.',
+      );
     return check(
       'cgroup',
       title,
-      hasKill ? Status.PASS : Status.WARN,
-      `${parent.path} delegates ${parent.controllers.join(', ')}${hasKill ? ', cgroup.kill available' : ', cgroup.kill absent'}`,
+      Status.PASS,
+      `${parent.path} delegates ${parent.controllers.join(', ')}, cgroup.kill available`,
     );
   } catch (e) {
     return check(
@@ -468,7 +578,13 @@ function diskCheck(root) {
       'Free at least 5 GiB.',
     );
   } catch (e) {
-    return check('disk', 'Free space under the Workbox root', Status.WARN, e.message);
+    return check(
+      'disk',
+      'Free space under the Workbox root',
+      Status.WARN,
+      e.message,
+      'Put the Workbox root on a mounted local filesystem the daemon can stat.',
+    );
   }
 }
 

@@ -358,7 +358,7 @@ reqs       = ["6.4"]
 
 [task.4.1]
 title      = "Deployment assets"
-status     = "pending"
+status     = "done"
 wave       = 4
 requires   = ["3.4"]
 touches    = ["deploy/**", "packages/cli/src/commands.js"]
