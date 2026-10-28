@@ -3,21 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from '../../packages/server/src/index.js';
 import { WorkboxClient } from '../../packages/sdk/src/index.js';
-import { FakeManager } from '../../packages/server/test/helpers/fake-manager.js';
-
-// Localhost test traffic must never go through an ambient HTTP(S) proxy.
-for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']) delete process.env[k];
-process.env.NO_PROXY = '127.0.0.1,localhost';
-process.env.no_proxy = '127.0.0.1,localhost';
-
+import { bootServer, TOKENS } from '../../packages/server/test/helpers/real-server.js';
 
 /**
- * End-to-end through the public surfaces: SDK -> HTTP server -> manager, plus the req 7.5
- * density measurement shape (20 concurrent creates; p50/p95 + process RSS recorded to
- * docs/measurements.md). The sandbox engine is the FakeManager here; on a bare host the same
- * flow runs against the real Manager (see docs/measurements.md for host-recorded numbers).
+ * End-to-end through the public surfaces: SDK -> HTTP server -> Manager -> real sandboxes, plus
+ * the req 7.5 density measurement shape (20 concurrent creates; p50/p95 + process RSS recorded
+ * to docs/measurements.md).
  */
 
 const docsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs');
@@ -26,19 +18,16 @@ function percentile(sorted, p) {
   return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
 }
 
-test('sdk lifecycle: create, exec, ask answer path exists, checkpoint list, destroy; 20-way density measurement', async () => {
-  const app = createServer({
-    manager: new FakeManager(),
-    keys: [{ id: 'root', token: 'tok', scopes: ['admin', 'read', 'exec', 'answer'] }],
-  });
-  const addr = await app.listen(0);
-  const client = new WorkboxClient({ baseUrl: `http://127.0.0.1:${addr.port}`, token: 'tok' });
+test('sdk lifecycle against a real engine: create, exec, checkpoints, destroy; 20-way density', async () => {
+  const srv = await bootServer();
+  const client = new WorkboxClient({ baseUrl: srv.base, token: TOKENS.admin });
   try {
     const sb = await client.createSandbox({ name: 'e2e' });
     const out = await sb.exec({ argv: ['echo', 'e2e'] });
-    assert.match(out.stdout, /e2e/);
+    assert.equal(out.stdout, 'e2e\n');
+    assert.equal(out.exitCode, 0);
     assert.deepEqual((await sb.listCheckpoints()).checkpoints, []);
-    await sb.destroy();
+    assert.equal((await sb.destroy()).state, 'DELETED');
 
     const durations = [];
     await Promise.all(
@@ -46,21 +35,25 @@ test('sdk lifecycle: create, exec, ask answer path exists, checkpoint list, dest
         const t0 = Date.now();
         const s = await client.createSandbox({ name: `density-${i}` });
         durations.push(Date.now() - t0);
-        await s.destroy();
+        assert.equal(s.row.state, 'READY');
       }),
     );
-    durations.sort((a, b) => a - b);
+    const live = await client.listSandboxes({ limit: 100 });
+    assert.equal(live.items.length, 20);
     const rssMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+    await Promise.all(live.items.map((s) => client.sandbox(s.id).destroy()));
+    assert.deepEqual((await client.listSandboxes()).items, []);
+    durations.sort((a, b) => a - b);
     const body = `# Measurements
 
-Recorded by test/e2e/lifecycle.test.js on ${new Date().toISOString()} (in-process FakeManager; bare-host runs with the real engine overwrite this file).
+Recorded by test/e2e/lifecycle.test.js on ${new Date().toISOString()} against the real engine (SDK -> server -> Manager -> sandboxes, network setup off).
 
 | Metric | Value |
 |---|---|
 | Concurrent creates | 20 |
 | create-to-ready p50 | ${percentile(durations, 50)} ms |
 | create-to-ready p95 | ${percentile(durations, 95)} ms |
-| Process RSS at measurement | ${rssMb} MiB |
+| Server process RSS at measurement | ${rssMb} MiB |
 
 Thresholds are an owner decision (spec req 7.5 records values only).
 `;
@@ -68,6 +61,6 @@ Thresholds are an owner decision (spec req 7.5 records values only).
     fs.writeFileSync(path.join(docsDir, 'measurements.md'), body);
     assert.ok(fs.existsSync(path.join(docsDir, 'measurements.md')));
   } finally {
-    await app.close();
+    await srv.stop();
   }
 });

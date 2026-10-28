@@ -81,7 +81,7 @@
     - Add node-pty to the runtime bundle with its prebuilt binary verified against the rootfs glibc; sessions accept pty with rows and cols and support resize.
     - workbox shell opens an interactive PTY session with raw mode and resize forwarding; tests assert isatty inside and resize propagation.
     - _Requirements: 3.5_
-  - [ ] 3.1 REST and WebSocket server
+  - [x] 3.1 REST and WebSocket server
     - Fastify server with JSON schemas for every route, bearer auth with scoped keys from a config file, request ids, structured logs, audit of mutations, Prometheus metrics, /healthz and /readyz, graceful shutdown.
     - Routes: sandboxes CRUD with cursor inventory and complete flag, inspect, drain, reconcile; exec; files; sessions over WebSocket; evidence and artifacts; checkpoints; asks list and answer; events stream.
     - Tests run the server against a real engine and cover auth failures, schema 400s, lifecycle, exec, a WebSocket session and an ask answer round trip.

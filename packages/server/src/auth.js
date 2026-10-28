@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { createHash, timingSafeEqual } from 'node:crypto';
 
 /**
@@ -9,16 +10,82 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 /** All scopes the server understands. */
 export const SCOPES = Object.freeze(['read', 'exec', 'admin', 'answer']);
 
+/**
+ * The least-privilege matrix: the one scope each route requires (`admin` implies every scope).
+ * `read` observes, `exec` runs code and writes files inside a sandbox, `answer` answers asks,
+ * `admin` changes the fleet. Keys are `METHOD template`; `:name` segments are parameters.
+ */
+export const SCOPE_MATRIX = Object.freeze({
+  'GET /metrics': 'read',
+  'GET /v1/sandboxes': 'read',
+  'POST /v1/sandboxes': 'admin',
+  'GET /v1/sandboxes/:id': 'read',
+  'DELETE /v1/sandboxes/:id': 'admin',
+  'POST /v1/sandboxes/:id/drain': 'admin',
+  'POST /v1/sandboxes/:id/exec': 'exec',
+  'GET /v1/sandboxes/:id/files': 'read',
+  'PUT /v1/sandboxes/:id/files': 'exec',
+  'GET /v1/sandboxes/:id/sessions': 'read',
+  'POST /v1/sandboxes/:id/sessions': 'exec',
+  'GET /v1/sandboxes/:id/sessions/:sessionId/ws': 'exec',
+  'GET /v1/sandboxes/:id/evidence': 'read',
+  'GET /v1/sandboxes/:id/artifacts': 'read',
+  'GET /v1/sandboxes/:id/checkpoints': 'read',
+  'POST /v1/sandboxes/:id/checkpoints': 'admin',
+  'GET /v1/sandboxes/:id/events': 'read',
+  'POST /v1/reconcile': 'admin',
+  'GET /v1/asks': 'read',
+  'POST /v1/asks/:askId/answer': 'answer',
+});
+
+const LOCAL_HOSTS = Object.freeze(['localhost', '127.0.0.1', '::1']);
+
 /** @param {string} token */
 export function hashToken(token) {
   return createHash('sha256').update(String(token)).digest('hex');
 }
 
 /**
- * @param {{keys?: {id: string, token?: string, tokenSha256?: string, scopes: string[]}[]}} [opts]
+ * Read scoped keys from a JSON config file: `{"keys": [{id, tokenSha256|token, scopes}]}`.
+ * @param {string} file
+ * @returns {{id: string, token?: string, tokenSha256?: string, scopes: string[]}[]}
+ */
+export function loadKeysFile(file) {
+  const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!doc || !Array.isArray(doc.keys)) throw new Error(`${file}: expected {"keys": [...]}`);
+  return doc.keys;
+}
+
+/**
+ * H15: a request a browser could have sent (it carries `Origin` or `Sec-Fetch-Site`) or one
+ * addressed to a foreign `Host` (DNS rebinding) is refused before authentication runs.
+ * @param {import('node:http').IncomingHttpHeaders} headers
+ * @param {string[]} [serverNames] extra accepted host names
+ * @returns {string|null} the reason to refuse, or null to proceed
+ */
+export function browserGuard(headers, serverNames = []) {
+  if (headers.origin !== undefined) return 'browser-originated request (Origin)';
+  if (headers['sec-fetch-site'] !== undefined) return 'browser-originated request (Sec-Fetch-Site)';
+  const host = hostName(headers.host);
+  if (host === null) return 'missing Host header';
+  if (!LOCAL_HOSTS.includes(host) && !serverNames.includes(host))
+    return `host ${host} is not served`;
+  return null;
+}
+
+function hostName(header) {
+  if (typeof header !== 'string' || header === '') return null;
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(header);
+  if (bracketed) return bracketed[1].toLowerCase();
+  return header.replace(/:\d+$/, '').toLowerCase();
+}
+
+/**
+ * @param {{keys?: {id: string, token?: string, tokenSha256?: string, scopes: string[]}[], keysFile?: string}} [opts]
  */
 export function createAuth(opts = {}) {
-  const keys = (opts.keys ?? []).map((k) => {
+  const entries = [...(opts.keys ?? []), ...(opts.keysFile ? loadKeysFile(opts.keysFile) : [])];
+  const keys = entries.map((k) => {
     const scopes = k.scopes ?? [];
     for (const s of scopes)
       if (!SCOPES.includes(s)) throw new Error(`unknown scope ${s} for key ${k.id}`);

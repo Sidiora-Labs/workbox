@@ -311,7 +311,7 @@ reqs       = ["3.5"]
 
 [task.3.1]
 title      = "REST and WebSocket server"
-status     = "pending"
+status     = "done"
 wave       = 3
 requires   = ["2.3"]
 touches    = ["packages/server/**"]

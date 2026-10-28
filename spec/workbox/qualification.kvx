@@ -49,3 +49,19 @@ log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/
 observed    = "With the runtime stale after a runner/wb change, two test files ran ensureAssets in parallel and RuntimeManager.install raced on the shared <version>.tmp staging dir (EEXIST on symlinkSync, ENOENT in digestTree); a later install in the same run succeeded."
 assumption  = "Pre-existing: install stages into a fixed name with no cross-process lock; it only bites on the first parallel run after an in-box package change and needs a per-process staging dir or a lock."
 resolved    = "Lock runtime and rootfs installs across processes, route the last stray deletes through removeUnder and rotate live launch logs"
+
+[finding.3-1-node-http-not-fastify]
+revision    = "b41dc63"
+command     = "node scripts/check-tests.mjs && node --test 'packages/server/test/**/*.test.js'"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/3.1-verify-r1.log"
+observed    = "[task.3.1] do_1 names Fastify, but the server is node:http with a hand-written WebSocket and protocol v-schemas, zero third-party deps, meeting every req 6 clause."
+assumption  = "req 6 does not require Fastify; do_1 needs a wording sync to node:http (the deviation is already noted in spec.kvx)."
+
+[finding.3-1-fake-manager-left]
+revision    = "b41dc63"
+command     = "node --test test/e2e/lifecycle.test.js"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/3.1-e2e.log"
+observed    = "Server tests and e2e now run on a real Manager, but packages/sdk/test/integration/sdk-server.test.js (3.2) and packages/cli/test/integration/remote.test.js (3.4) still import packages/server/test/helpers/fake-manager.js, which lacks manager.get/sessions the new server calls; they were not run here."
+assumption  = "Tasks 3.2 and 3.4 move those tests onto test/helpers/real-server.js; delete fake-manager.js once its last user migrates."
