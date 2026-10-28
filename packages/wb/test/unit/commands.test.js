@@ -6,6 +6,7 @@ import {
   parseOpts,
   runProcess,
   runCommand,
+  exitStatus,
   statusCommand,
   eventCommand,
   askCommand,
@@ -50,6 +51,22 @@ test('runProcess builds a correct evidence envelope', async () => {
   assert.equal(envelope.stdoutSha256, createHash('sha256').update('out\n').digest('hex'));
   assert.equal(envelope.stderrSha256, createHash('sha256').update('err\n').digest('hex'));
   assert.ok(envelope.durationMs >= 0);
+});
+
+test('a command killed by a signal exits 128 + the signal number, never 0', async () => {
+  assert.equal(exitStatus(0, null), 0);
+  assert.equal(exitStatus(3, null), 3);
+  assert.equal(exitStatus(null, 'SIGKILL'), 137);
+  assert.equal(exitStatus(null, 'SIGTERM'), 143);
+  assert.equal(exitStatus(null, null), 1);
+  const { envelope, exitCode } = await runProcess(['sh', '-c', 'kill -KILL $$'], {
+    out: { write() {} },
+    err: { write() {} },
+  });
+  assert.equal(exitCode, null);
+  assert.equal(envelope.exitCode, null);
+  assert.equal(envelope.signal, 'SIGKILL');
+  assert.equal(exitStatus(exitCode, envelope.signal), 137);
 });
 
 test('runCommand stores the log and records evidence; status/ask/event route to broker', async () => {

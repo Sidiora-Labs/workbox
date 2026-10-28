@@ -47,7 +47,7 @@
     - exec.js runs to completion with timeout and bounded capture and a truncated flag.
     - Tests: output ordering, attach replay, gap reporting after overflow, survival across host disconnect and reconnect, stop escalation, exec timeout.
     - _Requirements: 3.1, 3.2, 3.3, 3.4_
-  - [ ] 1.5 wb base: status, tools, session, run with evidence
+  - [x] 1.5 wb base: status, tools, session, run with evidence
     - wb command framework: subcommand registry, --help and --json everywhere, exit codes, NDJSON client to the runner socket.
     - wb status, wb tools, wb help, wb session start|list|attach|input|stop, wb run with the evidence envelope, outbox artifact hand-off and digest verification on the host.
     - Tests run wb inside a real sandbox and assert every acceptance clause of req.4 ac_1 to ac_3.

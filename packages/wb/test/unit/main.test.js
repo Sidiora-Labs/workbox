@@ -19,6 +19,13 @@ test('tools/--help/--version work without a runner; unknown command exits 2', as
   const o3 = capture();
   assert.equal(await main(['run', '--help'], { out: o3.stream, err: e.stream }), 0);
   assert.match(o3.text(), /evidence envelope/);
+  const o4 = capture();
+  assert.equal(await main(['help', '--help'], { out: o4.stream, err: e.stream }), 0);
+  assert.match(o4.text(), /^help — /);
+  const o5 = capture();
+  assert.equal(await main(['help', 'run'], { out: o5.stream, err: e.stream }), 0);
+  assert.match(o5.text(), /^run — /);
+  assert.equal(await main(['help', 'bogus'], { out: o5.stream, err: e.stream }), 3);
   assert.equal(await main(['bogus'], { out: o.stream, err: e.stream }), 2);
   assert.equal(exitCodeFor('E_TIMEOUT'), 5);
   assert.equal(exitCodeFor('E_NOT_FOUND'), 3);

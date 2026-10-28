@@ -51,12 +51,6 @@ async function dispatch(io, deps, name, rest, json) {
     );
     return 0;
   }
-  if (name === 'help') {
-    const cmd = findCommand(rest[0]);
-    if (!cmd) throw new ProtocolError(Codes.NOT_FOUND, `unknown command ${rest[0]}`);
-    out.write(`${helpFor(cmd)}\n`);
-    return 0;
-  }
   const cmd = findCommand(name);
   if (!cmd)
     throw new ProtocolError(Codes.INVALID_PARAMS, `unknown wb command ${name}`, {
@@ -68,6 +62,12 @@ async function dispatch(io, deps, name, rest, json) {
         ? `${JSON.stringify({ name: cmd.name, summary: cmd.summary, usage: cmd.usage })}\n`
         : `${helpFor(cmd)}\n`,
     );
+    return 0;
+  }
+  if (name === 'help') {
+    const target = findCommand(rest[0]);
+    if (!target) throw new ProtocolError(Codes.NOT_FOUND, `unknown command ${rest[0]}`);
+    out.write(`${helpFor(target)}\n`);
     return 0;
   }
   if (name === 'tools') {

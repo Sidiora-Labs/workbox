@@ -224,7 +224,7 @@ reqs       = ["3.1", "3.2", "3.3", "3.4"]
 
 [task.1.5]
 title      = "wb base: status, tools, session, run with evidence"
-status     = "pending"
+status     = "done"
 wave       = 1
 requires   = ["1.4"]
 touches    = ["packages/wb/src/**", "packages/core/src/broker/status.js", "packages/core/src/broker/evidence.js", "packages/core/src/broker/artifacts.js", "packages/core/src/broker/outbox.js", "packages/core/test/integration/wb.test.js"]

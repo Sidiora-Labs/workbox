@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { constants as osConstants } from 'node:os';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { ProtocolError, Codes } from '@workbox/protocol';
@@ -178,6 +179,17 @@ export async function runProcess(argv, opts = {}) {
   };
 }
 
+/**
+ * Shell-convention exit status of a finished child: its own code, or 128 + the signal number when
+ * it died by a signal (SIGKILL -> 137), so a killed command never reads as success.
+ * @param {number|null} code @param {string|null} signal
+ */
+export function exitStatus(code, signal) {
+  if (Number.isInteger(code)) return code;
+  const n = signal ? osConstants.signals[signal] : undefined;
+  return n ? 128 + n : 1;
+}
+
 /** Write bytes into the outbox and hand them to the host CAS. @param {object} ctx @param {Buffer} data @param {{name?: string, kind?: string}} [meta] */
 export async function putArtifactBytes(ctx, data, meta = {}) {
   fs.mkdirSync(ctx.outboxDir ?? OUTBOX_DIR, { recursive: true });
@@ -202,9 +214,11 @@ export async function runCommand(ctx, argv) {
   const artifact = await putArtifactBytes(ctx, log, { name: 'run.log', kind: 'evidence-log' });
   envelope.logSha256 = artifact.sha256;
   const recorded = await ctx.client.request('broker.evidence.record', { envelope });
-  const out = { evidence: { id: recorded.id, ...envelope }, artifact };
-  out.exitCode = exitCode;
-  return out;
+  return {
+    evidence: { id: recorded.id, ...envelope },
+    artifact,
+    exitCode: exitStatus(exitCode, envelope.signal),
+  };
 }
 
 /** @param {object} ctx @param {string[]} argv */
