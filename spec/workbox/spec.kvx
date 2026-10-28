@@ -378,7 +378,7 @@ reqs       = ["7.4"]
 
 [task.4.3]
 title      = "End-to-end and density measurement"
-status     = "pending"
+status     = "done"
 wave       = 4
 requires   = ["3.3", "2.1", "2.2"]
 touches    = ["test/e2e/**", "docs/measurements.md"]

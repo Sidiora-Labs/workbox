@@ -104,7 +104,7 @@
   - [ ] 4.2 Documentation
     - docs/architecture.md, docs/security.md with limits, docs/wb.md generated from wb tools --json by docs/gen-wb.mjs, docs/hyperfide-provider.md mapping each provider operation to an endpoint, docs/operations.md; docs/check.mjs asserts the generated reference is current and every link resolves.
     - _Requirements: 7.4_
-  - [ ] 4.3 End-to-end and density measurement
+  - [x] 4.3 End-to-end and density measurement
     - e2e: through the SDK create a sandbox, run wb run, raise and answer an ask, create and restore a checkpoint, destroy; then create 20 sandboxes concurrently and record create-to-ready p50 and p95 and runner RSS per sandbox into docs/measurements.md.
     - _Requirements: 7.5_
 
