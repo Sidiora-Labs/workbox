@@ -21,3 +21,11 @@ exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.5-verify.log"
 observed    = "spec done reran verify_cmd green but refused: touched packages/cli/src/commands/shell.js has no matching change, because the shell command lives in packages/cli/src/commands.js."
 assumption  = "The [task.2.5] touches entry needs a spec-wording sync to packages/cli/src/commands.js before spec done can pass without --force."
+
+[finding.runner-fs-dead-realpath-loose]
+revision    = "e1d9f5e"
+command     = "node --test --experimental-test-coverage --test-coverage-include=<cli main/local, runner/fs, rootfs, redact> --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90 <cli, runner, rootfs, redact tests>"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/cov-verify.log"
+observed    = "packages/runner/src/fs.js realpathLoose (lines 120-123) and the mustExist:false branch of resolve() are unreachable: every resolve() caller uses the default mustExist=true, so fs.js stops at 12/13 functions (92.31)."
+assumption  = "It is dead code left for a write-to-new-path check that resolve(path.dirname()) now covers; left uncovered and unfixed here, for the fs owner to delete or wire up."
