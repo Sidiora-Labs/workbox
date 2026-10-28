@@ -196,30 +196,45 @@ export class Manager extends EventEmitter {
   }
 
   /**
+   * The sandbox an earlier create with the same idempotency key made, or null when there is none.
+   * The store's contract returns the existing row for a key; the API surface is stricter: reusing
+   * a key with a different profile is a conflict, never a silent substitution, and a replay
+   * answers as the original did, so a create whose launch failed stays a failure and a client
+   * retrying the original 503 never receives the quarantined row as a success.
+   * @param {{idempotencyKey?: string}} input
+   */
+  _replay(input) {
+    if (!input.idempotencyKey) return null;
+    const existing = this.store.getSandboxByIdempotencyKey(input.idempotencyKey);
+    if (!existing || existing.state === States.DELETED) return null;
+    const want = sandboxInput(this.config, input);
+    const same =
+      existing.rootfs === want.rootfs &&
+      existing.runtime === want.runtime &&
+      JSON.stringify(existing.profile ?? {}) === JSON.stringify(want.profile ?? {});
+    if (!same)
+      throw E.conflict('idempotency key already used with a different sandbox profile', {
+        idempotencyKey: input.idempotencyKey,
+        existingId: existing.id,
+      });
+    if (existing.state === States.QUARANTINED && existing.readyAt === null)
+      throw E.quarantined(`sandbox ${existing.id} failed to launch: ${existing.stateReason}`, {
+        id: existing.id,
+        idempotencyKey: input.idempotencyKey,
+        stateReason: existing.stateReason,
+      });
+    return this.get(existing.id);
+  }
+
+  /**
    * Create and launch a sandbox.
    * @param {{name?: string, rootfs?: string, runtime?: string, profile?: object, labels?: object, idempotencyKey?: string, secretRefs?: string[], fromCheckpoint?: string}} [input]
    *   `fromCheckpoint` restores that checkpoint into the new sandbox's upper before launch.
    */
   async create(input = {}) {
     validateCreate(input);
-    if (input.idempotencyKey) {
-      const existing = this.store.getSandboxByIdempotencyKey(input.idempotencyKey);
-      if (existing && existing.state !== States.DELETED) {
-        // The store's contract returns the existing row for a key; the API surface is stricter:
-        // reusing a key with a different profile is a conflict, never a silent substitution.
-        const want = sandboxInput(this.config, input);
-        const same =
-          existing.rootfs === want.rootfs &&
-          existing.runtime === want.runtime &&
-          JSON.stringify(existing.profile ?? {}) === JSON.stringify(want.profile ?? {});
-        if (!same)
-          throw E.conflict('idempotency key already used with a different sandbox profile', {
-            idempotencyKey: input.idempotencyKey,
-            existingId: existing.id,
-          });
-        return this.get(existing.id);
-      }
-    }
+    const replayed = this._replay(input);
+    if (replayed) return replayed;
     if (this.maxSandboxes > 0) {
       const live = this.store
         .listSandboxes({ limit: 1000 })

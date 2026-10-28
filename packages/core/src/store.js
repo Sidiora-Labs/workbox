@@ -171,7 +171,13 @@ export class Store {
    * @param {{clock?: () => number}} [opts]
    */
   static open(dbPath, opts = {}) {
-    if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
+    if (dbPath !== ':memory:') {
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
+      // SQLite gives the -wal and -shm files the database file's mode, so 0600 here covers all three.
+      fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
+      for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`])
+        if (fs.existsSync(f)) fs.chmodSync(f, 0o600);
+    }
     let db;
     try {
       db = new DatabaseSync(dbPath);

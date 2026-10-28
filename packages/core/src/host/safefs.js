@@ -167,7 +167,26 @@ export async function withLockFile(lockPath, fn, opts = {}) {
   }
 }
 
-async function acquireLockFile(lockPath, timeoutMs, pollMs) {
+/**
+ * Take the lockfile `lockPath` for as long as the caller lives, without waiting: a live holder is
+ * E_BUSY at once, a holder whose process is gone is broken. Returns the release function; a
+ * process that dies holding it leaves a lock the next taker breaks.
+ * @param {string} lockPath
+ * @param {string} what names the holder in the E_BUSY message, e.g. "a Workbox engine"
+ * @returns {Promise<() => void>}
+ */
+export async function holdLockFile(lockPath, what) {
+  const token = await acquireLockFile(lockPath, 0, LOCK_POLL_MS, what);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    heldLocks.delete(token);
+    if (readText(lockPath) === token) removeUnder(path.dirname(lockPath), lockPath);
+  };
+}
+
+async function acquireLockFile(lockPath, timeoutMs, pollMs, what = 'another installer') {
   const token = `${process.pid}:${threadId}:${randomBytes(8).toString('hex')}`;
   const deadline = Date.now() + timeoutMs;
   fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o755 });
@@ -181,7 +200,7 @@ async function acquireLockFile(lockPath, timeoutMs, pollMs) {
     }
     if (breakStaleLockFile(lockPath)) continue;
     if (Date.now() >= deadline)
-      throw E.busy(`lock ${lockPath} is held by another installer`, {
+      throw E.busy(`lock ${lockPath} is held by ${what} (${readText(lockPath) ?? 'gone'})`, {
         lock: lockPath,
         holder: readText(lockPath),
         timeoutMs,

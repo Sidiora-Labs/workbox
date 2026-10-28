@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { PROTOCOL_VERSION } from '@workbox/protocol';
 import { parseArgs, readBootFile, main, DEFAULT_BOOT_FILE } from '../../src/main.js';
 import { createLog } from '../../src/log.js';
@@ -75,5 +78,21 @@ test('main keeps the boot file when asked and uses an explicit socket', async ()
   } finally {
     await runner.stop();
     fx.cleanup();
+  }
+});
+
+test('the runner started through a symlink runs, and reports a missing boot file instead of exiting 0', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-link-'));
+  try {
+    const link = path.join(dir, 'runner');
+    fs.symlinkSync(fileURLToPath(new URL('../../src/main.js', import.meta.url)), link);
+    const r = spawnSync(process.execPath, [link, '--boot', path.join(dir, 'absent.json')], {
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(JSON.parse(r.stderr.trim()).msg, 'runner failed to start');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

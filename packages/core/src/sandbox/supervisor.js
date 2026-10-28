@@ -12,6 +12,7 @@ import { buildSeccompProgram } from '../host/seccomp.js';
 import { NET_DEFAULTS } from '../host/netns.js';
 import {
   sandboxDirs,
+  ensureRootAccess,
   prepareDirs,
   writeBootFile,
   hashNonce,
@@ -256,6 +257,7 @@ export class Supervisor extends EventEmitter {
         this.sandbox.name && /^[A-Za-z0-9-]{1,63}$/.test(this.sandbox.name)
           ? this.sandbox.name
           : `wb-${this.id.slice(-8).toLowerCase()}`;
+      ensureRootAccess(this.config.paths.root, this.config.uid.base);
       prepareDirs(this.dirs, {
         uidBase: this.config.uid.base,
         hostname,

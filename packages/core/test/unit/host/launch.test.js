@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   sandboxDirs,
+  ensureRootAccess,
   prepareDirs,
   writeBootFile,
   hashNonce,
@@ -23,6 +24,7 @@ import {
   RUN_MOUNT,
   SANDBOX_PATH,
   LAUNCH_LOG_MAX_BYTES,
+  ROOT_MODE,
 } from '../../../src/host/launch.js';
 import { tmpDir } from '../../helpers/tmp.js';
 
@@ -73,6 +75,44 @@ test('sandboxDirs, prepareDirs and the generated /etc files', () => {
     removeDirs(dirs);
     assert.equal(fs.existsSync(dirs.root), false);
     removeDirs(dirs);
+  } finally {
+    cleanup();
+  }
+});
+
+test('prepareDirs sets every mode itself, so a umask of 077 cannot hide /etc from the box', () => {
+  const { dir, cleanup } = tmpDir();
+  const saved = process.umask(0o077);
+  try {
+    const dirs = sandboxDirs(dir, 'SBX2');
+    prepareDirs(dirs, { uidBase: BASE, hostname: 'box', nameservers: [] });
+    for (const d of [dirs.upper, dirs.work, dirs.merged, dirs.run, dirs.etc])
+      assert.equal(fs.statSync(d).mode & 0o777, 0o755, d);
+    for (const f of ['resolv.conf', 'hosts', 'hostname'])
+      assert.equal(fs.statSync(path.join(dirs.etc, f)).mode & 0o777, 0o644, f);
+    assert.equal(fs.statSync(dirs.root).mode & 0o777, 0o711);
+  } finally {
+    process.umask(saved);
+    cleanup();
+  }
+});
+
+test('ensureRootAccess opens the Workbox root to the mapped root group only', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const root = path.join(dir, 'wbroot');
+    ensureRootAccess(root, BASE);
+    let st = fs.statSync(root);
+    assert.equal(st.mode & 0o7777, ROOT_MODE);
+    assert.equal(ROOT_MODE, 0o710);
+    assert.equal(st.gid, BASE);
+    assert.equal(st.uid, process.getuid());
+    fs.chmodSync(root, 0o700);
+    fs.chownSync(root, process.getuid(), 0);
+    ensureRootAccess(root, BASE + 1);
+    st = fs.statSync(root);
+    assert.equal(st.mode & 0o7777, 0o710);
+    assert.equal(st.gid, BASE + 1);
   } finally {
     cleanup();
   }

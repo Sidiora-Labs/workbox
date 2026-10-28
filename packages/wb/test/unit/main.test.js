@@ -1,5 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { main, exitCodeFor } from '../../src/main.js';
 
 function capture() {
@@ -29,4 +34,16 @@ test('tools/--help/--version work without a runner; unknown command exits 2', as
   assert.equal(await main(['bogus'], { out: o.stream, err: e.stream }), 2);
   assert.equal(exitCodeFor('E_TIMEOUT'), 5);
   assert.equal(exitCodeFor('E_NOT_FOUND'), 3);
+});
+
+test('wb runs when started through a symlink, as a bin link starts it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-link-'));
+  try {
+    const link = path.join(dir, 'wb');
+    fs.symlinkSync(fileURLToPath(new URL('../../src/main.js', import.meta.url)), link);
+    const out = execFileSync(process.execPath, [link, 'tools'], { encoding: 'utf8' });
+    assert.match(out, /^status +Sandbox id/m);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

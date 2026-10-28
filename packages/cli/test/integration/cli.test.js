@@ -296,6 +296,70 @@ test('serve: keys from WORKBOX_TOKEN, WORKBOX_API_KEYS or none; SIGTERM and SIGI
   }
 });
 
+test('one engine per root: serve holds it, a local engine is refused, a symlinked bin runs', async () => {
+  const root = await cliRoot('lock');
+  const { env } = root;
+  const token = 'tok-lock';
+  const s = spawnCli({ ...env, WORKBOX_TOKEN: token }, [
+    'serve',
+    '--port',
+    '0',
+    '--host',
+    '127.0.0.1',
+  ]);
+  const links = tmpDir('workbox-cli-bin-');
+  try {
+    await until(() => /listening on http:\/\/[\d.]+:\d+\n/.test(s.out()));
+    const origin = s.out().match(/listening on (http:\/\/[\d.]+:\d+)/)[1];
+    const remote = ['--server', origin, '--token', token];
+    const created = await cli(env, 'sandbox', 'create', ...remote, '--name', 'held');
+    assert.equal(created.code, 0, created.stderr);
+    assert.equal(created.json.state, 'READY');
+    const id = created.json.id;
+
+    const local = await cli(env, 'sandbox', 'ls');
+    assert.equal(local.code, 4, local.stderr);
+    assert.match(
+      local.stderr,
+      /in use by another engine \(\d+:\d+:[0-9a-f]{16}\); talk to its server with --server URL --token T \(E_BUSY\)\n$/,
+    );
+    const inspect = await cli(env, 'sandbox', 'inspect', id, ...remote);
+    assert.equal(inspect.json.health, 'HEALTHY', 'the refused engine recorded nothing');
+    const doctor = await cli(env, 'doctor', '--json');
+    assert.ok(doctor.json, `doctor takes no engine lock: ${doctor.stderr}`);
+    assert.equal(doctor.code, doctor.json.ok ? 0 : 4);
+
+    const bin = path.join(links.dir, 'workbox');
+    fs.symlinkSync(MAIN, bin);
+    const run = (...args) =>
+      execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', bin, ...args], {
+        env,
+        encoding: 'utf8',
+      });
+    assert.equal(run('--version'), 'workbox 0.1.0-dev\n');
+    assert.deepEqual(
+      JSON.parse(run('sandbox', 'ls', ...remote)).items.map((x) => x.id),
+      [id],
+    );
+
+    s.child.kill('SIGTERM');
+    assert.equal((await s.done).code, 0);
+    const after = await cli(env, 'sandbox', 'ls');
+    assert.equal(after.code, 0, after.stderr);
+    assert.deepEqual(
+      after.json.items.map((x) => [x.id, x.health]),
+      [[id, 'HEALTHY']],
+      'the lock went with the server; the sandbox outlived it',
+    );
+    const removed = await cli(env, 'sandbox', 'rm', id);
+    assert.equal(removed.json.state, 'DELETED');
+  } finally {
+    s.child.kill('SIGKILL');
+    links.cleanup();
+    await root.cleanup();
+  }
+});
+
 test('fleet: two live sandboxes isolated, a killed one observed ABSENT, nonce replay quarantined, destroy failure stays DELETING', async () => {
   const root = await cliRoot('fleet');
   let eng = await openLocalEngine({ env: root.env, reconcile: true });

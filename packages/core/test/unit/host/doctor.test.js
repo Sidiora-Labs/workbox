@@ -16,6 +16,9 @@ import {
   withProbeCgroup,
   nodeCheck,
   proxyLinkCheck,
+  networkDeviceChecks,
+  kernelModule,
+  blockingAncestor,
   MIN_NODE,
   Status,
 } from '../../../src/host/doctor.js';
@@ -93,11 +96,22 @@ test('the real host passes every blocking check', async () => {
       'cgroup',
       'tool.slirp4netns',
       'tool.nft',
+      'tool.xz',
+      'tun',
+      'dummy',
       'node',
       'disk',
     ]) {
       assert.equal(byId[id].status, 'pass', `${id}: ${byId[id].detail}`);
     }
+    const rootStat = fs.statSync(dir);
+    assert.equal(rootStat.mode & 0o7777, 0o710, 'the probe prepared the root as a launch does');
+    assert.equal(rootStat.gid, cfg.uid.base);
+    assert.deepEqual(
+      fs.readdirSync(dir).filter((n) => n.startsWith('.doctor-')),
+      [],
+      'the overlay probe ran under the root and cleaned up',
+    );
     assert.notEqual(byId['proxy-link'].status, 'fail');
     const subuidText = fs.readFileSync('/etc/subuid', 'utf8');
     const shared = subidOverlaps(subuidText, ['0', 'root'], cfg.uid.base, cfg.uid.count);
@@ -144,6 +158,8 @@ test('misconfiguration surfaces as failures with remedies', async () => {
     assert.equal(byId.subuid.status, 'fail');
     assert.match(byId.subuid.remedy, /5000000:65536/);
     assert.equal(byId.overlay.status, 'fail');
+    assert.match(byId.overlay.detail, new RegExp(`Workbox root ${dir} on \\w+`));
+    assert.match(byId.overlay.remedy, /never overlayfs itself/);
     assert.equal(byId.cgroup.status, 'fail');
     for (const c of report.checks.filter((x) => x.status !== 'pass'))
       assert.ok(c.remedy, `${c.id} reports ${c.status} without a remedy`);
@@ -164,11 +180,105 @@ test('misconfiguration surfaces as failures with remedies', async () => {
       { env: { PATH: '/nonexistent' } },
     );
     assert.equal(noTools.checks.find((c) => c.id === 'tool.newuidmap').status, 'fail');
+    const xz = noTools.checks.find((c) => c.id === 'tool.xz');
+    assert.equal(xz.status, 'fail', 'no runtime installed yet, so runtime install needs xz');
+    assert.equal(xz.remedy, 'apt install xz-utils');
     assert.equal(
       noTools.checks.find((c) => c.id === 'tool.tar').remedy,
       'apt install util-linux tar',
     );
     fs.rmdirSync(`/sys/fs/cgroup/workbox-doctor3-${process.pid}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('a Workbox root below a directory the mapped root cannot search fails with that directory named', async () => {
+  const { dir, cleanup } = tmpDir();
+  const parent = `workbox-doctor-anc-${process.pid}`;
+  try {
+    fs.chmodSync(dir, 0o700);
+    const root = path.join(dir, 'nested', 'root');
+    fs.mkdirSync(path.dirname(root), { mode: 0o755 });
+    const cfg = loadConfig({ env: { WORKBOX_ROOT: root, WORKBOX_CGROUP_PARENT: parent } });
+    assert.deepEqual(blockingAncestor(root, cfg.uid.base), {
+      dir,
+      mode: '0700',
+      owner: `${process.getuid()}:${process.getgid()}`,
+    });
+    const report = await runDoctor(cfg);
+    const overlay = report.checks.find((c) => c.id === 'overlay');
+    assert.equal(overlay.status, 'fail');
+    assert.match(overlay.detail, new RegExp(`^${dir} \\(mode 0700, owner \\d+:\\d+\\) keeps`));
+    assert.equal(
+      overlay.remedy,
+      `chmod o+x ${dir}, or move the Workbox root under directories every user can search.`,
+    );
+    fs.chmodSync(dir, 0o750);
+    fs.chownSync(dir, process.getuid(), cfg.uid.base);
+    assert.equal(blockingAncestor(root, cfg.uid.base), null, 'group search is enough');
+    assert.equal(blockingAncestor('/', cfg.uid.base), null);
+  } finally {
+    if (fs.existsSync(`/sys/fs/cgroup/${parent}`)) fs.rmdirSync(`/sys/fs/cgroup/${parent}`);
+    cleanup();
+  }
+});
+
+test('kernel network support is read from fixtures: devices, loaded, built-in and loadable modules', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const release = '6.1.0-test';
+    const kernel = {
+      tun: path.join(dir, 'dev-net-tun'),
+      modules: path.join(dir, 'sys-module'),
+      libModules: path.join(dir, 'lib-modules'),
+    };
+    fs.mkdirSync(path.join(kernel.libModules, release), { recursive: true });
+    fs.mkdirSync(kernel.modules);
+    const ids = (checks) => checks.map((c) => [c.id, c.status]);
+
+    const bare = networkDeviceChecks('egress', kernel, release);
+    assert.deepEqual(ids(bare), [
+      ['tun', 'fail'],
+      ['dummy', 'fail'],
+    ]);
+    assert.match(bare[0].detail, /missing; egress and allowlist sandboxes cannot start/);
+    assert.match(bare[0].remedy, /CONFIG_TUN, or set network.mode to none/);
+    assert.match(bare[1].remedy, /CONFIG_DUMMY/);
+    assert.deepEqual(ids(networkDeviceChecks('none', kernel, release)), [
+      ['tun', 'warn'],
+      ['dummy', 'warn'],
+    ]);
+
+    fs.writeFileSync(kernel.tun, '');
+    fs.writeFileSync(
+      path.join(kernel.libModules, release, 'modules.dep'),
+      'kernel/drivers/net/tun.ko.zst:\nkernel/drivers/net/xt_dummy.ko:\n',
+    );
+    const regular = networkDeviceChecks('allowlist', kernel, release);
+    assert.deepEqual(ids(regular), [
+      ['tun', 'fail'],
+      ['dummy', 'fail'],
+    ]);
+    assert.match(regular[0].detail, /is not a character device/);
+    assert.match(regular[0].remedy, /^modprobe tun \(the kernel has it module\)/);
+    assert.equal(kernelModule('tun', kernel, release), 'module');
+    assert.equal(kernelModule('dummy', kernel, release), null, 'xt_dummy is not dummy');
+
+    fs.writeFileSync(
+      path.join(kernel.libModules, release, 'modules.builtin'),
+      'kernel/drivers/net/dummy.ko\n',
+    );
+    assert.equal(kernelModule('dummy', kernel, release), 'built in');
+    fs.mkdirSync(path.join(kernel.modules, 'dummy'));
+    assert.equal(kernelModule('dummy', kernel, release), 'loaded');
+
+    const real = networkDeviceChecks('egress', { ...kernel, tun: '/dev/null' }, release);
+    assert.deepEqual(ids(real), [
+      ['tun', 'pass'],
+      ['dummy', 'pass'],
+    ]);
+    assert.equal(real[1].detail, 'dummy loaded');
   } finally {
     cleanup();
   }

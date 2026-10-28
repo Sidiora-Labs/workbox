@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { WorkboxClient } from '@workbox/sdk';
 import { openLocalEngine } from './local.js';
@@ -32,14 +33,15 @@ Usage:
 
 Sandbox commands talk to a local engine by default, or to a remote server with --server/--token.
 The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames"}.
-Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable, 5 timeout.`;
+Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable/busy (and doctor on a
+host that is not ready), 5 timeout. Local sandbox commands refuse a root another engine drives.`;
 
 /** @param {unknown} e */
 export function exitCodeForError(e) {
   const code = e?.code ?? '';
   if (code === 'E_INVALID_PARAMS' || code === 'E_PARSE') return 2;
   if (code === 'E_NOT_FOUND') return 3;
-  if (['E_DENIED', 'E_QUARANTINED', 'E_UNAVAILABLE', 'E_CLOSED'].includes(code)) return 4;
+  if (['E_DENIED', 'E_QUARANTINED', 'E_UNAVAILABLE', 'E_CLOSED', 'E_BUSY'].includes(code)) return 4;
   if (code === 'E_TIMEOUT') return 5;
   return 1;
 }
@@ -64,6 +66,7 @@ function printResult(out, result, rest) {
 }
 
 function resultExit(result) {
+  if (result?.ok === false) return 4;
   if (typeof result?.exitCode === 'number' && result.exitCode !== 0) return result.exitCode;
   if (result?.exited && typeof result.exited.code === 'number') return result.exited.code;
   return 0;
@@ -84,7 +87,10 @@ async function buildContext(deps, cmd, rest, io) {
   let ownEngine = false;
   const needsEngine = !client && (cmd in COMMANDS || cmd === 'serve');
   if (needsEngine && !engine) {
-    engine = await openLocalEngine({ reconcile: RECONCILING.has(cmd) });
+    engine = await openLocalEngine({
+      reconcile: RECONCILING.has(cmd),
+      exclusive: RECONCILING.has(cmd),
+    });
     ownEngine = true;
   }
   return { ctx: { engine, client, ...io }, engine, ownEngine };
@@ -129,7 +135,16 @@ export async function main(argv, deps = {}) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/** True when node was started on this module, directly or through a symlink such as a bin link. */
+function isEntryPoint() {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   // Sandboxes launched by this process are detached from it; exit rather than wait on the
   // launch-chain handles that would otherwise keep a one-shot command alive.
   main(process.argv.slice(2)).then((code) => process.exit(code));

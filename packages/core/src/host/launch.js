@@ -76,9 +76,28 @@ export function sandboxDirs(sandboxesDir, id) {
   };
 }
 
+/** Mode of the Workbox root: host root has full access, the mapped root's group may only traverse. */
+export const ROOT_MODE = 0o710;
+
+/**
+ * Make the Workbox root traversable by a sandbox's mapped root and by nobody else: mode 0710 with
+ * group `gid` (the uid base, the mapped root's host gid). The overlay is mounted as the mapped
+ * root, which must search every ancestor of upper and work; a 0700 root makes every launch fail
+ * with EACCES, and 0711 would let any host user reach the sandbox directories.
+ * @param {string} root
+ * @param {number} gid
+ */
+export function ensureRootAccess(root, gid) {
+  fs.mkdirSync(root, { recursive: true, mode: ROOT_MODE });
+  const st = fs.statSync(root);
+  if (st.gid !== gid) fs.chownSync(root, st.uid, gid);
+  if ((st.mode & 0o7777) !== ROOT_MODE) fs.chmodSync(root, ROOT_MODE);
+}
+
 /**
  * Create the per-sandbox directories owned by the mapped root (uid base) and write the files
- * bwrap binds over /etc. Idempotent for an existing sandbox.
+ * bwrap binds over /etc. Idempotent for an existing sandbox. Every mode is set explicitly, so a
+ * restrictive daemon umask cannot hide them from the mapped root.
  * @param {SandboxDirs} dirs
  * @param {{uidBase: number, hostname: string, nameservers: string[], address?: string}} opts
  */
@@ -98,18 +117,24 @@ export function prepareDirs(dirs, opts) {
     path.join(dirs.run, 'inbox'),
   ]) {
     fs.mkdirSync(d, { recursive: true, mode: 0o755 });
+    fs.chmodSync(d, 0o755);
     fs.chownSync(d, opts.uidBase, opts.uidBase);
   }
   fs.mkdirSync(dirs.etc, { recursive: true, mode: 0o755 });
+  fs.chmodSync(dirs.etc, 0o755);
   const resolv = opts.nameservers.map((ns) => `nameserver ${ns}\n`).join('') || '# no network\n';
-  fs.writeFileSync(path.join(dirs.etc, 'resolv.conf'), `${resolv}options ndots:0\n`, {
-    mode: 0o644,
-  });
   const hosts = ['127.0.0.1\tlocalhost', '::1\tlocalhost ip6-localhost ip6-loopback'];
   if (opts.address) hosts.push(`${opts.address}\t${opts.hostname}`);
   else hosts.push(`127.0.1.1\t${opts.hostname}`);
-  fs.writeFileSync(path.join(dirs.etc, 'hosts'), `${hosts.join('\n')}\n`, { mode: 0o644 });
-  fs.writeFileSync(path.join(dirs.etc, 'hostname'), `${opts.hostname}\n`, { mode: 0o644 });
+  for (const [name, body] of [
+    ['resolv.conf', `${resolv}options ndots:0\n`],
+    ['hosts', `${hosts.join('\n')}\n`],
+    ['hostname', `${opts.hostname}\n`],
+  ]) {
+    const file = path.join(dirs.etc, name);
+    fs.writeFileSync(file, body, { mode: 0o644 });
+    fs.chmodSync(file, 0o644);
+  }
 }
 
 /**

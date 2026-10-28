@@ -6,16 +6,21 @@ Procedures for running Workbox on one Linux host. `workbox` below is the operato
 
 ## Install
 
-1. Run `sh deploy/install.sh`. It creates the Workbox root (`/var/lib/workbox`, mode 0700, or
-   `WORKBOX_ROOT`) and `/etc/workbox`, adds `root:300000:65536` to `/etc/subuid` and
-   `/etc/subgid`, enables unprivileged user namespaces where the sysctl exists, and creates the
-   `workbox` cgroup parent with the cpu, memory and pids controllers delegated. It is safe to run
+1. Run `sh deploy/install.sh`. It creates the Workbox root (`/var/lib/workbox`, or
+   `WORKBOX_ROOT`; mode 0710 with the uid base as its group, so a sandbox's mapped root can reach
+   its overlay layers and no other host user can enter; the daemon restores this mode before every
+   launch) and `/etc/workbox` (mode 0700), adds `root:300000:65536` to `/etc/subuid` and
+   `/etc/subgid`, and creates the `workbox` cgroup parent with the cpu, memory and pids
+   controllers delegated. It changes no sysctl: the daemon runs as root, so AppArmor's
+   unprivileged user namespace restriction does not apply to it. It is safe to run
    again.
 2. Run `workbox doctor` (or `workbox doctor --json`). It reports every host prerequisite as pass
    or fail with a remedy: privileges, kernel, bubblewrap, unshare, the tools the launch chain and
-   network need, user namespaces, cgroup v2 controllers, overlayfs inside a user namespace, Docker
-   for rootfs builds, and whether a rootfs and a runtime are installed. Fix every failure before
-   creating sandboxes.
+   network need (including `/dev/net/tun` and the kernel's dummy link type), `xz` for runtime
+   installs, user namespaces, cgroup v2 controllers, overlayfs inside a user namespace mounted
+   under the Workbox root itself (which must not be on overlayfs), Docker for rootfs builds, and
+   whether a rootfs and a runtime are installed. It exits 0 on a ready host and 4 otherwise. Fix
+   every failure before creating sandboxes.
 3. `workbox rootfs build minimal` builds the base rootfs (needs Docker). `workbox rootfs list`
    shows installed ones with their digests.
 4. `workbox runtime install` installs Node 22 and the in-box packages (`--node-version v`,
@@ -40,7 +45,11 @@ WORKBOX_TOKEN=$(openssl rand -hex 24) workbox serve --host 127.0.0.1 --port 8790
 - `deploy/workbox.service` runs `serve` under systemd with `EnvironmentFile=-/etc/workbox/workbox.env`.
 
 Drive sandboxes through the server (`--server http://127.0.0.1:8790 --token ...`, the SDK or MCP).
-The process that creates a sandbox owns its proxy and slirp4netns. A local
+One engine drives a Workbox root at a time: `serve` and the local `workbox sandbox` and `workbox
+shell` commands hold `<root>/.engine.lock` while they run, so a local sandbox command next to a
+running server exits 4 (`E_BUSY`) and names the holder instead of attaching to the server's
+sandboxes. `doctor`, `rootfs`, `runtime` and `audit` take no lock. A holder that died leaves a lock
+the next engine breaks. The process that creates a sandbox owns its proxy and slirp4netns. A local
 `workbox sandbox create` without `--server` exits right after the sandbox is ready, and an
 `egress` or `allowlist` sandbox created that way has no outside network from then on (see
 [the stated limits](security.md#stated-limits)).

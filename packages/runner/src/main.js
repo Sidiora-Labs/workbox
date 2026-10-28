@@ -79,7 +79,16 @@ export async function main(argv, deps = {}) {
   return runner;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/** True when node was started on this module, directly or through a symlink such as a bin link. */
+function isEntryPoint() {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   main(process.argv.slice(2)).catch((e) => {
     process.stderr.write(
       `${JSON.stringify({ level: 'error', msg: 'runner failed to start', error: e.message })}\n`,

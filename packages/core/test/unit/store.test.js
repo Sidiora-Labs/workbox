@@ -37,6 +37,30 @@ test('open creates the directory, migrates once and is idempotent', () => {
   }
 });
 
+test('the database, its WAL and shared-memory files are private to the daemon', () => {
+  const t = tmpDir();
+  const file = path.join(t.dir, 'workbox.db');
+  try {
+    const first = Store.open(file);
+    first.createSandbox(base);
+    first.close();
+    for (const f of [file, `${file}-wal`, `${file}-shm`])
+      if (fs.existsSync(f)) fs.chmodSync(f, 0o644);
+    const store = Store.open(file);
+    try {
+      store.createSandbox(base);
+      for (const f of [file, `${file}-wal`, `${file}-shm`]) {
+        assert.ok(fs.existsSync(f), f);
+        assert.equal(fs.statSync(f).mode & 0o777, 0o600, f);
+      }
+    } finally {
+      store.close();
+    }
+  } finally {
+    t.cleanup();
+  }
+});
+
 test('sandbox create, get, idempotency and listing with cursors', () => {
   const { store, clock, cleanup } = openTmp();
   try {

@@ -137,6 +137,29 @@ test('the sdk drives every route of a real server over a real engine', async (t)
       },
     );
 
+    await t.test(
+      'a create whose launch fails is a failure on its retries and replays',
+      async () => {
+        const input = {
+          name: 'sdk-broken',
+          idempotencyKey: `sdk-broken-${process.pid}`,
+          profile: { limits: { pids: 3 } },
+        };
+        const failed = (e) =>
+          e instanceof WorkboxApiError &&
+          e.code === 'E_QUARANTINED' &&
+          e.status === 423 &&
+          /failed to launch: launch failed/.test(e.message);
+        await assert.rejects(admin.createSandbox(input), failed);
+        await assert.rejects(admin.createSandbox(input), failed);
+        const all = await reader.listSandboxes({ limit: 100 });
+        const broken = all.items.filter((s) => s.name === 'sdk-broken');
+        assert.equal(broken.length, 1, 'the retries made no second sandbox');
+        assert.equal(broken[0].state, 'QUARANTINED');
+        assert.equal((await admin.sandbox(broken[0].id).destroy()).state, 'DELETED');
+      },
+    );
+
     await t.test('exec runs in the box; a read key gets a 403 WorkboxApiError', async () => {
       await assert.rejects(
         reader.sandbox(a.id).exec({ argv: ['true'] }),

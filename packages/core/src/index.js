@@ -118,6 +118,7 @@ export { SandboxNet, slirpArgv, proxyEnv, NET_DEFAULTS } from './host/netns.js';
 export { createProxy, hostAllowed, normalizeAllowEntry, parseTarget } from './host/proxy.js';
 export {
   sandboxDirs,
+  ensureRootAccess,
   prepareDirs,
   writeBootFile,
   readHostToken,
@@ -135,4 +136,6 @@ export {
   RUN_MOUNT,
   RUNNER_SOCKET,
   SANDBOX_PATH,
+  ROOT_MODE,
 } from './host/launch.js';
+export { holdLockFile, lockPathFor } from './host/safefs.js';

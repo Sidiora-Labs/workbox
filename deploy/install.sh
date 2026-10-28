@@ -1,7 +1,7 @@
 #!/bin/sh
-# Prepare a host for the Workbox daemon, idempotently: the Workbox root, the config directory,
-# the daemon user's subordinate uid/gid range and the cgroup v2 parent with cpu, memory and pids
-# delegated. A second run changes nothing. Run as root.
+# Prepare a host for the Workbox daemon, idempotently: the Workbox root (0710, group = uid base),
+# the config directory (0700), the daemon user's subordinate uid/gid range and the cgroup v2 parent
+# with cpu, memory and pids delegated. A second run changes nothing. Run as root.
 #
 # Usage: install.sh [--root DIR] [--etc DIR] [--cgroup-root DIR] [--cgroup-parent NAME]
 #                   [--subuid FILE] [--subgid FILE] [--user NAME] [--uid-base N] [--uid-count N]
@@ -79,6 +79,22 @@ private_dir() {
   echo "$2 $1: $state (mode 700)"
 }
 
+# The Workbox root: 0710 with the uid base as group, so a sandbox's mapped root (host uid and gid
+# base) can traverse it to mount its overlay and no other host user can enter it.
+root_dir() {
+  if [ -d "$1" ]; then
+    state=present
+  else
+    change mkdir -p "$1"
+    state=created
+  fi
+  if [ "$dry" = 0 ]; then
+    [ "$(stat -c %g "$1")" = "$base" ] || chgrp "$base" "$1"
+    [ "$(stat -c %a "$1")" = 710 ] || chmod 710 "$1"
+  fi
+  echo "root $1: $state (mode 710, group $base)"
+}
+
 # The user's own entry covering base..base+count-1, if any.
 covering() {
   [ -f "$1" ] || return 0
@@ -151,7 +167,7 @@ cgroup_parent() {
   fi
 }
 
-private_dir "$root" root
+root_dir "$root"
 private_dir "$etc" etc
 subid subuid "$subuid"
 subid subgid "$subgid"

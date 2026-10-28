@@ -19,6 +19,8 @@ judge() {
 }
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/workbox-deploy-check.XXXXXX")"
+# The Workbox root below is reached by a sandbox's mapped root, so its ancestors must be searchable.
+chmod 711 "$tmp"
 cgroot=/sys/fs/cgroup
 parent="workbox-deploy-check-$$"
 cleanup() {
@@ -70,6 +72,9 @@ fi
 # --- server Dockerfile --------------------------------------------------------------------------
 judge "Dockerfile documents privileged mode" grep -q 'PRIVILEGED MODE REQUIRED' "$dockerfile"
 judge "Dockerfile shows the --privileged --cgroupns=host run line" grep -q -- 'docker run --privileged --cgroupns=host' "$dockerfile"
+default_ids="$(node --input-type=module -e "import('./packages/core/src/config.js').then((m) => console.log(\`root:\${m.DEFAULTS.uid.base}:\${m.DEFAULTS.uid.count}\`))")"
+judge "Dockerfile subuid and subgid carry the config default range $default_ids" \
+  test "$(grep -c "echo '$default_ids' >> /etc/sub[ug]id" "$dockerfile")" = 2
 echo "note  the server container must run with --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw"
 if command -v docker >/dev/null 2>&1; then
   if docker build --check -f "$dockerfile" . >"$tmp/docker-check.log" 2>&1; then
@@ -98,7 +103,8 @@ for f in subuid subgid; do
   grep -Ev '^(root|0):' "$tmp/$f" >"$tmp/$f.bare" || true
 done
 judge "install.sh first run (root, etc, subid copies, cgroup $parent)" install_run "$tmp/subuid" "$tmp/subgid" "$tmp/install1.log"
-judge "install.sh root and etc are mode 700" test "$(stat -c %a "$tmp/root")$(stat -c %a "$tmp/etc")" = 700700
+judge "install.sh root is 0710 with the uid base as group, etc is 0700" \
+  test "$(stat -c %a:%g "$tmp/root") $(stat -c %a "$tmp/etc")" = "710:${WORKBOX_UID_BASE:-300000} 700"
 judge "install.sh cgroup parent delegates cpu memory pids" grep -qE 'cpu.*memory.*pids' "$cgroot/$parent/cgroup.subtree_control"
 copies_unchanged() { cmp -s "$tmp/subuid" /etc/subuid && cmp -s "$tmp/subgid" /etc/subgid; }
 rerun_quiet() { ! grep -Eq 'created|appended' "$tmp/install3.log" "$tmp/install4.log"; }
@@ -131,17 +137,21 @@ judge "real /etc/subuid and /etc/subgid untouched" test "$real_before" = "$(real
 
 # --- workbox doctor on the prepared prefix ------------------------------------------------------
 links_before="$(ip -br link 2>&1)"
-if WORKBOX_ROOT="$tmp/root" WORKBOX_CGROUP_ROOT="$cgroot" WORKBOX_CGROUP_PARENT="$parent" \
-  node packages/cli/src/main.js doctor --json >"$tmp/doctor.json" 2>"$tmp/doctor.err"; then
-  ok "workbox doctor --json ran (root $tmp/root, cgroup $parent)"
+# doctor exits 0 on a ready host and 4 on one that is not; both print the full JSON report.
+doctor_exit=0
+WORKBOX_ROOT="$tmp/root" WORKBOX_CGROUP_ROOT="$cgroot" WORKBOX_CGROUP_PARENT="$parent" \
+  node packages/cli/src/main.js doctor --json >"$tmp/doctor.json" 2>"$tmp/doctor.err" || doctor_exit=$?
+if [ "$doctor_exit" = 0 ] || [ "$doctor_exit" = 4 ]; then
+  ok "workbox doctor --json ran and exited $doctor_exit (root $tmp/root, cgroup $parent)"
 else
-  bad "workbox doctor --json exited $?: $(tail -c 300 "$tmp/doctor.err")"
+  bad "workbox doctor --json exited $doctor_exit: $(tail -c 300 "$tmp/doctor.err")"
 fi
 node --input-type=module - "$tmp/doctor.json" <<'EOF'
 import fs from 'node:fs';
 const required = ['privileges', 'kernel', 'node', 'bwrap', 'unshare', 'tool.newuidmap', 'tool.newgidmap',
   'tool.nsenter', 'tool.setpriv', 'subuid', 'subgid', 'subuid.exclusive', 'subgid.exclusive', 'userns',
-  'overlay', 'cgroup', 'tool.slirp4netns', 'tool.nft', 'proxy-link', 'docker', 'rootfs', 'runtime', 'disk'];
+  'overlay', 'cgroup', 'tool.slirp4netns', 'tool.nft', 'tool.xz', 'tun', 'dummy', 'proxy-link', 'docker',
+  'rootfs', 'runtime', 'disk'];
 let report;
 try {
   report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));

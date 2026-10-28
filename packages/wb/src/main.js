@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { ProtocolError, Codes } from '@workbox/protocol';
 import { WbClient } from './client.js';
@@ -104,7 +105,16 @@ export async function main(argv, deps = {}) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/** True when node was started on this module, directly or through a symlink such as a bin link. */
+function isEntryPoint() {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   main(process.argv.slice(2)).then((code) => {
     process.exitCode = code;
   });

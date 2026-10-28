@@ -33,7 +33,7 @@ test('every error code family maps to its documented exit code', () => {
   assert.equal(exit('E_INVALID_PARAMS'), 2);
   assert.equal(exit('E_PARSE'), 2);
   assert.equal(exit('E_NOT_FOUND'), 3);
-  for (const code of ['E_DENIED', 'E_QUARANTINED', 'E_UNAVAILABLE', 'E_CLOSED'])
+  for (const code of ['E_DENIED', 'E_QUARANTINED', 'E_UNAVAILABLE', 'E_CLOSED', 'E_BUSY'])
     assert.equal(exit(code), 4, code);
   assert.equal(exit('E_TIMEOUT'), 5);
   assert.equal(exit('E_CONFLICT'), 1);
@@ -81,6 +81,33 @@ test('a supplied local engine serves commands and stays open; codeless errors ex
   } finally {
     cleanup();
   }
+});
+
+test('doctor on a host that is not ready prints its report and exits 4', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-cli-doctor-'));
+  const saved = { ...process.env };
+  t.after(() => {
+    for (const k of ['WORKBOX_ROOT', 'WORKBOX_UID_BASE', 'WORKBOX_CGROUP_PARENT'])
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    fs.rmSync(dir, { recursive: true, force: true });
+    const parent = `/sys/fs/cgroup/wb-cli-doctor-${process.pid}`;
+    if (fs.existsSync(parent)) fs.rmdirSync(parent);
+  });
+  Object.assign(process.env, {
+    WORKBOX_ROOT: dir,
+    WORKBOX_UID_BASE: '5000000',
+    WORKBOX_CGROUP_PARENT: `wb-cli-doctor-${process.pid}`,
+  });
+  const o = capture();
+  const e = capture();
+  assert.equal(await main(['doctor', '--json'], { out: o.stream, err: e.stream }), 4, e.text());
+  const report = JSON.parse(o.text());
+  assert.equal(report.ok, false);
+  assert.equal(report.checks.find((c) => c.id === 'subuid').status, 'fail');
+  const o2 = capture();
+  assert.equal(await main(['doctor'], { out: o2.stream, err: e.stream }), 4);
+  assert.match(o2.text(), /doctor: host is NOT ready\n$/);
 });
 
 test('remote mode falls back to WORKBOX_TOKEN, and to no token at all', async () => {

@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { CgroupManager, REQUIRED_CONTROLLERS } from './cgroup.js';
 import { removeUnder } from './safefs.js';
 import { PROXY_LINK, NET_DEFAULTS, proxyLinkArgv } from './netns.js';
+import { ensureRootAccess } from './launch.js';
 
 export const Status = Object.freeze({ PASS: 'pass', FAIL: 'fail', WARN: 'warn' });
 
@@ -129,10 +130,18 @@ const check = (id, title, status, detail, remedy) => ({
   ...(remedy ? { remedy } : {}),
 });
 
+/** Where the kernel reports its devices and modules; tests point these at fixtures. */
+export const KERNEL_PATHS = Object.freeze({
+  tun: '/dev/net/tun',
+  modules: '/sys/module',
+  libModules: '/lib/modules',
+});
+
 /**
  * Probe every host prerequisite. Fails are blocking; warns are degraded or optional features.
+ * The overlay probe runs under the Workbox root, which it prepares as the daemon does.
  * @param {import('../config.js').Config} config
- * @param {{uid?: number, release?: string, env?: NodeJS.ProcessEnv, nodeVersion?: string}} [opts]
+ * @param {{uid?: number, release?: string, env?: NodeJS.ProcessEnv, nodeVersion?: string, kernel?: Partial<typeof KERNEL_PATHS>}} [opts]
  * @returns {Promise<{ok: boolean, checks: Check[]}>}
  */
 export async function runDoctor(config, opts = {}) {
@@ -141,7 +150,9 @@ export async function runDoctor(config, opts = {}) {
     release: opts.release ?? os.release(),
     env: opts.env ?? process.env,
     node: opts.nodeVersion ?? process.versions.node,
+    kernel: { ...KERNEL_PATHS, ...opts.kernel },
   };
+  const assets = assetChecks(config);
   const checks = [
     privilegesCheck(ctx.uid),
     kernelCheck(ctx.release),
@@ -149,15 +160,17 @@ export async function runDoctor(config, opts = {}) {
     await bwrapCheck(),
     await unshareCheck(),
     ...toolChecks(ctx.env),
+    xzCheck(ctx.env, assets.find((c) => c.id === 'runtime').status === Status.PASS),
     ...subidChecks('subuid', '/etc/subuid', config.uid, ctx.uid),
     ...subidChecks('subgid', '/etc/subgid', config.uid, ctx.uid),
     usernsCheck(),
-    await overlayProbe(config.uid),
+    await overlayProbe(config.paths.root, config.uid),
     await cgroupCheck(config),
     ...(await networkToolChecks(config.network.mode)),
+    ...networkDeviceChecks(config.network.mode, ctx.kernel, ctx.release),
     await proxyLinkCheck(),
     await dockerCheck(),
-    ...assetChecks(config),
+    ...assets,
     diskCheck(config.paths.root),
   ];
   return { ok: checks.every((c) => c.status !== Status.FAIL), checks };
@@ -298,6 +311,98 @@ async function networkToolChecks(mode) {
 }
 
 /**
+ * xz unpacks the Node tarball `workbox runtime install` fetches; with a runtime installed only a
+ * later install needs it.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {boolean} runtimeInstalled
+ */
+function xzCheck(env, runtimeInstalled) {
+  const found = findInPath('xz', env.PATH);
+  if (found) return check('tool.xz', 'xz present', Status.PASS, found);
+  return check(
+    'tool.xz',
+    'xz present',
+    runtimeInstalled ? Status.WARN : Status.FAIL,
+    'not in PATH; workbox runtime install extracts the Node .tar.xz with it',
+    'apt install xz-utils',
+  );
+}
+
+/**
+ * How the running kernel provides module `name`: 'loaded' (or built in with parameters) when
+ * /sys/module has it, 'built in' or 'module' from /lib/modules/<release>, else null. Read-only.
+ * @param {string} name
+ * @param {typeof KERNEL_PATHS} kernel
+ * @param {string} release
+ */
+export function kernelModule(name, kernel, release) {
+  if (fs.existsSync(path.join(kernel.modules, name))) return 'loaded';
+  const dir = path.join(kernel.libModules, release);
+  const ko = new RegExp(`(^|/)${name}\\.ko(\\.[a-z]+)?$`);
+  const listed = (file) => {
+    try {
+      return fs
+        .readFileSync(path.join(dir, file), 'utf8')
+        .split('\n')
+        .some((line) => ko.test(line.split(':')[0].trim()));
+    } catch {
+      return false;
+    }
+  };
+  if (listed('modules.builtin')) return 'built in';
+  if (listed('modules.dep')) return 'module';
+  return null;
+}
+
+/**
+ * Kernel support the egress and allowlist modes need beyond their tools: /dev/net/tun for
+ * slirp4netns and the dummy link type for the host-only proxy link. Read-only: nothing is opened,
+ * loaded or created.
+ * @param {'none'|'egress'|'allowlist'} mode the configured default network mode
+ * @param {typeof KERNEL_PATHS} kernel
+ * @param {string} release
+ * @returns {Check[]}
+ */
+export function networkDeviceChecks(mode, kernel, release) {
+  const missing = mode === 'none' ? Status.WARN : Status.FAIL;
+  const fallback = 'or set network.mode to none and use only network-less sandboxes';
+  let tun = null;
+  try {
+    tun = fs.statSync(kernel.tun);
+  } catch {
+    tun = null;
+  }
+  const tunModule = kernelModule('tun', kernel, release);
+  const tunCheck = tun?.isCharacterDevice()
+    ? check(
+        'tun',
+        '/dev/net/tun for slirp4netns',
+        Status.PASS,
+        `${kernel.tun} is a character device`,
+      )
+    : check(
+        'tun',
+        '/dev/net/tun for slirp4netns',
+        missing,
+        `${kernel.tun} ${tun ? 'is not a character device' : 'missing'}; egress and allowlist sandboxes cannot start`,
+        tunModule
+          ? `modprobe tun (the kernel has it ${tunModule}), ${fallback}`
+          : `Use a kernel built with CONFIG_TUN, ${fallback}`,
+      );
+  const dummy = kernelModule('dummy', kernel, release);
+  const dummyCheck = dummy
+    ? check('dummy', 'dummy link type for the proxy link', Status.PASS, `dummy ${dummy}`)
+    : check(
+        'dummy',
+        'dummy link type for the proxy link',
+        missing,
+        `no dummy driver in ${kernel.modules} or ${path.join(kernel.libModules, release)}; the proxy link ${PROXY_LINK} cannot be created`,
+        `Use a kernel built with CONFIG_DUMMY, ${fallback}`,
+      );
+  return [tunCheck, dummyCheck];
+}
+
+/**
  * Read-only probe of the host-only dummy link the sandbox proxies bind to: reports whether
  * `link` exists and carries `address`, and never creates or changes it.
  * @param {string} [link]
@@ -428,11 +533,72 @@ function coverageCheck(id, file, uidCfg, text, identities) {
       );
 }
 
-async function overlayProbe(uidCfg) {
+/** statfs magic numbers of the filesystems the overlay probe names in its detail. */
+const FS_TYPES = new Map([
+  [0xef53, 'ext4'],
+  [0x58465342, 'xfs'],
+  [0x01021994, 'tmpfs'],
+  [0x9123683e, 'btrfs'],
+  [0x794c7630, 'overlayfs'],
+  [0x65735546, 'fuse'],
+]);
+
+function fsTypeName(dir) {
+  try {
+    const type = Number(fs.statfsSync(dir).type);
+    return FS_TYPES.get(type) ?? `0x${type.toString(16)}`;
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * The first ancestor of `dir` the mapped root (host uid and gid `base`) cannot search, or null.
+ * The overlay is mounted as the mapped root, so every directory above the Workbox root must let
+ * it through.
+ * @param {string} dir
+ * @param {number} base
+ * @returns {{dir: string, mode: string, owner: string}|null}
+ */
+export function blockingAncestor(dir, base) {
+  for (let d = path.dirname(path.resolve(dir)); ; d = path.dirname(d)) {
+    const st = fs.statSync(d);
+    const searchable =
+      st.mode & 0o001 ||
+      (st.gid === base && st.mode & 0o010) ||
+      (st.uid === base && st.mode & 0o100);
+    if (!searchable)
+      return {
+        dir: d,
+        mode: (st.mode & 0o7777).toString(8).padStart(4, '0'),
+        owner: `${st.uid}:${st.gid}`,
+      };
+    if (d === path.dirname(d)) return null;
+  }
+}
+
+/**
+ * Mount an overlay the way a launch does: as the mapped root, with every layer under the Workbox
+ * root, so a root the mapped root cannot traverse or a filesystem that rejects being an upper
+ * layer fails here rather than at the first sandbox.
+ * @param {string} root
+ * @param {{base: number, count: number}} uidCfg
+ */
+async function overlayProbe(root, uidCfg) {
   const title = 'Overlayfs inside a range-mapped user namespace';
   let dir;
   try {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbox-doctor-'));
+    ensureRootAccess(root, uidCfg.base);
+    const blocked = blockingAncestor(root, uidCfg.base);
+    if (blocked)
+      return check(
+        'overlay',
+        title,
+        Status.FAIL,
+        `${blocked.dir} (mode ${blocked.mode}, owner ${blocked.owner}) keeps the mapped root (uid ${uidCfg.base}) from reaching the Workbox root ${root}`,
+        `chmod o+x ${blocked.dir}, or move the Workbox root under directories every user can search.`,
+      );
+    dir = fs.mkdtempSync(path.join(root, '.doctor-'));
     for (const d of ['lower', 'upper', 'work', 'merged']) fs.mkdirSync(path.join(dir, d));
     fs.writeFileSync(path.join(dir, 'lower', 'probe'), 'ok');
     for (const d of ['', 'lower', 'lower/probe', 'upper', 'work', 'merged'])
@@ -463,8 +629,8 @@ async function overlayProbe(uidCfg) {
       'overlay',
       title,
       Status.FAIL,
-      (r.stderr || r.error || `exit ${r.code}`).trim(),
-      'Check subuid/subgid coverage, kernel >= 5.11 and that the filesystem under the Workbox root supports overlayfs (ext4 or xfs with ftype=1).',
+      `${(r.stderr || r.error || `exit ${r.code}`).trim()} (Workbox root ${root} on ${fsTypeName(root)})`,
+      'Check subuid/subgid coverage and kernel >= 5.11, and put the Workbox root on a filesystem overlayfs accepts as an upper layer: ext4, xfs with ftype=1 or tmpfs, never overlayfs itself.',
     );
   } catch (e) {
     return check(
@@ -472,10 +638,10 @@ async function overlayProbe(uidCfg) {
       title,
       Status.FAIL,
       e.message,
-      'Run as root with a writable temp directory.',
+      `Run as root with the Workbox root ${root} writable.`,
     );
   } finally {
-    if (dir) removeUnder(path.dirname(dir), dir);
+    if (dir) removeUnder(root, dir);
   }
 }
 

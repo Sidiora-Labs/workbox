@@ -31,9 +31,24 @@ test('launch -> READY with the exact isolation profile, then destroy leaves noth
     const sup = new Supervisor({ ...eng, sandbox: row });
     const states = [];
     sup.on('state', (s) => states.push(s.state));
+    // A 0700 root (what install.sh used to make) and a 077 daemon umask must not stop a launch.
+    fs.chmodSync(eng.dir, 0o700);
+    const savedUmask = process.umask(0o077);
     const t0 = Date.now();
-    const ready = await sup.launch();
+    let ready;
+    try {
+      ready = await sup.launch();
+    } finally {
+      process.umask(savedUmask);
+    }
     const bootMs = Date.now() - t0;
+    const rootStat = fs.statSync(eng.dir);
+    assert.equal(
+      rootStat.mode & 0o7777,
+      0o710,
+      'root is traversable by the mapped root group only',
+    );
+    assert.equal(rootStat.gid, eng.config.uid.base);
     assert.equal(ready.state, 'READY');
     assert.equal(ready.health, 'HEALTHY');
     assert.deepEqual(states, ['PROVISIONING', 'BOOTSTRAPPING', 'READY']);
