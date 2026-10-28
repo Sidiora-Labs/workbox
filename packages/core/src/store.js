@@ -1,12 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { newId } from '@workbox/protocol';
-import { E } from './errors.js';
+import { E, WorkboxError } from './errors.js';
 import { States, Health, assertTransition } from './sandbox/state.js';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+
+const TOKEN_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const MAX_PAGE = 1000;
 
 const MIGRATIONS = [
   `
@@ -143,29 +146,49 @@ const MIGRATIONS = [
     PRIMARY KEY (sandbox_id, ref)
   );
   `,
+  // v2: lease tokens are kept only as SHA-256 digests. Rows the broker already hashed keep their
+  // value; plaintext rows written directly through the v1 store are replaced by their digest.
+  (db) => {
+    const update = db.prepare(`UPDATE leases SET token = ? WHERE sandbox_id = ?`);
+    for (const r of db.prepare(`SELECT sandbox_id, token FROM leases`).all())
+      if (!TOKEN_DIGEST.test(r.token)) update.run(tokenDigest(r.token), r.sandbox_id);
+  },
 ];
 
 const SANDBOX_COLS = `id, name, state, state_reason, health, rootfs, runtime, profile, labels, idempotency_key, pid, boot_id, cgroup, version, created_at, updated_at, ready_at, deleted_at, last_observed_at`;
 
 /**
  * Durable state for the host: SQLite in WAL mode, every mutation in a transaction.
- * Row objects are camelCase with JSON columns parsed.
+ * Row objects are camelCase with JSON columns parsed; a JSON column that does not parse is an
+ * E_INTERNAL naming its table and row. Lease tokens are stored as SHA-256 digests and every
+ * secret comparison is constant-time.
  */
 export class Store {
   /**
+   * Open (creating if needed), run `PRAGMA integrity_check` and migrate. A file that is not a
+   * database or fails the check is refused with E_INTERNAL; a newer schema with E_STATE.
    * @param {string} dbPath file path, or ':memory:'
    * @param {{clock?: () => number}} [opts]
    */
   static open(dbPath, opts = {}) {
     if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
-    const db = new DatabaseSync(dbPath);
-    db.exec('PRAGMA journal_mode = WAL');
-    db.exec('PRAGMA synchronous = NORMAL');
-    db.exec('PRAGMA foreign_keys = ON');
-    db.exec('PRAGMA busy_timeout = 5000');
-    const store = new Store(db, dbPath, opts.clock ?? Date.now);
-    store.migrate();
-    return store;
+    let db;
+    try {
+      db = new DatabaseSync(dbPath);
+      db.exec('PRAGMA journal_mode = WAL');
+      db.exec('PRAGMA synchronous = NORMAL');
+      db.exec('PRAGMA foreign_keys = ON');
+      db.exec('PRAGMA busy_timeout = 5000');
+      db.exec('PRAGMA secure_delete = ON');
+      checkIntegrity(db, dbPath);
+      const store = new Store(db, dbPath, opts.clock ?? Date.now);
+      store.migrate();
+      return store;
+    } catch (e) {
+      db?.close();
+      if (e instanceof WorkboxError) throw e;
+      throw E.internal(`store ${dbPath} cannot be opened: ${e.message}`, { path: dbPath });
+    }
   }
 
   /**
@@ -184,8 +207,12 @@ export class Store {
     this.db.close();
   }
 
-  /** Apply pending migrations; safe to call repeatedly. */
-  migrate() {
+  /**
+   * Apply pending migrations; safe to call repeatedly. After a migration the WAL is checkpointed,
+   * so values a migration rewrote (with secure_delete on) are gone from the files on disk.
+   * @param {number} [target] stop at this schema version (default and maximum SCHEMA_VERSION)
+   */
+  migrate(target = SCHEMA_VERSION) {
     const hasMeta = this.db
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'meta'`)
       .get();
@@ -199,9 +226,12 @@ export class Store {
         current,
         supported: SCHEMA_VERSION,
       });
-    for (let v = current; v < SCHEMA_VERSION; v++) {
+    const last = Math.min(target, SCHEMA_VERSION);
+    for (let v = current; v < last; v++) {
+      const step = MIGRATIONS[v];
       this.tx(() => {
-        this.db.exec(MIGRATIONS[v]);
+        if (typeof step === 'function') step(this.db);
+        else this.db.exec(step);
         this.db
           .prepare(
             `INSERT INTO meta(key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -209,6 +239,7 @@ export class Store {
           .run(String(v + 1));
       });
     }
+    if (current < last && this.path !== ':memory:') this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   }
 
   get schemaVersion() {
@@ -311,7 +342,7 @@ export class Store {
    * @param {{states?: string[], includeDeleted?: boolean, cursor?: string|null, limit?: number}} [opts]
    */
   listSandboxes(opts = {}) {
-    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 1000);
+    const limit = pageSize(opts.limit, 50);
     const clauses = [];
     const params = [];
     if (opts.states && opts.states.length) {
@@ -388,13 +419,16 @@ export class Store {
     return this.updateSandbox(id, { health, lastObservedAt: this.clock() });
   }
 
-  /** @param {string} id */
-  listTransitions(id) {
+  /**
+   * At most `limit` transitions (default and cap 1000) after `afterSeq`, oldest first.
+   * @param {string} id @param {{afterSeq?: number, limit?: number}} [opts]
+   */
+  listTransitions(id, opts = {}) {
     return this.db
       .prepare(
-        `SELECT seq, sandbox_id, from_state, to_state, reason, at FROM transitions WHERE sandbox_id = ? ORDER BY seq`,
+        `SELECT seq, sandbox_id, from_state, to_state, reason, at FROM transitions WHERE sandbox_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
       )
-      .all(id)
+      .all(id, opts.afterSeq ?? 0, pageSize(opts.limit, MAX_PAGE))
       .map((r) => ({
         seq: r.seq,
         sandboxId: r.sandbox_id,
@@ -523,17 +557,26 @@ export class Store {
       .run(exit.at ?? this.clock(), exit.code, exit.signal, sandboxId, sessionId);
   }
 
-  /** @param {string} sandboxId */
-  listSessions(sandboxId) {
+  /**
+   * At most `limit` sessions (default and cap 1000) in start order, after session `after`.
+   * @param {string} sandboxId @param {{after?: string, limit?: number}} [opts]
+   */
+  listSessions(sandboxId, opts = {}) {
+    const params = [sandboxId];
+    let where = 'sandbox_id = ?';
+    if (opts.after) {
+      where += ` AND (started_at, session_id) > (SELECT started_at, session_id FROM sessions WHERE sandbox_id = ? AND session_id = ?)`;
+      params.push(sandboxId, opts.after);
+    }
     return this.db
       .prepare(
-        `SELECT session_id, name, argv, started_at, exited_at, exit_code, exit_signal FROM sessions WHERE sandbox_id = ? ORDER BY started_at, session_id`,
+        `SELECT session_id, name, argv, started_at, exited_at, exit_code, exit_signal FROM sessions WHERE ${where} ORDER BY started_at, session_id LIMIT ?`,
       )
-      .all(sandboxId)
+      .all(...params, pageSize(opts.limit, MAX_PAGE))
       .map((r) => ({
         sessionId: r.session_id,
         name: r.name,
-        argv: JSON.parse(r.argv),
+        argv: parseColumn(r.argv, 'sessions', `${sandboxId}/${r.session_id}`, 'argv'),
         startedAt: r.started_at,
         exitedAt: r.exited_at,
         exitCode: r.exit_code,
@@ -568,16 +611,15 @@ export class Store {
 
   /** @param {string} sandboxId @param {{afterSeq?: number, limit?: number}} [opts] */
   listEvents(sandboxId, opts = {}) {
-    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
     return this.db
       .prepare(
         `SELECT seq, type, payload, causation, source, at FROM events WHERE sandbox_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
       )
-      .all(sandboxId, opts.afterSeq ?? 0, limit)
+      .all(sandboxId, opts.afterSeq ?? 0, pageSize(opts.limit, 100))
       .map((r) => ({
         seq: r.seq,
         type: r.type,
-        payload: r.payload === null ? null : JSON.parse(r.payload),
+        payload: r.payload === null ? null : parseColumn(r.payload, 'events', r.seq, 'payload'),
         causation: r.causation,
         source: r.source,
         at: r.at,
@@ -627,7 +669,7 @@ export class Store {
 
   /** @param {string} sandboxId @param {{limit?: number, cursor?: string|null}} [opts] */
   listArtifacts(sandboxId, opts = {}) {
-    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 1000);
+    const limit = pageSize(opts.limit, 50);
     const params = [sandboxId];
     let where = 'r.sandbox_id = ?';
     if (opts.cursor) {
@@ -672,20 +714,12 @@ export class Store {
     const r = this.db
       .prepare(`SELECT id, sandbox_id, envelope, log_sha256, created_at FROM evidence WHERE id = ?`)
       .get(id);
-    return r
-      ? {
-          id: r.id,
-          sandboxId: r.sandbox_id,
-          envelope: JSON.parse(r.envelope),
-          logSha256: r.log_sha256,
-          createdAt: r.created_at,
-        }
-      : null;
+    return r ? evidenceRow(r) : null;
   }
 
   /** @param {string} sandboxId @param {{limit?: number, cursor?: string|null}} [opts] */
   listEvidence(sandboxId, opts = {}) {
-    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 1000);
+    const limit = pageSize(opts.limit, 50);
     const params = [sandboxId];
     let where = 'sandbox_id = ?';
     if (opts.cursor) {
@@ -698,19 +732,17 @@ export class Store {
       )
       .all(...params, limit + 1);
     const complete = rows.length <= limit;
-    const items = rows.slice(0, limit).map((r) => ({
-      id: r.id,
-      sandboxId: r.sandbox_id,
-      envelope: JSON.parse(r.envelope),
-      logSha256: r.log_sha256,
-      createdAt: r.created_at,
-    }));
+    const items = rows.slice(0, limit).map(evidenceRow);
     return { items, cursor: complete ? null : items[items.length - 1].id, complete };
   }
 
   // ── leases ──
 
-  /** @param {string} sandboxId @param {{token: string, ttlMs: number}} l */
+  /**
+   * Issue or re-issue the lease. The token is stored as its `sha256:` digest; a token already in
+   * that form (the broker hashes before calling) is stored as given.
+   * @param {string} sandboxId @param {{token: string, ttlMs: number}} l
+   */
   issueLease(sandboxId, l) {
     return this.tx(() => {
       const now = this.clock();
@@ -721,7 +753,7 @@ export class Store {
           `INSERT INTO leases (sandbox_id, token, generation, issued_at, renewed_at, expires_at) VALUES (?, ?, ?, ?, NULL, ?)
            ON CONFLICT(sandbox_id) DO UPDATE SET token = excluded.token, generation = excluded.generation, issued_at = excluded.issued_at, renewed_at = NULL, expires_at = excluded.expires_at`,
         )
-        .run(sandboxId, l.token, generation, now, now + l.ttlMs);
+        .run(sandboxId, tokenDigest(l.token), generation, now, now + l.ttlMs);
       return this.getLease(sandboxId);
     });
   }
@@ -746,7 +778,7 @@ export class Store {
   }
 
   /**
-   * Renew when the token matches and the lease has not expired.
+   * Renew when the token (plaintext or its digest) matches and the lease has not expired.
    * @param {string} sandboxId
    * @param {string} token
    * @param {number} ttlMs
@@ -755,7 +787,7 @@ export class Store {
     return this.tx(() => {
       const lease = this.getLease(sandboxId);
       if (!lease) throw E.notFound(`sandbox ${sandboxId} has no lease`, { sandboxId });
-      if (!safeEqual(lease.token, token))
+      if (!safeEqual(lease.token, tokenDigest(token)))
         throw E.denied('lease token mismatch', { sandboxId, generation: lease.generation });
       const now = this.clock();
       if (lease.expiresAt <= now)
@@ -798,7 +830,10 @@ export class Store {
     return r ? askRow(r) : null;
   }
 
-  /** @param {{sandboxId?: string, status?: 'open'|'answered'|'expired'|'all', limit?: number}} [opts] */
+  /**
+   * At most `limit` asks (default 100, cap 1000) in creation order, after ask `after`.
+   * @param {{sandboxId?: string, status?: 'open'|'answered'|'expired'|'all', after?: string, limit?: number}} [opts]
+   */
   listAsks(opts = {}) {
     const clauses = [];
     const params = [];
@@ -810,10 +845,14 @@ export class Store {
       clauses.push('status = ?');
       params.push(opts.status);
     }
+    if (opts.after) {
+      clauses.push('(created_at, id) > (SELECT created_at, id FROM asks WHERE id = ?)');
+      params.push(opts.after);
+    }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     return this.db
       .prepare(`SELECT * FROM asks ${where} ORDER BY created_at, id LIMIT ?`)
-      .all(...params, Math.min(opts.limit ?? 100, 1000))
+      .all(...params, pageSize(opts.limit, 100))
       .map(askRow);
   }
 
@@ -863,11 +902,20 @@ export class Store {
     return r ? checkpointRow(r) : null;
   }
 
-  /** @param {string} sandboxId */
-  listCheckpoints(sandboxId) {
+  /**
+   * At most `limit` checkpoints (default and cap 1000) in creation order, after checkpoint `after`.
+   * @param {string} sandboxId @param {{after?: string, limit?: number}} [opts]
+   */
+  listCheckpoints(sandboxId, opts = {}) {
+    const params = [sandboxId];
+    let where = 'sandbox_id = ?';
+    if (opts.after) {
+      where += ' AND (created_at, id) > (SELECT created_at, id FROM checkpoints WHERE id = ?)';
+      params.push(opts.after);
+    }
     return this.db
-      .prepare(`SELECT * FROM checkpoints WHERE sandbox_id = ? ORDER BY created_at, id`)
-      .all(sandboxId)
+      .prepare(`SELECT * FROM checkpoints WHERE ${where} ORDER BY created_at, id LIMIT ?`)
+      .all(...params, pageSize(opts.limit, MAX_PAGE))
       .map(checkpointRow);
   }
 
@@ -880,16 +928,19 @@ export class Store {
       .run(sandboxId, name, JSON.stringify(manifest), this.clock());
   }
 
-  /** @param {string} sandboxId */
-  listPresets(sandboxId) {
+  /**
+   * At most `limit` presets (default and cap 1000) by name, after preset `after`.
+   * @param {string} sandboxId @param {{after?: string, limit?: number}} [opts]
+   */
+  listPresets(sandboxId, opts = {}) {
     return this.db
       .prepare(
-        `SELECT name, manifest, installed_at FROM presets WHERE sandbox_id = ? ORDER BY name`,
+        `SELECT name, manifest, installed_at FROM presets WHERE sandbox_id = ? AND name > ? ORDER BY name LIMIT ?`,
       )
-      .all(sandboxId)
+      .all(sandboxId, opts.after ?? '', pageSize(opts.limit, MAX_PAGE))
       .map((r) => ({
         name: r.name,
-        manifest: JSON.parse(r.manifest),
+        manifest: parseColumn(r.manifest, 'presets', `${sandboxId}/${r.name}`, 'manifest'),
         installedAt: r.installed_at,
       }));
   }
@@ -912,10 +963,46 @@ export class Store {
   }
 }
 
+const digestOf = (s) => createHash('sha256').update(s).digest();
+
+/** Constant-time equality of two secrets: both sides are digested to 32 bytes first, so neither
+ * the content nor the length of the stored value leaks through timing. */
 function safeEqual(a, b) {
-  const ba = Buffer.from(String(a ?? ''));
-  const bb = Buffer.from(String(b ?? ''));
-  return ba.length === bb.length && ba.length > 0 && timingSafeEqual(ba, bb);
+  const sa = String(a ?? '');
+  const sb = String(b ?? '');
+  return timingSafeEqual(digestOf(sa), digestOf(sb)) && sa.length > 0 && sb.length > 0;
+}
+
+function tokenDigest(token) {
+  const s = String(token ?? '');
+  return TOKEN_DIGEST.test(s) ? s : `sha256:${digestOf(s).toString('hex')}`;
+}
+
+function pageSize(limit, fallback) {
+  const n = Number.isFinite(limit) ? limit : fallback;
+  return Math.min(Math.max(Math.trunc(n), 1), MAX_PAGE);
+}
+
+/** JSON.parse a column; a corrupt value is an E_INTERNAL naming the table, row and column. */
+function parseColumn(text, table, id, column) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw E.internal(`corrupt ${column} in ${table} row ${id}`, { table, id, column });
+  }
+}
+
+function checkIntegrity(db, dbPath) {
+  const problems = db
+    .prepare('PRAGMA integrity_check')
+    .all()
+    .map((r) => r.integrity_check)
+    .filter((m) => m !== 'ok');
+  if (problems.length)
+    throw E.internal(`store ${dbPath} failed integrity_check`, {
+      path: dbPath,
+      problems: problems.slice(0, 10),
+    });
 }
 
 function sandboxRow(r) {
@@ -927,8 +1014,8 @@ function sandboxRow(r) {
     health: r.health,
     rootfs: r.rootfs,
     runtime: r.runtime,
-    profile: JSON.parse(r.profile),
-    labels: JSON.parse(r.labels),
+    profile: parseColumn(r.profile, 'sandboxes', r.id, 'profile'),
+    labels: parseColumn(r.labels, 'sandboxes', r.id, 'labels'),
     idempotencyKey: r.idempotency_key,
     pid: r.pid,
     bootId: r.boot_id,
@@ -962,11 +1049,11 @@ function askRow(r) {
     kind: r.kind,
     title: r.title,
     body: r.body,
-    options: r.options ? JSON.parse(r.options) : null,
+    options: r.options ? parseColumn(r.options, 'asks', r.id, 'options') : null,
     recommended: r.recommended,
     ref: r.ref,
     status: r.status,
-    answer: r.answer === null ? null : JSON.parse(r.answer),
+    answer: r.answer === null ? null : parseColumn(r.answer, 'asks', r.id, 'answer'),
     createdAt: r.created_at,
     expiresAt: r.expires_at,
     answeredAt: r.answered_at,
@@ -981,7 +1068,17 @@ function checkpointRow(r) {
     name: r.name,
     sha256: r.sha256,
     size: r.size,
-    envelope: JSON.parse(r.envelope),
+    envelope: parseColumn(r.envelope, 'checkpoints', r.id, 'envelope'),
+    createdAt: r.created_at,
+  };
+}
+
+function evidenceRow(r) {
+  return {
+    id: r.id,
+    sandboxId: r.sandbox_id,
+    envelope: parseColumn(r.envelope, 'evidence', r.id, 'envelope'),
+    logSha256: r.log_sha256,
     createdAt: r.created_at,
   };
 }
