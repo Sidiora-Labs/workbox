@@ -57,7 +57,7 @@
     - CLI: workbox doctor, rootfs build|list, runtime install|list, sandbox create|ls|inspect|rm|exec|shell|events; local engine mode.
     - Tests: create through the CLI, kill the manager process, restart, assert the sandbox is rediscovered with sessions intact, then destroy and assert DELETED.
     - _Requirements: 2.1, 2.3, 2.4, 6.4_
-  - [-] 2.1 Network namespaces, egress policy and proxy
+  - [x] 2.1 Network namespaces, egress policy and proxy
     - netns.js attaches slirp4netns to the sandbox pid with a tap device, waits for readiness, and tears it down with the sandbox; nft.js renders and installs the ruleset for egress and allowlist modes via nsenter before the go signal.
     - proxy.js is an HTTP CONNECT and absolute-URI forward proxy bound to the gateway-reachable address with per-sandbox allowlists, 403 on denial and audit events; the sandbox environment receives HTTP_PROXY, HTTPS_PROXY and NO_PROXY.
     - wb net policy|test; tests cover none, egress and allowlist against a host listener and the proxy, deny of RFC1918 and the gateway, and that nft cannot be changed from inside.

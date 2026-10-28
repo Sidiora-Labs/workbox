@@ -12,8 +12,10 @@ import { createProxy, hostAddresses } from './proxy.js';
  * spawned with `--unshare-net`; the host finds the first process of the sandbox that lives in
  * its own netns, attaches slirp to it (tap at 10.0.2.100/24, gateway 10.0.2.2, DNS 10.0.2.3) and
  * installs the ruleset there. slirp runs with `--disable-host-loopback`, so host loopback stays
- * unreachable; the proxy listens on a non-loopback host address on a port of its own, and nft
- * admits only that address and port.
+ * unreachable; the proxy listens on a port of its own on the host-only dummy link `workbox0`
+ * (198.18.0.1/32 by default, never a public interface), and nft admits only that address and
+ * port. Every nsenter, nft and slirp4netns spawn goes through
+ * `spawnGuarded`, which refuses a pid in the host's or this process's network namespace.
  */
 
 /** Default slirp addressing. */
@@ -21,8 +23,12 @@ export const NET_DEFAULTS = Object.freeze({
   address: '10.0.2.100',
   gateway: '10.0.2.2',
   dns: '10.0.2.3',
+  proxyHost: '198.18.0.1',
   mtu: 1500,
 });
+
+/** The host-only dummy link the sandbox proxies listen on. */
+export const PROXY_LINK = 'workbox0';
 
 /**
  * @param {{pid: number, tap?: string, mtu?: number, readyFd?: number}} opts
@@ -52,7 +58,7 @@ export function slirpArgv(opts) {
  */
 export function proxyEnv(policy) {
   if (policy.mode === 'none') return {};
-  const host = assertIpv4(policy.proxyHost ?? NET_DEFAULTS.gateway, 'proxyHost');
+  const host = assertIpv4(policy.proxyHost ?? NET_DEFAULTS.proxyHost, 'proxyHost');
   const url = `http://${host}:${policy.proxyPort ?? 8080}`;
   return {
     HTTP_PROXY: url,
@@ -64,12 +70,128 @@ export function proxyEnv(policy) {
   };
 }
 
-/** The host address the proxy binds to: the first non-loopback IPv4 of any interface. */
-export function proxyHostAddress() {
-  const v4 = [...hostAddresses()].filter((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a));
-  const pick = v4.find((a) => !a.startsWith('127.'));
-  if (!pick) throw E.unavailable('no non-loopback IPv4 host address for the sandbox proxy');
-  return pick;
+/**
+ * The three `ip` commands that put `address`/32 on the dummy link `workbox0` and bring it up.
+ * @param {string} address IPv4
+ * @returns {string[][]}
+ */
+export function proxyLinkArgv(address) {
+  const a = assertIpv4(address, 'proxyHost');
+  return [
+    ['ip', 'link', 'add', PROXY_LINK, 'type', 'dummy'],
+    ['ip', 'addr', 'replace', `${a}/32`, 'dev', PROXY_LINK],
+    ['ip', 'link', 'set', PROXY_LINK, 'up'],
+  ];
+}
+
+async function runHost(argv) {
+  const child = spawn(argv[0], argv.slice(1), {
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  let stderr = '';
+  child.stderr.on('data', (d) => {
+    stderr += d;
+  });
+  const [code] = await once(child, 'close');
+  return { code, stderr: stderr.trim() };
+}
+
+/**
+ * Create the host-only link the proxies bind to, idempotently: an existing `workbox0` is reused
+ * and the address replaced. The link persists on the host after the sandboxes are gone; it is a
+ * link with one /32 address and never touches the host firewall.
+ * @param {string} [address]
+ */
+export async function ensureProxyLink(address = NET_DEFAULTS.proxyHost) {
+  const [add, ...rest] = proxyLinkArgv(address);
+  const added = await runHost(add);
+  if (added.code !== 0 && !/File exists/.test(added.stderr))
+    throw E.unavailable(`cannot create ${PROXY_LINK}: ${added.stderr}`, { code: added.code });
+  for (const argv of rest) {
+    const r = await runHost(argv);
+    if (r.code !== 0) throw E.unavailable(`${argv.join(' ')} failed: ${r.stderr}`);
+  }
+}
+
+function readNetns(pid) {
+  try {
+    return fs.readlinkSync(`/proc/${pid}/ns/net`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The host-namespace guard: the network namespace of `pid`, refused with E_DENIED when it cannot
+ * be read or is the host's (`/proc/1/ns/net`) or this process's own (`/proc/self/ns/net`).
+ * @param {number} pid
+ * @returns {string} the namespace link of `pid`, e.g. `net:[4026532481]`
+ */
+export function assertSandboxNetns(pid) {
+  if (!Number.isInteger(pid) || pid < 1) throw E.invalid('pid must be a positive integer', { pid });
+  const ns = readNetns(pid);
+  const host = readNetns(1);
+  const self = readNetns('self');
+  if (ns === null || host === null || self === null)
+    throw E.denied(
+      `refusing pid ${pid}: its network namespace cannot be compared with the host's`,
+      {
+        pid,
+      },
+    );
+  if (ns === host || ns === self)
+    throw E.denied(`refusing pid ${pid}: it is in the host network namespace`, { pid, netns: ns });
+  return ns;
+}
+
+let spawned = 0;
+
+/** Number of processes `spawnGuarded` has started in this process. */
+export function guardedSpawnCount() {
+  return spawned;
+}
+
+/**
+ * Spawn an nsenter, nft or slirp4netns argv aimed at `pid`, with the host-namespace guard run
+ * immediately before the spawn. Throws synchronously, before anything is spawned, on refusal.
+ * @param {number} pid
+ * @param {string[]} argv must name `pid`
+ * @param {import('node:child_process').SpawnOptions} options
+ */
+export function spawnGuarded(pid, argv, options) {
+  if (!Array.isArray(argv) || !argv.includes(String(pid)))
+    throw E.invalid(`argv does not target pid ${pid}`, { pid });
+  assertSandboxNetns(pid);
+  spawned += 1;
+  return spawn(argv[0], argv.slice(1), options);
+}
+
+/**
+ * Run a guarded argv to completion.
+ * @param {number} pid @param {string[]} argv
+ * @returns {Promise<{code: number|null, stdout: string, stderr: string}>}
+ */
+export async function runGuarded(pid, argv) {
+  const child = spawnGuarded(pid, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => {
+    stdout += d;
+  });
+  child.stderr.on('data', (d) => {
+    stderr += d;
+  });
+  const [code] = await once(child, 'close');
+  return { code, stdout, stderr };
+}
+
+/**
+ * Run `argv` in the network namespace of sandbox process `pid` (nsenter -n), guarded.
+ * @param {number} pid @param {string[]} argv
+ */
+export function runInNetns(pid, argv) {
+  return runGuarded(pid, ['nsenter', '-t', String(pid), '-n', ...argv]);
 }
 
 function childrenOf(pid) {
@@ -92,27 +214,25 @@ function childrenOf(pid) {
 }
 
 /**
- * The first process in `pid`'s tree whose network namespace is not the host's. The launch pid is
- * the outer bwrap, which stays in the host netns; nft and slirp must never target that.
+ * The first process in `pid`'s tree, at most four levels down, whose network namespace is neither
+ * the host's nor this process's. The launch pid is the outer bwrap, which stays in the host netns;
+ * nft and slirp must never target that. pid 1 is refused: its tree is every host process.
  * @param {number} pid
  * @returns {number}
  */
 export function netnsPid(pid) {
-  const host = fs.readlinkSync('/proc/self/ns/net');
-  const queue = [pid];
+  if (pid === 1) throw E.denied('refusing pid 1: its process tree is the whole host', { pid });
+  const host = new Set([readNetns(1), readNetns('self')]);
+  const queue = [[pid, 0]];
   const seen = new Set();
   while (queue.length > 0 && seen.size < 256) {
-    const p = queue.shift();
+    const [p, depth] = queue.shift();
     if (seen.has(p)) continue;
     seen.add(p);
-    let ns;
-    try {
-      ns = fs.readlinkSync(`/proc/${p}/ns/net`);
-    } catch {
-      continue;
-    }
-    if (ns !== host) return p;
-    queue.push(...childrenOf(p));
+    const ns = readNetns(p);
+    if (ns === null) continue;
+    if (!host.has(ns)) return p;
+    if (depth < 4) queue.push(...childrenOf(p).map((c) => [c, depth + 1]));
   }
   throw E.unavailable(`no process under pid ${pid} runs in its own network namespace`, { pid });
 }
@@ -147,7 +267,8 @@ export class SandboxNet {
     this.nsPid = netnsPid(this.pid);
     const rules = { mode: this.policy.mode, gateway: NET_DEFAULTS.gateway, dns: NET_DEFAULTS.dns };
     if (this.policy.mode !== 'none') {
-      const host = this.proxyHost ?? proxyHostAddress();
+      const host = assertIpv4(this.proxyHost ?? NET_DEFAULTS.proxyHost, 'proxyHost');
+      await ensureProxyLink(host);
       const port = await this._startProxy(host);
       await this._startSlirp();
       Object.assign(rules, {
@@ -181,7 +302,7 @@ export class SandboxNet {
 
   async _startSlirp() {
     const argv = slirpArgv({ pid: this.nsPid, readyFd: 3 });
-    const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'ignore', 'pipe', 'pipe'] });
+    const child = spawnGuarded(this.nsPid, argv, { stdio: ['ignore', 'ignore', 'pipe', 'pipe'] });
     this.child = child;
     let err = '';
     child.stderr.on('data', (d) => {
@@ -213,14 +334,9 @@ export class SandboxNet {
     const file = path.join(dir, 'ruleset.nft');
     try {
       fs.writeFileSync(file, rules, { mode: 0o600 });
-      const { argv } = installArgv(this.nsPid ?? netnsPid(this.pid), file);
-      const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'ignore', 'pipe'] });
-      let err = '';
-      child.stderr.on('data', (d) => {
-        err += d;
-      });
-      const [code] = await once(child, 'close');
-      if (code !== 0) throw E.unavailable(`nft install failed (${code}): ${err.trim()}`);
+      const pid = this.nsPid ?? netnsPid(this.pid);
+      const { code, stderr } = await runGuarded(pid, installArgv(pid, file).argv);
+      if (code !== 0) throw E.unavailable(`nft install failed (${code}): ${stderr.trim()}`);
       return rules;
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Store } from '../../../src/store.js';
-import { Audit } from '../../../src/audit.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { Audit, auditFiles } from '../../../src/audit.js';
 import { createProxy } from '../../../src/host/proxy.js';
 import { netPolicy, netTest } from '../../../src/broker/net.js';
 import { tmpDir } from '../../helpers/tmp.js';
@@ -38,7 +40,11 @@ test('policy reflects profile; test decides like the proxy and audits every call
   );
   assert.equal(none.reason, 'network-none');
   await assert.rejects(netTest(c, { host: '', port: 80 }));
-  const entries = Audit.verify(t.dir).entries.filter((e) => e.sandboxId === sb.id);
+  assert.equal(Audit.verify(t.dir).ok, true);
+  const entries = auditFiles(t.dir)
+    .flatMap((f) => fs.readFileSync(path.join(t.dir, f), 'utf8').split('\n').filter(Boolean))
+    .map((line) => JSON.parse(line))
+    .filter((e) => e.sandboxId === sb.id);
   assert.deepEqual(
     entries.map((e) => [e.action, e.data.reason ?? null]),
     [

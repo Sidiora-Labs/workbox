@@ -39,7 +39,7 @@ export class Manager extends EventEmitter {
    * @param {import('../secrets.js').SecretProvider} [deps.secrets]
    * @param {boolean} [deps.enableNetwork] install nft (every mode) and attach slirp + proxy (egress/allowlist)
    * @param {string[]} [deps.netResolver] DNS servers the sandbox proxies resolve with (default: system)
-   * @param {string} [deps.proxyHost] host IPv4 the sandbox proxies bind to (default: first non-loopback)
+   * @param {string} [deps.proxyHost] IPv4 the sandbox proxies bind to on the host-only dummy link workbox0 (default 198.18.0.1)
    * @param {boolean} [deps.enableSeccomp] supply the seccomp program at launch (default true on x64)
    * @param {number} [deps.maxSandboxes] admission cap (0/absent = unlimited)
    * @param {Array<{name: string, deliver: (ask: object) => unknown}>} [deps.askChannels] ask notifiers

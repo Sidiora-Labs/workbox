@@ -1,13 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import http from 'node:http';
 import dgram from 'node:dgram';
 import dns from 'node:dns';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { Manager } from '../../src/sandbox/manager.js';
-import { Audit } from '../../src/audit.js';
-import { proxyHostAddress } from '../../src/host/netns.js';
+import { Audit, auditFiles } from '../../src/audit.js';
+import { NET_DEFAULTS, PROXY_LINK, runInNetns } from '../../src/host/netns.js';
+import { hostAddresses } from '../../src/host/proxy.js';
+import { isPrivateIpv4 } from '../../src/host/nft.js';
 import { testEngine } from '../helpers/engine.js';
 
 // Host-side test traffic must never go through an ambient HTTP(S) proxy.
@@ -59,9 +64,16 @@ Promise.all(JSON.parse(process.argv[1]).map(([proto, host, port]) =>
 )).then((r) => process.stdout.write(JSON.stringify(r)));
 `;
 
+// The sandbox netns gets a ULA address and a default route on tap0 (from the host, through the
+// guarded nsenter helper), so an IPv6 datagram is routable and only nft can stop it.
+const V6_ADDR = 'fd77:6b78::100/64';
 const V6_PROBE = `
-const s = require('node:dgram').createSocket('udp6');
-s.send(Buffer.from('x'), 9, 'ff02::1%tap0', (e) => { process.stdout.write(e ? e.code : 'sent'); s.close(); });
+const dgram = require('node:dgram');
+const send = (host) => new Promise((resolve) => {
+  const s = dgram.createSocket('udp6');
+  s.send(Buffer.from('x'), 9, host, (e) => { s.close(); resolve(e ? e.code : 'sent'); });
+});
+Promise.all(['2001:db8::1', 'fd77:6b78::1'].map(send)).then((r) => process.stdout.write(JSON.stringify(r)));
 `;
 
 // One NFT_MSG_DELTABLE for inet/workbox in an nfnetlink batch; prints the kernel's ack errno.
@@ -154,16 +166,30 @@ function stopPeer(child) {
   }
 }
 
-function hostRuleset(nsPid) {
-  return execFileSync('nsenter', ['-t', String(nsPid), '-n', 'nft', 'list', 'ruleset'], {
-    encoding: 'utf8',
-  });
+/** Run `argv` in a sandbox netns from the host, through the host-namespace guard. */
+async function inNetns(nsPid, argv) {
+  const r = await runInNetns(nsPid, argv);
+  assert.equal(r.code, 0, `${argv.join(' ')}: ${r.stderr}`);
+  return r.stdout;
 }
 
+const hostRuleset = (nsPid) => inNetns(nsPid, ['nft', 'list', 'ruleset']);
+
 function auditOf(eng, sandboxId, action) {
-  return Audit.verify(eng.config.paths.audit).entries.filter(
-    (e) => e.sandboxId === sandboxId && e.action === action,
-  );
+  const dir = eng.config.paths.audit;
+  assert.equal(Audit.verify(dir).ok, true);
+  return auditFiles(dir)
+    .flatMap((f) => fs.readFileSync(path.join(dir, f), 'utf8').split('\n').filter(Boolean))
+    .map((line) => JSON.parse(line))
+    .filter((e) => e.sandboxId === sandboxId && e.action === action);
+}
+
+/** A host address outside every blocked range, other than the test peer's veth: eth0's. */
+function hostPublicAddress() {
+  const v4 = [...hostAddresses()].filter((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a));
+  const pick = v4.find((a) => !isPrivateIpv4(a) && a !== PEER_HOST);
+  assert.ok(pick, 'the host has a public IPv4 address');
+  return pick;
 }
 
 function boxOf(manager, id) {
@@ -219,7 +245,7 @@ async function checkNone(box, manager, eng) {
     ]),
     ['ENETUNREACH', 'ENETUNREACH'],
   );
-  const rules = hostRuleset(manager.nets.get(box.id).nsPid);
+  const rules = await hostRuleset(manager.nets.get(box.id).nsPid);
   assert.match(rules, /table inet workbox/);
   assert.match(rules, /policy drop/);
   const policy = await box.wbJson(['net', 'policy']);
@@ -235,7 +261,10 @@ async function checkNone(box, manager, eng) {
 
 async function checkEgress(box, manager, eng, hostPort, hostHits) {
   const sbNet = manager.nets.get(box.id);
-  const proxyHost = proxyHostAddress();
+  const proxyHost = NET_DEFAULTS.proxyHost;
+  const hostPublic = hostPublicAddress();
+  assert.equal(sbNet.proxy.address().address, proxyHost);
+  assert.ok(os.networkInterfaces()[PROXY_LINK].some((i) => i.address === proxyHost));
   const env = await box.sh('echo "$HTTP_PROXY|$HTTPS_PROXY|$NO_PROXY"');
   const [httpProxy, httpsProxy, noProxy] = env.stdout.trim().split('|');
   assert.match(httpProxy, new RegExp(`^http://${proxyHost.replaceAll('.', '\\.')}:\\d+$`));
@@ -264,7 +293,8 @@ async function checkEgress(box, manager, eng, hostPort, hostHits) {
     [`http://localhost:${hostPort}/`, 'denied-name'],
     ['http://meta.test/latest/', 'blocked-address'],
     [`http://${PEER_HOST}:8081/`, 'host-address'],
-    [`http://${proxyHost}:${proxyPort}/`, 'host-address'],
+    [`http://${hostPublic}:${hostPort}/`, 'host-address'],
+    [`http://${proxyHost}:${proxyPort}/`, 'blocked-address'],
   ];
   for (const [url] of denied) assert.equal((await box.viaProxy(url)).code, '403', url);
   const viaConnect = await box.viaProxy(`http://127.0.0.1:${hostPort}/`, true);
@@ -289,6 +319,8 @@ async function checkEgress(box, manager, eng, hostPort, hostHits) {
     ['169.254.169.254', 80],
     [PEER_HOST, 8081],
     [proxyHost, 22],
+    [hostPublic, 80],
+    [hostPublic, hostPort],
   ];
   const udp = await box.connect([
     ['udp', PEER, 9],
@@ -299,6 +331,7 @@ async function checkEgress(box, manager, eng, hostPort, hostHits) {
   const tcp = await box.connect([
     ['tcp', '10.0.2.2', 80],
     ['tcp', PEER_HOST, 8081],
+    ['tcp', hostPublic, 22],
   ]);
   for (const r of tcp) assert.ok(['EPERM', 'timeout'].includes(r), r);
 
@@ -322,12 +355,16 @@ async function checkEgress(box, manager, eng, hostPort, hostHits) {
   );
 }
 
-async function checkIpv6Dropped(box) {
-  const inet6 = await box.sh('cat /proc/net/if_inet6');
-  if (!/ tap0$/m.test(inet6.stdout)) return 'tap0 carries no IPv6 address; no packet can be sent';
+async function checkIpv6Dropped(box, manager) {
+  const nsPid = manager.nets.get(box.id).nsPid;
+  await inNetns(nsPid, ['ip', '-6', 'addr', 'add', V6_ADDR, 'dev', 'tap0', 'nodad']);
+  await inNetns(nsPid, ['ip', '-6', 'route', 'replace', 'default', 'dev', 'tap0']);
+  const route = await inNetns(nsPid, ['ip', '-6', 'route', 'get', '2001:db8::1']);
+  assert.match(route, /dev tap0/);
+  assert.match(await hostRuleset(nsPid), /meta nfproto ipv6 drop/);
   const v6 = await box.exec([NODE, '-e', V6_PROBE]);
-  assert.equal(v6.stdout, 'EPERM', v6.stderr);
-  return null;
+  assert.equal(v6.exitCode, 0, v6.stderr);
+  assert.deepEqual(JSON.parse(v6.stdout), ['EPERM', 'EPERM']);
 }
 
 async function checkDns(box) {
@@ -346,7 +383,7 @@ async function checkDns(box) {
 
 async function checkRulesImmutable(box, manager) {
   const nsPid = manager.nets.get(box.id).nsPid;
-  const before = hostRuleset(nsPid);
+  const before = await hostRuleset(nsPid);
   const caps = await box.sh("grep -E '^Cap(Eff|Bnd)' /proc/self/status");
   for (const line of caps.stdout.trim().split('\n')) {
     const mask = BigInt(`0x${line.split(/\s+/)[1]}`);
@@ -355,7 +392,7 @@ async function checkRulesImmutable(box, manager) {
   const del = await box.exec(['perl', '-e', NFT_DELETE]);
   assert.equal(del.exitCode, 0, del.stderr);
   assert.equal(del.stdout.trim(), 'type=2 err=-1');
-  assert.equal(hostRuleset(nsPid), before);
+  assert.equal(await hostRuleset(nsPid), before);
   assert.match(before, /meta nfproto ipv6 drop/);
 }
 
@@ -462,10 +499,9 @@ test('network: none, egress and allowlist against real slirp4netns, nft and the 
     await t.test('req 5 ac_1 + H13: egress reaches public, never private, gateway or host', () =>
       checkEgress(egress, manager, eng, hostListener.address().port, () => hits),
     );
-    await t.test('H13: an IPv6 packet from egress is dropped by nft', async (st) => {
-      const skipped = await checkIpv6Dropped(egress);
-      if (skipped) st.skip(skipped);
-    });
+    await t.test('H13: an IPv6 packet from egress is dropped by nft', () =>
+      checkIpv6Dropped(egress, manager),
+    );
     await t.test('req 5 ac_1: DNS works in egress', async (st) => {
       const skipped = await checkDns(egress);
       if (skipped) st.skip(skipped);

@@ -69,3 +69,17 @@ test('validation and helpers', () => {
   assert.throws(() => installArgv(42, 'relative.nft'));
   assert.throws(() => installArgv(42));
 });
+
+test('no mode ever flushes the ruleset or touches a table other than inet workbox', () => {
+  for (const mode of ['none', 'egress', 'allowlist']) {
+    const rules = renderRuleset({ mode, proxyHost: '198.18.0.1', proxyPort: 41000 });
+    assert.ok(!/flush/.test(rules), mode);
+    assert.ok(!/ruleset/.test(rules), mode);
+    const tables = rules.split('\n').filter((l) => /\btable\b/.test(l));
+    assert.deepEqual(
+      tables,
+      ['table inet workbox', 'delete table inet workbox', 'table inet workbox {'],
+      mode,
+    );
+  }
+});
