@@ -79,19 +79,24 @@ export async function sessionCommand(ctx, argv) {
       if (!id) throw new ProtocolError(Codes.INVALID_PARAMS, 'wb session attach <id>');
       await ctx.client.connect();
       return new Promise((resolve, reject) => {
+        let done = false;
+        // An exited session replays its output, then session.exit, then the attach reply: the
+        // first exit seen settles the command, prints the exit and carries the session's status.
+        const finish = (exited) => {
+          if (done) return;
+          done = true;
+          off();
+          const how = exited.signal ? `signal ${exited.signal}` : `code ${exited.code}`;
+          ctx.err.write(`wb: session ${id} exited with ${how}\n`);
+          resolve({ sessionId: id, exited, exitCode: exitStatus(exited.code, exited.signal) });
+        };
         const off = ctx.client.onEvent((method, p) => {
           if (p?.sessionId !== id) return;
-          if (method === 'session.output') ctx.out.write(Buffer.from(p.data, 'base64'));
-          if (method === 'session.exit') {
-            off();
-            resolve({ sessionId: id, exited: p });
-          }
+          if (method === 'session.output' && !done) ctx.out.write(Buffer.from(p.data, 'base64'));
+          if (method === 'session.exit') finish(p);
         });
         ctx.client.request('session.attach', { sessionId: id, fromSeq: 0 }).then((att) => {
-          if (att.exited) {
-            off();
-            resolve(att);
-          }
+          if (att.exited) finish(att.exited);
         }, reject);
       });
     }

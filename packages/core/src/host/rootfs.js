@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { E } from '../errors.js';
 import { nullLogger } from '../log.js';
+import { removeUnder } from './safefs.js';
 
 export const ROOTFS_MANIFEST = 'manifest.json';
 export const MANIFEST_SCHEMA = 1;
@@ -98,7 +99,7 @@ export class RootfsManager {
       throw E.notFound(`no Dockerfile at ${dockerfile}`, { dockerfile });
     const tag = opts.tag ?? `workbox-rootfs-${name}:latest`;
     const staging = `${target}.tmp`;
-    fs.rmSync(staging, { recursive: true, force: true });
+    removeUnder(this.dirRoot, staging);
     fs.mkdirSync(staging, { recursive: true, mode: 0o755 });
     let containerId = null;
     try {
@@ -127,7 +128,7 @@ export class RootfsManager {
         `${JSON.stringify(manifest, null, 2)}\n`,
         { mode: 0o644 },
       );
-      if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+      removeUnder(this.dirRoot, target);
       fs.renameSync(staging, target);
       this.log.info('rootfs built', {
         name,
@@ -137,7 +138,7 @@ export class RootfsManager {
       });
       return manifest;
     } catch (e) {
-      fs.rmSync(staging, { recursive: true, force: true });
+      removeUnder(this.dirRoot, staging);
       throw e;
     } finally {
       if (containerId) await this._docker(['rm', '-f', containerId]).catch(() => undefined);
@@ -148,8 +149,7 @@ export class RootfsManager {
   remove(name) {
     const target = this.dir(name);
     if (!fs.existsSync(target)) return false;
-    fs.rmSync(target, { recursive: true, force: true });
-    return true;
+    return removeUnder(this.dirRoot, target);
   }
 
   /**

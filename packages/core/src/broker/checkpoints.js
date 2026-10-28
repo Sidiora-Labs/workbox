@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import { E } from '../errors.js';
+import { removeUnder } from '../host/safefs.js';
 
 /**
  * Checkpoints: a tar of the sandbox upper layer plus an envelope JSON with its digest.
@@ -99,7 +100,7 @@ export async function checkpointCreate(ctx, params) {
       run(['tar', '-cf', tarFile, '-C', ctx.upperDir, ...members]),
     );
   } catch (e) {
-    fs.rmSync(tarFile, { force: true });
+    removeUnder(ctx.checkpointsDir, tarFile);
     throw e;
   }
   const sha256 = await sha256OfFile(tarFile);

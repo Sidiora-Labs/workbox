@@ -12,6 +12,7 @@ import {
   launchEnv,
   spawnSandbox,
   readLaunchLog,
+  rotateLaunchLog,
   removeDirs,
   hostMountsFor,
   pidAlive,
@@ -21,6 +22,7 @@ import {
   RUNTIME_MOUNT,
   RUN_MOUNT,
   SANDBOX_PATH,
+  LAUNCH_LOG_MAX_BYTES,
 } from '../../../src/host/launch.js';
 import { tmpDir } from '../../helpers/tmp.js';
 
@@ -201,6 +203,110 @@ test('spawnSandbox runs the real launch script and a bad cgroup path lands in la
     assert.equal(fs.statSync(dirs.log).mode & 0o777, 0o600);
     fs.writeFileSync(dirs.log, 'x'.repeat(100));
     assert.equal(readLaunchLog(dirs, 10).length, 10);
+  } finally {
+    cleanup();
+  }
+});
+
+test('removeDirs deletes only the sandbox root: links out of it are unlinked, never followed', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const sandboxes = path.join(dir, 'sandboxes');
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'keep'), 'host data');
+    const dirs = sandboxDirs(sandboxes, 'SBX5');
+    const sibling = sandboxDirs(sandboxes, 'SBX6');
+    prepareDirs(dirs, { uidBase: BASE, hostname: 'a', nameservers: [] });
+    prepareDirs(sibling, { uidBase: BASE, hostname: 'b', nameservers: [] });
+    fs.writeFileSync(path.join(sibling.upper, 'mine'), 'sibling data');
+    fs.symlinkSync(outside, path.join(dirs.upper, 'to-host'));
+    fs.symlinkSync(sibling.root, path.join(dirs.upper, 'to-sibling'));
+    fs.symlinkSync('/', path.join(dirs.run, 'slash'));
+    removeDirs(dirs);
+    assert.equal(fs.existsSync(dirs.root), false);
+    assert.equal(fs.readFileSync(path.join(outside, 'keep'), 'utf8'), 'host data');
+    assert.equal(fs.readFileSync(path.join(sibling.upper, 'mine'), 'utf8'), 'sibling data');
+    assert.ok(fs.existsSync(sandboxes), 'the sandboxes directory itself stays');
+
+    fs.symlinkSync(outside, dirs.root);
+    removeDirs(dirs);
+    assert.equal(fs.existsSync(dirs.root), false, 'a sandbox root that is a link is unlinked');
+    assert.equal(fs.readFileSync(path.join(outside, 'keep'), 'utf8'), 'host data');
+    assert.ok(fs.existsSync(sibling.root));
+  } finally {
+    cleanup();
+  }
+});
+
+test('launch.log stays under its cap across many launches and a live O_APPEND writer', async () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const dirs = sandboxDirs(dir, 'SBX7');
+    prepareDirs(dirs, { uidBase: BASE, hostname: 'h', nameservers: [] });
+    assert.equal(LAUNCH_LOG_MAX_BYTES, 1024 * 1024);
+    assert.equal(rotateLaunchLog(dirs), false, 'no log yet');
+    fs.writeFileSync(dirs.log, `${'old line\n'.repeat(120_000)}tail-marker\n`, { mode: 0o600 });
+    assert.ok(fs.statSync(dirs.log).size > LAUNCH_LOG_MAX_BYTES);
+    const spec = {
+      sandboxId: 'SBX7',
+      hostname: 'h',
+      rootfsDir: '/nonexistent',
+      runtimeDir: '/nonexistent',
+      dirs,
+      cgroupPath: path.join(dir, 'no-such-cgroup'),
+      uid: { base: BASE, count: 65536 },
+    };
+    for (let i = 0; i < 5; i++) {
+      const { child } = spawnSandbox(spec);
+      child.ref();
+      await new Promise((resolve) => child.once('exit', resolve));
+      assert.ok(fs.statSync(dirs.log).size <= LAUNCH_LOG_MAX_BYTES, `launch ${i}`);
+      assert.ok(fs.statSync(`${dirs.log}.1`).size <= LAUNCH_LOG_MAX_BYTES, `launch ${i}`);
+    }
+    const rotated = fs.readFileSync(`${dirs.log}.1`, 'utf8');
+    assert.ok(rotated.endsWith('tail-marker\n'), 'launch.log.1 keeps the newest bytes');
+    assert.equal(fs.statSync(`${dirs.log}.1`).mode & 0o777, 0o600);
+    assert.equal(fs.readdirSync(dirs.root).includes('launch.log.1.tmp'), false);
+    const current = readLaunchLog(dirs);
+    assert.equal(current.match(/no-such-cgroup\/cgroup.procs/g).length, 5, current);
+
+    const cap = 64 * 1024;
+    const chunk = Buffer.alloc(10_000, 'a');
+    const fd = fs.openSync(dirs.log, 'a', 0o600);
+    try {
+      let rotations = 0;
+      for (let i = 0; i < 200; i++) {
+        fs.writeSync(fd, chunk);
+        if (rotateLaunchLog(dirs, cap)) rotations++;
+        assert.ok(fs.statSync(dirs.log).size <= cap, `append ${i}`);
+        if (rotations > 0) assert.ok(fs.statSync(`${dirs.log}.1`).size <= cap, `append ${i}`);
+      }
+      assert.ok(rotations >= 25, `rotated ${rotations} times over 2 MB of appends`);
+      fs.writeSync(fd, 'after rotation\n');
+      assert.ok(readLaunchLog(dirs).endsWith('after rotation\n'), 'the live writer keeps going');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('readLaunchLog reads only a byte-capped tail and never splits a character', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const dirs = sandboxDirs(dir, 'SBX8');
+    prepareDirs(dirs, { uidBase: BASE, hostname: 'h', nameservers: [] });
+    fs.writeFileSync(dirs.log, `${'x'.repeat(4 * 1024 * 1024)}end\n`);
+    assert.equal(readLaunchLog(dirs).length, 16 * 1024);
+    assert.ok(readLaunchLog(dirs).endsWith('xend\n'));
+    fs.writeFileSync(dirs.log, 'ab\u00e9\u20ac!');
+    assert.equal(readLaunchLog(dirs, 3), '!', 'a cut euro sign is dropped, not mangled');
+    assert.equal(readLaunchLog(dirs, 4), '\u20ac!');
+    assert.equal(readLaunchLog(dirs, 5), '\u20ac!', 'a cut e-acute is dropped');
+    assert.equal(readLaunchLog(dirs, 6), '\u00e9\u20ac!');
+    assert.equal(readLaunchLog(dirs, 1000), 'ab\u00e9\u20ac!');
   } finally {
     cleanup();
   }

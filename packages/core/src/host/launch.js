@@ -5,6 +5,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { newId, PROTOCOL_VERSION } from '@workbox/protocol';
 import { E } from '../errors.js';
+import { removeUnder } from './safefs.js';
 
 export const LAUNCH_SCRIPT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -15,6 +16,8 @@ export const RUN_MOUNT = '/run/workbox';
 export const RUNNER_SOCKET = 'runner.sock';
 export const BOOT_FILE = 'boot.json';
 export const LAUNCH_LOG = 'launch.log';
+/** launch.log past this size is rotated to launch.log.1 at the next launch or rotateLaunchLog. */
+export const LAUNCH_LOG_MAX_BYTES = 1024 * 1024;
 
 /** The fourteen capabilities every sandbox process keeps. Mirrors packages/runner/bin/init.sh. */
 export const CAPABILITIES = Object.freeze([
@@ -258,6 +261,7 @@ export function launchEnv(spec) {
 export function spawnSandbox(spec) {
   if (!fs.existsSync(LAUNCH_SCRIPT))
     throw E.unavailable(`launch script missing at ${LAUNCH_SCRIPT}`, { path: LAUNCH_SCRIPT });
+  rotateLaunchLog(spec.dirs);
   const logFd = fs.openSync(spec.dirs.log, 'a', 0o600);
   let seccompFd = spec.seccompFd;
   let seccompFileFd = null;
@@ -299,23 +303,66 @@ export function pidAlive(pid) {
   }
 }
 
-/** @param {SandboxDirs} dirs @param {number} [maxBytes] */
+/** The last `maxBytes` bytes of a file, read without loading the rest. */
+function tailBytes(file, maxBytes) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const buf = Buffer.alloc(Math.min(size, maxBytes));
+    const n = fs.readSync(fd, buf, 0, buf.length, size - buf.length);
+    return buf.subarray(0, n);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * The tail of launch.log, at most `maxBytes` bytes and never the whole file.
+ * @param {SandboxDirs} dirs @param {number} [maxBytes]
+ */
 export function readLaunchLog(dirs, maxBytes = 16 * 1024) {
   try {
-    const text = fs.readFileSync(dirs.log, 'utf8');
-    return text.length > maxBytes ? text.slice(-maxBytes) : text;
+    const buf = tailBytes(dirs.log, maxBytes);
+    let start = 0;
+    // A cut inside a multibyte character leaves continuation bytes at the front; drop them.
+    while (start < Math.min(buf.length, 3) && (buf[start] & 0xc0) === 0x80) start++;
+    return buf.subarray(start).toString('utf8');
   } catch {
     return '';
   }
 }
 
 /**
- * Remove every sandbox directory. The overlay lives only inside the sandbox mount namespace, so
- * nothing needs unmounting on the host once the processes are gone.
+ * Keep launch.log under `maxBytes`: once it is larger, its last `maxBytes` bytes replace
+ * launch.log.1 and launch.log is truncated in place. Truncating instead of renaming keeps a live
+ * launch chain, whose stderr is an O_APPEND descriptor on launch.log, writing into the new log.
+ * @param {SandboxDirs} dirs
+ * @param {number} [maxBytes]
+ * @returns {boolean} true when the log was rotated
+ */
+export function rotateLaunchLog(dirs, maxBytes = LAUNCH_LOG_MAX_BYTES) {
+  let size;
+  try {
+    size = fs.statSync(dirs.log).size;
+  } catch {
+    return false;
+  }
+  if (size <= maxBytes) return false;
+  const rotated = `${dirs.log}.1`;
+  fs.writeFileSync(`${rotated}.tmp`, tailBytes(dirs.log, maxBytes), { mode: 0o600 });
+  fs.renameSync(`${rotated}.tmp`, rotated);
+  fs.truncateSync(dirs.log, 0);
+  return true;
+}
+
+/**
+ * Remove every sandbox directory through removeUnder, so the delete cannot leave the sandboxes
+ * directory. The overlay lives only inside the sandbox mount namespace, so nothing needs
+ * unmounting on the host once the processes are gone.
  * @param {SandboxDirs} dirs
  */
 export function removeDirs(dirs) {
-  fs.rmSync(dirs.root, { recursive: true, force: true });
+  removeUnder(path.dirname(dirs.root), dirs.root);
 }
 
 /** True when any host mount references the sandbox directory (there should be none). @param {SandboxDirs} dirs */

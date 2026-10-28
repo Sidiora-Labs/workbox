@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { E } from '../errors.js';
 import { nullLogger } from '../log.js';
 import { digestTree, sha256File } from './rootfs.js';
+import { removeUnder } from './safefs.js';
 
 export const RUNTIME_MANIFEST = 'manifest.json';
 export const CURRENT = 'current';
@@ -134,7 +135,7 @@ export class RuntimeManager {
     if (fs.existsSync(target) && !opts.force)
       throw E.conflict(`runtime ${version} already exists`, { version, path: target });
     const staging = `${target}.tmp`;
-    fs.rmSync(staging, { recursive: true, force: true });
+    removeUnder(this.dirRoot, staging);
     fs.mkdirSync(path.join(staging, 'node'), { recursive: true, mode: 0o755 });
     try {
       this.log.info('extracting node', { tarball, version });
@@ -175,13 +176,13 @@ export class RuntimeManager {
         `${JSON.stringify(manifest, null, 2)}\n`,
         { mode: 0o644 },
       );
-      if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+      removeUnder(this.dirRoot, target);
       fs.renameSync(staging, target);
       if (opts.setCurrent !== false) this.setCurrent(version);
       this.log.info('runtime installed', { version, digest: manifest.digest });
       return manifest;
     } catch (e) {
-      fs.rmSync(staging, { recursive: true, force: true });
+      removeUnder(this.dirRoot, staging);
       throw e;
     }
   }
@@ -214,7 +215,7 @@ export class RuntimeManager {
   setCurrent(version) {
     if (!this.get(version)) throw E.notFound(`runtime ${version} is not installed`, { version });
     const tmp = `${this.currentPath}.${process.pid}.tmp`;
-    fs.rmSync(tmp, { force: true });
+    removeUnder(this.dirRoot, tmp);
     fs.symlinkSync(version, tmp);
     fs.renameSync(tmp, this.currentPath);
   }
@@ -225,8 +226,7 @@ export class RuntimeManager {
     if (!fs.existsSync(target)) return false;
     const cur = this.current();
     if (cur && cur.version === version) throw E.state(`runtime ${version} is current`, { version });
-    fs.rmSync(target, { recursive: true, force: true });
-    return true;
+    return removeUnder(this.dirRoot, target);
   }
 
   _collectPackages() {

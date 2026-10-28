@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 import {
   runDoctor,
   run,
@@ -10,8 +12,10 @@ import {
   coversRange,
   findInPath,
   formatReport,
+  withProbeCgroup,
   Status,
 } from '../../../src/host/doctor.js';
+import { CgroupManager } from '../../../src/host/cgroup.js';
 import { loadConfig } from '../../../src/config.js';
 import { tmpDir } from '../../helpers/tmp.js';
 
@@ -142,5 +146,40 @@ test('misconfiguration surfaces as failures with remedies', async () => {
     fs.rmdirSync(`/sys/fs/cgroup/workbox-doctor3-${process.pid}`);
   } finally {
     cleanup();
+  }
+});
+
+test('a doctor probe check that fails midway leaves no probe cgroup, even with a live process', async () => {
+  const cg = new CgroupManager({ parent: `workbox-doctor-probe-${process.pid}` });
+  let sleeper = null;
+  try {
+    cg.ensureParent();
+    const name = `doctor-${process.pid}`;
+    const probe = cg.childPath(name);
+    await assert.rejects(
+      withProbeCgroup(cg, name, (p) => {
+        assert.equal(p, probe);
+        sleeper = spawn('sleep', ['60'], { stdio: 'ignore' });
+        cg.addProcess(p, sleeper.pid);
+        assert.deepEqual(cg.procs(p), [sleeper.pid]);
+        return fs.readFileSync(path.join(p, 'no-such-controller.file'));
+      }),
+      (e) => e.code === 'ENOENT',
+    );
+    assert.equal(fs.existsSync(probe), false, 'probe cgroup removed after the check threw');
+    assert.deepEqual(cg.list(), []);
+    if (sleeper.exitCode === null && sleeper.signalCode === null)
+      await new Promise((resolve) => sleeper.once('exit', resolve));
+    assert.equal(sleeper.signalCode, 'SIGKILL', 'the process that joined the probe was killed');
+    assert.equal(
+      await withProbeCgroup(cg, name, (p) => fs.existsSync(path.join(p, 'cgroup.kill'))),
+      true,
+    );
+    assert.equal(fs.existsSync(probe), false, 'probe removed after a passing check too');
+  } finally {
+    if (sleeper && sleeper.exitCode === null && sleeper.signalCode === null)
+      sleeper.kill('SIGKILL');
+    for (const child of cg.list()) await cg.remove(cg.childPath(child)).catch(() => undefined);
+    if (fs.existsSync(cg.parentPath)) fs.rmdirSync(cg.parentPath);
   }
 });

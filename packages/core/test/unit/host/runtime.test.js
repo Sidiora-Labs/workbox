@@ -171,3 +171,31 @@ test('runtime packages with external dependencies are refused and downloads are 
     cleanup();
   }
 });
+
+test('remove and setCurrent delete through removeUnder: escaping links are unlinked, never followed', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'keep'), 'host data');
+    const root = path.join(dir, 'runtime');
+    fs.mkdirSync(path.join(root, 'v1'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'v1', 'manifest.json'), JSON.stringify({ version: 'v1' }));
+    const mgr = new RuntimeManager({ paths: { runtime: root }, cacheDir: CACHE });
+    const staleTmp = `${mgr.currentPath}.${process.pid}.tmp`;
+    fs.symlinkSync(outside, staleTmp);
+    mgr.setCurrent('v1');
+    assert.equal(mgr.current().version, 'v1');
+    assert.equal(fs.existsSync(staleTmp), false);
+    fs.symlinkSync(outside, path.join(root, 'v2'));
+    assert.equal(mgr.remove('v2'), true);
+    assert.equal(fs.existsSync(path.join(root, 'v2')), false);
+    assert.equal(fs.readFileSync(path.join(outside, 'keep'), 'utf8'), 'host data');
+    assert.throws(
+      () => mgr.remove('v1'),
+      (e) => e.code === 'E_STATE',
+    );
+  } finally {
+    cleanup();
+  }
+});

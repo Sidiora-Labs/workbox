@@ -152,3 +152,62 @@ test('a second runner presenting a consumed nonce is quarantined; a broken runti
     await eng.cleanup();
   }
 });
+
+test('destroying a real sandbox removes only its own directories, never what its links point at', async () => {
+  const eng = await testEngine();
+  const sups = [];
+  try {
+    const outside = path.join(eng.dir, 'host-data');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'keep'), 'host bytes');
+    const launch = async (name) => {
+      const row = eng.store.createSandbox({
+        name,
+        rootfs: 'minimal',
+        runtime: 'current',
+        profile: {},
+      });
+      const sup = new Supervisor({ ...eng, sandbox: row });
+      sups.push(sup);
+      await sup.launch();
+      return sup;
+    };
+    const victim = await launch('victim');
+    const sibling = await launch('sibling');
+    const siblingDirs = sandboxDirs(eng.config.paths.sandboxes, sibling.id);
+    const victimDirs = sandboxDirs(eng.config.paths.sandboxes, victim.id);
+    const made = await victim.exec({
+      argv: [
+        'sh',
+        '-c',
+        `ln -s ${siblingDirs.root} /workspace/to-sibling && ln -s ${outside} /workspace/to-host && ln -s / /workspace/to-slash && echo agent > /workspace/own.txt`,
+      ],
+      timeoutMs: 30_000,
+    });
+    assert.equal(made.exitCode, 0, made.stderr);
+    assert.ok(
+      fs.lstatSync(path.join(victimDirs.upper, 'workspace', 'to-sibling')).isSymbolicLink(),
+      'the agent link landed in the upper layer on the host',
+    );
+    fs.writeFileSync(path.join(siblingDirs.upper, 'sibling.txt'), 'sibling bytes');
+    const siblingBefore = fs.readdirSync(siblingDirs.root).sort();
+
+    assert.equal((await victim.destroy()).state, 'DELETED');
+    assert.equal(fs.existsSync(victimDirs.root), false, 'the victim directories are gone');
+    assert.equal(fs.readFileSync(path.join(outside, 'keep'), 'utf8'), 'host bytes');
+    assert.deepEqual(fs.readdirSync(siblingDirs.root).sort(), siblingBefore);
+    assert.equal(
+      fs.readFileSync(path.join(siblingDirs.upper, 'sibling.txt'), 'utf8'),
+      'sibling bytes',
+    );
+    assert.ok(fs.existsSync(eng.config.paths.sandboxes), 'the sandboxes directory stays');
+    assert.ok(fs.existsSync(path.join(eng.rootfs.dir('minimal'), 'bin')), 'the rootfs stays');
+    const status = await sibling.request('runner.status', {});
+    assert.equal(status.phase, 'ready', 'the sibling sandbox keeps running');
+    assert.equal((await sibling.destroy()).state, 'DELETED');
+    assert.equal(fs.existsSync(siblingDirs.root), false);
+  } finally {
+    for (const sup of sups) await sup.destroy().catch(() => undefined);
+    await eng.cleanup();
+  }
+});

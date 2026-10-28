@@ -171,3 +171,21 @@ test('list returns every built rootfs sorted by name, skipping unbuilt and stagi
     cleanup();
   }
 });
+
+test('remove goes through removeUnder: a rootfs that is a link out of the root is only unlinked', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, ROOTFS_MANIFEST), JSON.stringify({ name: 'evil' }));
+    const root = path.join(dir, 'rootfs');
+    fs.mkdirSync(root);
+    fs.symlinkSync(outside, path.join(root, 'evil'));
+    const mgr = new RootfsManager({ paths: { rootfs: root }, uid: { base: BASE, count: 65536 } });
+    assert.equal(mgr.remove('evil'), true);
+    assert.equal(fs.existsSync(path.join(root, 'evil')), false);
+    assert.ok(fs.existsSync(path.join(outside, ROOTFS_MANIFEST)), 'the link target is untouched');
+  } finally {
+    cleanup();
+  }
+});

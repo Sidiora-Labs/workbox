@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { CgroupManager, REQUIRED_CONTROLLERS } from './cgroup.js';
+import { removeUnder } from './safefs.js';
 
 export const Status = Object.freeze({ PASS: 'pass', FAIL: 'fail', WARN: 'warn' });
 
@@ -127,7 +128,7 @@ export async function runDoctor(config, opts = {}) {
     subidCheck('subgid', '/etc/subgid', config.uid, ctx.uid),
     usernsCheck(),
     await overlayProbe(config.uid),
-    cgroupCheck(config),
+    await cgroupCheck(config),
     ...(await networkToolChecks(config.network.mode)),
     await dockerCheck(),
     ...assetChecks(config),
@@ -372,23 +373,45 @@ async function overlayProbe(uidCfg) {
       'Run as root with a writable temp directory.',
     );
   } finally {
-    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    if (dir) removeUnder(path.dirname(dir), dir);
   }
 }
 
-function cgroupCheck(config) {
+/** Limits applied to the doctor's probe cgroup. */
+const PROBE_LIMITS = Object.freeze({
+  memoryBytes: 64 * 1024 * 1024,
+  swapBytes: 0,
+  cpuMillis: 100,
+  pids: 8,
+});
+
+/**
+ * Create the probe cgroup `name` under the manager's parent, run `fn` on its path and remove the
+ * probe in a `finally`, killing anything that joined it, so a check that throws midway never
+ * leaves a cgroup behind on the host.
+ * @template T
+ * @param {CgroupManager} cg
+ * @param {string} name
+ * @param {(probe: string) => T | Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+export async function withProbeCgroup(cg, name, fn) {
+  const probe = cg.create(name, PROBE_LIMITS);
+  try {
+    return await fn(probe);
+  } finally {
+    await cg.remove(probe, { timeoutMs: 5_000 });
+  }
+}
+
+async function cgroupCheck(config) {
   const title = 'cgroup v2 with cpu, memory and pids delegated';
   try {
     const cg = new CgroupManager({ root: config.cgroup.root, parent: config.cgroup.parent });
     const parent = cg.ensureParent();
-    const probe = cg.create(`doctor-${process.pid}`, {
-      memoryBytes: 64 * 1024 * 1024,
-      swapBytes: 0,
-      cpuMillis: 100,
-      pids: 8,
-    });
-    const hasKill = fs.existsSync(path.join(probe, 'cgroup.kill'));
-    fs.rmdirSync(probe);
+    const hasKill = await withProbeCgroup(cg, `doctor-${process.pid}`, (probe) =>
+      fs.existsSync(path.join(probe, 'cgroup.kill')),
+    );
     const missing = REQUIRED_CONTROLLERS.filter((c) => !parent.controllers.includes(c));
     if (missing.length)
       return check(
