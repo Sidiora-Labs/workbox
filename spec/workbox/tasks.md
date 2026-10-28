@@ -101,7 +101,7 @@
   - [ ] 4.1 Deployment assets
     - systemd unit with hardening directives compatible with the launch chain, a server Dockerfile that is documented as needing privileged mode, install.sh that creates the Workbox root, subordinate ranges and the cgroup parent, and deploy/check.sh that validates the unit and Dockerfile syntax and runs workbox doctor.
     - _Requirements: 7.3_
-  - [ ] 4.2 Documentation
+  - [x] 4.2 Documentation
     - docs/architecture.md, docs/security.md with limits, docs/wb.md generated from wb tools --json by docs/gen-wb.mjs, docs/hyperfide-provider.md mapping each provider operation to an endpoint, docs/operations.md; docs/check.mjs asserts the generated reference is current and every link resolves.
     - _Requirements: 7.4_
   - [ ] 4.3 End-to-end and density measurement

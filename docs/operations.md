@@ -1,48 +1,131 @@
-# Operations runbook
+# Operations
 
-## Bring-up
+Procedures for running Workbox on one Linux host. `workbox` below is the operator CLI,
+`packages/cli/src/main.js` (the `workbox` bin of `@workbox/cli`); from a checkout run it as
+`node packages/cli/src/main.js`. Everything here runs as root.
+
+## Install
+
+1. Run `sh deploy/install.sh`. It creates the Workbox root (`/var/lib/workbox`, mode 0700, or
+   `WORKBOX_ROOT`) and `/etc/workbox`, adds `root:200000:65536` to `/etc/subuid` and
+   `/etc/subgid`, enables unprivileged user namespaces where the sysctl exists, and creates the
+   `workbox` cgroup parent with the cpu, memory and pids controllers delegated. It is safe to run
+   again.
+2. Run `workbox doctor` (or `workbox doctor --json`). It reports every host prerequisite as pass
+   or fail with a remedy: privileges, kernel, bubblewrap, unshare, the tools the launch chain and
+   network need, user namespaces, cgroup v2 controllers, overlayfs inside a user namespace, Docker
+   for rootfs builds, and whether a rootfs and a runtime are installed. Fix every failure before
+   creating sandboxes.
+3. `workbox rootfs build minimal` builds the base rootfs (needs Docker). `workbox rootfs list`
+   shows installed ones with their digests.
+4. `workbox runtime install` installs Node 22 and the in-box packages (`--node-version v`,
+   `--tarball file` for an offline install). `workbox runtime list` shows them.
+
+## Run the server
 
 ```sh
-sudo sh deploy/install.sh
-workbox doctor                 # every prerequisite pass/fail with a remedy
-workbox rootfs build minimal
-workbox runtime install
 WORKBOX_TOKEN=$(openssl rand -hex 24) workbox serve --host 127.0.0.1 --port 8790
-# or: systemctl enable --now workbox   (deploy/workbox.service)
 ```
 
-Smoke test:
+- `workbox serve [--config file] [--port n] [--host h]` serves the REST and WebSocket API on the
+  local engine until SIGTERM or SIGINT, then closes gracefully. The address comes from the flags,
+  then `WORKBOX_PORT`, then the config file, then `127.0.0.1:8790`.
+- Keys come from the config file and the environment. `WORKBOX_TOKEN` defines one key with every
+  scope; otherwise `WORKBOX_API_KEYS` may hold a JSON array of keys.
+- The config file is `{"keys": [{"id", "tokenSha256", "scopes"}], "host", "port",
+"serverNames"}`. Scopes are `read`, `exec`, `admin` and `answer`. Unknown keys, bad types and
+  unusable keys refuse to start. `serverNames` lists the `Host` names accepted besides
+  `localhost`, `127.0.0.1` and `::1`; add the name a TLS-terminating proxy forwards.
+- To rotate a key: add the new key, restart, move clients over, remove the old key, restart.
+- `deploy/workbox.service` runs `serve` under systemd with `EnvironmentFile=-/etc/workbox/workbox.env`.
 
-```sh
-workbox sandbox create --name smoke
-workbox sandbox exec <id> -- sh -c 'id; wb status --json; wb run -- echo hello'
-workbox sandbox rm <id>
-workbox audit verify
-```
+Drive sandboxes through the server (`--server http://127.0.0.1:8790 --token ...`, the SDK or MCP).
+The process that creates a sandbox owns its proxy and slirp4netns. A local
+`workbox sandbox create` without `--server` exits right after the sandbox is ready, and an
+`egress` or `allowlist` sandbox created that way has no outside network from then on (see
+[the stated limits](security.md#stated-limits)).
 
 ## Configuration
 
-`loadConfig` resolves defaults → JSON file (`WORKBOX_CONFIG`) → environment (`WORKBOX_ROOT`, `WORKBOX_SECRETS_FILE`, `WORKBOX_UID_BASE`, `WORKBOX_CGROUP_PARENT`, `WORKBOX_NETWORK_MODE`, …) → explicit overrides. Unknown shapes fail closed with coded errors. Secrets live in `/etc/workbox/secrets.json` (0600, `{ "REF": "value" }`) or `WORKBOX_SECRET_<REF>` environment variables; grant a sandbox a ref at create time with `secretRefs`.
+`loadConfig` (`packages/core/src/config.js`) applies defaults, then the JSON file named by
+`WORKBOX_CONFIG`, then the environment: `WORKBOX_ROOT`, `WORKBOX_SECRETS_FILE`,
+`WORKBOX_UID_BASE`, `WORKBOX_UID_COUNT`, `WORKBOX_CGROUP_ROOT`, `WORKBOX_CGROUP_PARENT`,
+`WORKBOX_NETWORK_MODE`, `WORKBOX_ROOTFS`, `WORKBOX_RUNTIME`. Unknown keys and out-of-range values
+fail closed with a coded error. Defaults: limits of 2 GiB memory, no swap, 2000 millicores and
+4096 pids; network mode `egress`; rootfs `minimal`; runtime `current`; spool 8 MiB; stop grace
+5 s; lease TTL 300 s; boot timeout 20 s.
 
-## API keys
+Secrets live in `/etc/workbox/secrets.json` (`{"REF": "value"}`, must not be group or world
+readable) or in `WORKBOX_SECRET_<REF>` variables of the daemon. Values shorter than 8 characters
+are refused. Grant references to a sandbox at create time with `secretRefs`.
 
-`WORKBOX_TOKEN` becomes a full-access key for `workbox serve`. For scoped keys set `WORKBOX_API_KEYS` to a JSON array of `{"id", "tokenSha256", "scopes"}` (scopes: `read`, `exec`, `admin`, `answer`). Rotate by adding the new key, switching clients, then removing the old one.
+## Observe
 
-## Observability
+- `GET /metrics` (read scope): `workbox_http_requests_total{route,method,status}`,
+  `workbox_ws_connections_total`, `workbox_ws_dropped_total`, `workbox_sandboxes{state}`.
+- `GET /healthz` is liveness; `GET /readyz` fails with 503 while the server shuts down.
+- Logs are structured JSON lines with a component tag; registered secret values are redacted.
+- First debugging steps: `workbox sandbox inspect <id>` (desired state, `stateReason`, health,
+  `lastObservedAt`, sessions), `workbox sandbox events <id>` (events; locally also the state
+  transitions), and `wb
+status` inside the box. `wb net policy` shows the effective network mode; `wb net test <host>
+<port>` probes a target. Proxy decisions are in the audit log as `net.allow` and `net.deny`.
 
-- `GET /metrics` (read scope): `workbox_http_requests_total{route,status}`, `workbox_sandboxes{state}`.
-- Structured JSON logs on stdout (component-tagged); secret values are redacted.
-- Audit: hash-chained NDJSON under `<root>/audit`. Verify with `workbox audit verify` after any incident or restore.
-- `wb status`, `workbox sandbox inspect <id>`, `workbox sandbox events <id>` are the first three debugging commands.
+## Reconcile after a restart
 
-## Failure handling
+Sandboxes are detached from the daemon and keep running when it stops. `workbox serve`
+reconciles at start, the local CLI before every `sandbox` and `shell` command, and
+`POST /v1/reconcile` (admin) on demand. The result lists `attached`, `absent`, `suspect` and
+`quarantined` ids:
 
-- Sandbox stuck `PROVISIONING`/`BOOTSTRAPPING`: read `sandboxes/<id>/launch.log`; `workbox doctor` re-checks the host.
-- `QUARANTINED`: self-check failure or nonce replay. Inspect, then destroy (`workbox sandbox rm <id>`); quarantine never auto-retries.
-- `DELETING` that never reaches `DELETED`: the cgroup would not empty; the row's `stateReason` carries the failure. Check cgroup processes, then retry the destroy.
-- Daemon restart: `serve` reconciles on start. Live sandboxes reattach; `ABSENT` sandboxes are reported, never relaunched.
-- Network wrong: `wb net policy` in-box shows the effective mode; `wb net test <host> <port>` probes. Proxy denials are audited on the host.
+- `attached`: processes are still in the cgroup; the control channel is reconnected and the
+  sessions are listed from the runner.
+- `absent`: the cgroup is empty. The sandbox is observed `ABSENT` and never relaunched; destroy it.
+- `quarantined`: the runner did not prove the same boot (wrong boot id or nonce replay).
 
-## Backup / restore (single host)
+Reconcile does not restart a sandbox's proxy or slirp4netns. An `egress` or `allowlist` sandbox
+that survived a daemon restart keeps its nftables rules but has no outside network; recreate it
+(from a checkpoint if its files matter).
 
-Stop the daemon, snapshot `<root>/workbox.db` (+ `-wal`), `<root>/audit`, `<root>/artifacts` and `<root>/checkpoints`. Restore to an empty root, run `workbox audit verify`, then start and reconcile. There is no HA claim in v1.
+## Quarantine and stuck boots
+
+- A sandbox stuck in `PROVISIONING` or `BOOTSTRAPPING`, or `QUARANTINED` after a launch failure:
+  read `<root>/sandboxes/<id>/launch.log` (rotated to `launch.log.1` past 1 MiB) and the
+  `stateReason` from `workbox sandbox inspect <id>`. Re-run `workbox doctor`.
+- `QUARANTINED` is never retried automatically. Inspect it, then destroy it.
+
+## Recover from a failed destroy
+
+A destroy that cannot confirm absence leaves the row in `DELETING` with
+`destroy incomplete: <reason>` in `stateReason`, and the API returns the error.
+
+1. `workbox sandbox inspect <id>` and read `stateReason`.
+2. If the cgroup would not empty, list what is left in
+   `/sys/fs/cgroup/workbox/<id>/cgroup.procs` and find why those processes survive
+   `cgroup.kill` (for example a process stuck in uninterruptible sleep).
+3. If host mounts still reference the sandbox, find them in `/proc/self/mountinfo` under
+   `<root>/sandboxes/<id>` and unmount them.
+4. Run `workbox sandbox rm <id>` again. Destroy resumes from `DELETING` and records `DELETED` only
+   once the cgroup is gone, the directories are removed and no mount references them.
+
+## Back up and restore
+
+The durable state is the store, the audit log, the artifact store and the checkpoints:
+`<root>/workbox.db` with its `-wal` and `-shm` files, `<root>/audit/`, `<root>/artifacts/` and
+`<root>/checkpoints/`. Rootfs and runtime directories can be rebuilt from their recipes.
+
+1. Stop `workbox serve` and make sure no other `workbox` process is running, so nothing writes
+   the store or the audit log. Running sandboxes are not affected.
+2. Copy the files above together, keeping the `-wal` file with the database.
+3. Run `workbox audit verify` on the copy (`WORKBOX_ROOT=<copy>`). It prints `{ok, entries,
+brokenAt}`; check `ok`, because the command exits 0 either way.
+
+To restore, put the copy in an empty Workbox root, run `workbox audit verify`, then start
+`workbox serve`. Its reconcile marks every sandbox that is not running on this host `ABSENT`;
+destroy those rows and recreate what is needed with `fromCheckpoint`. There is no HA in v1.
+
+## Remove the proxy link
+
+The proxies' dummy link `workbox0` (198.18.0.1/32) stays on the host after the last sandbox is
+destroyed. Remove it with `ip link del workbox0` when no sandbox with networking is running; the
+next sandbox recreates it.
