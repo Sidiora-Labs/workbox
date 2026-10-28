@@ -146,10 +146,8 @@ test('operator CLI: assets, create, kill the manager, rediscover with sessions, 
 
     const rootfs = await cli(env, 'rootfs', 'list');
     assert.equal(rootfs.code, 0, rootfs.stderr);
-    assert.deepEqual(
-      rootfs.json.rootfs.map((r) => r.name),
-      ['minimal'],
-    );
+    // The shared assets root may also hold the agents rootfs another test built.
+    assert.ok(rootfs.json.rootfs.some((r) => r.name === 'minimal'));
     const rebuild = await cli(env, 'rootfs', 'build', 'minimal');
     assert.equal(rebuild.code, 1);
     assert.match(rebuild.stderr, /rootfs minimal already exists \(E_CONFLICT\)/);

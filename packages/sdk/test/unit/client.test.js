@@ -236,7 +236,9 @@ test('a session stream on a refused upgrade throws instead of hanging', async ()
       },
       (e) => e instanceof WorkboxApiError && e.code === 'E_UNAVAILABLE',
     );
-    assert.deepEqual(upgrades, ['/v1/sandboxes/sb-1/sessions/s%201/ws?token=tok']);
+    // Node 24's WebSocket client may retry a refused upgrade once; every attempt is this URL.
+    assert.ok(upgrades.length >= 1);
+    for (const url of upgrades) assert.equal(url, '/v1/sandboxes/sb-1/sessions/s%201/ws?token=tok');
   } finally {
     await srv.close();
   }

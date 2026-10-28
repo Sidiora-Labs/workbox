@@ -185,11 +185,17 @@ function auditOf(eng, sandboxId, action) {
     .filter((e) => e.sandboxId === sandboxId && e.action === action);
 }
 
-/** A host address outside every blocked range, other than the test peer's veth: eth0's. */
+/**
+ * The host's own uplink address, other than the test peer's veth: a public one when the host has
+ * it, else (on a host behind NAT, such as a CI runner) its private one, which must be just as
+ * unreachable from the box.
+ */
 function hostPublicAddress() {
-  const v4 = [...hostAddresses()].filter((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a));
-  const pick = v4.find((a) => !isPrivateIpv4(a) && a !== PEER_HOST);
-  assert.ok(pick, 'the host has a public IPv4 address');
+  const v4 = [...hostAddresses()].filter(
+    (a) => /^\d+\.\d+\.\d+\.\d+$/.test(a) && a !== PEER_HOST && !a.startsWith('127.'),
+  );
+  const pick = v4.find((a) => !isPrivateIpv4(a)) ?? v4.find((a) => a !== NET_DEFAULTS.proxyHost);
+  assert.ok(pick, 'the host has an IPv4 address besides loopback and the test peer');
   return pick;
 }
 
