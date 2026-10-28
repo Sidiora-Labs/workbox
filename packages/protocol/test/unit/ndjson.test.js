@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { once } from 'node:events';
 import { LineDecoder, encodeFrame } from '../../src/ndjson.js';
-import { Codes } from '../../src/errors.js';
+import { Codes, ProtocolError } from '../../src/errors.js';
+import { Peer } from '../../src/peer.js';
 
 test('encodeFrame produces one JSON line', () => {
   const buf = encodeFrame({ a: 1, b: 'x' });
@@ -53,4 +59,52 @@ test('decoder handles multi-byte utf8 split across chunks', () => {
   const cut = line.indexOf('—'.charCodeAt(0) & 0xff) || 7;
   const out = [...d.feed(line.subarray(0, cut)), ...d.feed(line.subarray(cut))];
   assert.deepEqual(out, [{ s: 'héllo — 日本' }]);
+});
+
+test('invalid UTF-8 is a coded parse error by default and lossy only on request', () => {
+  const wrap = (bytes) =>
+    Buffer.concat([Buffer.from('{"s":"'), Buffer.from(bytes), Buffer.from('"}\n')]);
+  const bad = [wrap([0xff]), wrap([0xc0, 0xaf]), wrap([0xe2, 0x82]), wrap([0xed, 0xa0, 0x80])];
+  for (const line of bad) {
+    const d = new LineDecoder();
+    assert.equal(d.fatal, true);
+    assert.throws(
+      () => d.feed(line),
+      (e) => e.code === Codes.PARSE && e.data.encoding === 'utf-8' && e.data.line === 0,
+    );
+  }
+  const lossy = new LineDecoder({ fatal: false });
+  assert.deepEqual(lossy.feed(bad[0]), [{ s: '�' }]);
+  const strict = new LineDecoder();
+  assert.deepEqual(strict.feed(encodeFrame({ s: '😀 é' })), [{ s: '😀 é' }]);
+  assert.deepEqual(strict.feed(encodeFrame({ s: '\ud800' })), [{ s: '\ud800' }]);
+});
+
+test('invalid UTF-8 on a Peer control channel closes it with a coded protocol error', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wbutf8-'));
+  const sock = path.join(dir, 's.sock');
+  const server = net.createServer();
+  server.listen(sock);
+  await once(server, 'listening');
+  const accepted = once(server, 'connection');
+  const raw = net.connect(sock);
+  await once(raw, 'connect');
+  const [serverSide] = await accepted;
+  const peer = new Peer(serverSide, { name: 'server' });
+  try {
+    const errors = [];
+    peer.on('protocolError', (e) => errors.push(e.code));
+    raw.write(Buffer.concat([Buffer.from('{"t":"evt","m":"x","p":"'), Buffer.from([0xfe, 0x0a])]));
+    const err = await peer.whenClosed();
+    assert.ok(err instanceof ProtocolError);
+    assert.equal(err.code, Codes.PARSE);
+    assert.equal(err.data.encoding, 'utf-8');
+    assert.deepEqual(errors, [Codes.PARSE]);
+    assert.equal(peer.closed, true);
+  } finally {
+    peer.close();
+    raw.destroy();
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

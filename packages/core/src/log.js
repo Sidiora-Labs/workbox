@@ -46,11 +46,16 @@ export function createLogger(opts = {}) {
   };
 }
 
+/** Field names that would reach the record's prototype; they are dropped, never written. */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 /** @param {object} data */
 function serialise(data) {
   const out = {};
-  for (const [k, val] of Object.entries(data))
+  for (const [k, val] of Object.entries(data)) {
+    if (UNSAFE_KEYS.has(k)) continue;
     out[k] = val instanceof Error ? errorToJSON(val) : val;
+  }
   return out;
 }
 

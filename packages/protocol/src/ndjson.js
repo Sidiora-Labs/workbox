@@ -13,11 +13,15 @@ export function encodeFrame(value) {
 /**
  * Incremental newline-delimited JSON decoder with a hard line-length bound.
  * feed() returns the complete objects found so far; an oversized or unparsable line throws.
+ * Lines must be well-formed UTF-8 unless `fatal: false` restores lossy U+FFFD replacement;
+ * binary payloads travel base64-encoded inside the JSON and never reach this check raw.
  */
 export class LineDecoder {
-  /** @param {{maxLineBytes?: number}} [opts] */
+  /** @param {{maxLineBytes?: number, fatal?: boolean}} [opts] */
   constructor(opts = {}) {
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
+    this.fatal = opts.fatal ?? true;
+    this.text = new TextDecoder('utf-8', { fatal: this.fatal, ignoreBOM: true });
     /** @type {Buffer[]} */
     this.chunks = [];
     this.pending = 0;
@@ -57,8 +61,17 @@ export class LineDecoder {
       }
       if (line.length && line[line.length - 1] === 13) line = line.subarray(0, line.length - 1);
       if (!line.length) continue;
+      let text;
       try {
-        out.push(JSON.parse(line.toString('utf8')));
+        text = this.text.decode(line);
+      } catch {
+        throw new ProtocolError(Codes.PARSE, 'line is not valid UTF-8', {
+          line: this.lines,
+          encoding: 'utf-8',
+        });
+      }
+      try {
+        out.push(JSON.parse(text));
       } catch (e) {
         throw new ProtocolError(Codes.PARSE, `invalid JSON line: ${e.message}`, {
           line: this.lines,

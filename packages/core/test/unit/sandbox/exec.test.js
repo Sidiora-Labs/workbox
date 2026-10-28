@@ -11,6 +11,7 @@ import {
   exec,
   DEFAULT_EXEC_TIMEOUT_MS,
   DEFAULT_MAX_OUTPUT_BYTES,
+  utf8Boundary,
 } from '../../../src/sandbox/exec.js';
 
 /**
@@ -109,4 +110,55 @@ test('exec truncates bounded output and reports a timeout with the stop signal',
   } finally {
     await cleanup();
   }
+});
+
+test('capture cut at a multibyte boundary stays valid UTF-8 and reports truncation', async () => {
+  const { target, cleanup } = await runnerTarget();
+  try {
+    const euro = await exec(target, {
+      argv: [
+        'sh',
+        '-c',
+        "printf '\\342\\202\\254\\342\\202\\254'; printf 'x\\360\\237\\230\\200' >&2",
+      ],
+      maxOutputBytes: 4,
+    });
+    assert.equal(euro.stdout, '€');
+    assert.equal(euro.stderr, 'x');
+    assert.deepEqual(euro.truncated, { stdout: true, stderr: true });
+    const emoji = await exec(target, {
+      argv: ['sh', '-c', "printf '\\360\\237\\230\\200\\360\\237\\230\\200'"],
+      maxOutputBytes: 6,
+    });
+    assert.equal(emoji.stdout, '😀');
+    assert.equal(emoji.truncated.stdout, true);
+    const split = await exec(target, {
+      argv: ['sh', '-c', "printf '\\342\\202'; sleep 0.1; printf '\\254tail'"],
+      maxOutputBytes: 2,
+    });
+    assert.equal(split.stdout, '');
+    assert.equal(split.truncated.stdout, true);
+    const whole = await exec(target, { argv: ['sh', '-c', "printf 'a\\342'"] });
+    assert.equal(whole.stdout, 'a�', 'untruncated output is decoded as written');
+    assert.equal(whole.truncated.stdout, false);
+    for (const r of [euro, emoji, split]) {
+      assert.equal(r.stdout.includes('�') || r.stderr.includes('�'), false);
+    }
+  } finally {
+    await cleanup();
+  }
+});
+
+test('utf8Boundary drops only a trailing incomplete sequence', () => {
+  const at = (bytes) => utf8Boundary(Buffer.from(bytes));
+  assert.equal(at([]), 0);
+  assert.equal(at([0x61, 0x62]), 2);
+  assert.equal(at([0x61, 0xc3]), 1);
+  assert.equal(at([0xc3, 0xa9]), 2);
+  assert.equal(at([0x61, 0xe2, 0x82]), 1);
+  assert.equal(at([0xe2, 0x82, 0xac]), 3);
+  assert.equal(at([0xf0, 0x9f, 0x98]), 0);
+  assert.equal(at([0xf0, 0x9f, 0x98, 0x80]), 4);
+  assert.equal(at([0x61, 0x80, 0x80, 0x80, 0x80]), 5, 'stray continuation bytes are left');
+  assert.equal(at([0x61, 0xff]), 2, 'invalid lead bytes are left for the decoder');
 });
