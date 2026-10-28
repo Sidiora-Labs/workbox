@@ -222,9 +222,9 @@ export class Supervisor extends EventEmitter {
     return this.sandbox;
   }
 
-  _observe(health) {
+  _observe(health, reason) {
     if (this.sandbox.health !== health) {
-      this.log.info('health', { health });
+      this.log.info('health', reason ? { health, reason } : { health });
       this.emit('health', health);
     }
     this.sandbox = this.store.observe(this.id, health);
@@ -393,10 +393,21 @@ export class Supervisor extends EventEmitter {
             result: consumed,
           });
       }
+      // The network died with the daemon that started it; a failure to restore it leaves the
+      // sandbox SUSPECT rather than quarantined, since its rules still fail closed.
+      let extra = {};
+      try {
+        extra = (await this.hooks.afterAttach?.(this)) ?? {};
+      } catch (e) {
+        this.log.warn('network not restored', { err: e });
+      }
       if (hello.phase === 'boot' && this.sandbox.state === States.BOOTSTRAPPING) {
         const go = await this.peer.request(
           'runner.go',
-          { network: { mode: this.networkMode } },
+          {
+            env: { ...(extra.env ?? {}) },
+            network: extra.network ?? { mode: this.networkMode },
+          },
           { timeoutMs: 30_000 },
         );
         this.checks = go.checks;
@@ -410,10 +421,10 @@ export class Supervisor extends EventEmitter {
           });
         this._transition(States.READY, 'runner ready after reattach');
       }
-      this._observe(Health.HEALTHY);
-      this._audit('sandbox.attach', { bootId: hello.bootId, phase: hello.phase });
+      const health = this.observeHealth();
+      this._audit('sandbox.attach', { bootId: hello.bootId, phase: hello.phase, health });
       this.startHealthPoll();
-      return Health.HEALTHY;
+      return health;
     } catch (e) {
       const err = WorkboxError.from(e);
       if (err.code === 'E_QUARANTINED') {
@@ -438,13 +449,24 @@ export class Supervisor extends EventEmitter {
     return this.peer.request(method, params, opts);
   }
 
-  /** Current health from the cgroup and the control channel, recorded in the store. */
+  /**
+   * Current health from the cgroup, the control channel and the network the sandbox was given,
+   * recorded in the store: HEALTHY needs all three; a live sandbox missing either of the others
+   * is SUSPECT.
+   */
   observeHealth() {
     const alive =
       this.cgroups.exists(this.cgroupPath) && this.cgroups.procs(this.cgroupPath).length > 0;
     let health = Health.ABSENT;
-    if (alive) health = this.peer && !this.peer.closed ? Health.HEALTHY : Health.SUSPECT;
-    this._observe(health);
+    let reason;
+    if (alive && (!this.peer || this.peer.closed)) {
+      health = Health.SUSPECT;
+      reason = 'control channel closed';
+    } else if (alive && !(this.hooks.networkAlive?.(this) ?? true)) {
+      health = Health.SUSPECT;
+      reason = 'network down';
+    } else if (alive) health = Health.HEALTHY;
+    this._observe(health, reason);
     return health;
   }
 

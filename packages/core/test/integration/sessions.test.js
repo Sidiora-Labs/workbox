@@ -131,9 +131,16 @@ test('sessions in a real sandbox: identity, OOM kill, pid limit, exec, survival 
     assert.equal(text.trim().split('\n')[0], 'tick0');
 
     const sleeper = await again.request('session.start', {
-      argv: ['sh', '-c', 'trap "" TERM; sleep 60'],
+      argv: ['sh', '-c', 'trap "" TERM; echo armed; sleep 60'],
       name: 'stubborn',
     });
+    // Stop only once the trap is in place: a SIGTERM that beats `trap` kills sh outright.
+    for (let armed = false, deadline = Date.now() + 10_000; !armed; ) {
+      assert.ok(Date.now() < deadline, 'the stubborn session printed armed');
+      const { sessions } = await again.request('session.list', {});
+      armed = sessions.find((s) => s.sessionId === sleeper.sessionId)?.seq >= 1;
+      if (!armed) await new Promise((r) => setTimeout(r, 25));
+    }
     const stopped = await again.request(
       'session.stop',
       { sessionId: sleeper.sessionId, graceMs: 300 },

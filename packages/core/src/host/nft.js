@@ -44,7 +44,8 @@ export function isPrivateIpv4(ip) {
   });
 }
 
-function assertPort(port, name) {
+/** @param {number} port @param {string} name */
+export function assertPort(port, name) {
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw E.invalid(`${name} must be in 1..65535`, { [name]: port });
   return port;

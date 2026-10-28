@@ -49,9 +49,10 @@ One engine drives a Workbox root at a time: `serve` and the local `workbox sandb
 shell` commands hold `<root>/.engine.lock` while they run, so a local sandbox command next to a
 running server exits 4 (`E_BUSY`) and names the holder instead of attaching to the server's
 sandboxes. `doctor`, `rootfs`, `runtime` and `audit` take no lock. A holder that died leaves a lock
-the next engine breaks. The process that creates a sandbox owns its proxy and slirp4netns. A local
-`workbox sandbox create` without `--server` exits right after the sandbox is ready, and an
-`egress` or `allowlist` sandbox created that way has no outside network from then on (see
+the next engine breaks. The engine driving a sandbox runs its proxy and slirp4netns, so an
+`egress` or `allowlist` sandbox has outside network while an engine drives it: a local
+`workbox sandbox create` without `--server` exits right after the sandbox is ready, and the box
+is offline until the next engine reconciles it (see
 [the stated limits](security.md#stated-limits)).
 
 ## Configuration
@@ -87,14 +88,22 @@ reconciles at start, the local CLI before every `sandbox` and `shell` command, a
 `POST /v1/reconcile` (admin) on demand. The result lists `attached`, `absent`, `suspect` and
 `quarantined` ids:
 
-- `attached`: processes are still in the cgroup; the control channel is reconnected and the
-  sessions are listed from the runner.
+- `attached`: processes are still in the cgroup; the control channel is reconnected, the
+  sessions are listed from the runner and the sandbox's network is back.
+- `suspect`: the sandbox is alive but not whole: its control channel did not reconnect, or its
+  network could not be restored.
 - `absent`: the cgroup is empty. The sandbox is observed `ABSENT` and never relaunched; destroy it.
 - `quarantined`: the runner did not prove the same boot (wrong boot id or nonce replay).
 
-Reconcile does not restart a sandbox's proxy or slirp4netns. An `egress` or `allowlist` sandbox
-that survived a daemon restart keeps its nftables rules but has no outside network; recreate it
-(from a checkpoint if its files matter).
+Reconcile restores the network of every `egress` and `allowlist` sandbox it attaches: the proxy
+listens again on the address and port the sandbox's sessions were given, a new slirp4netns
+attaches to its namespace (unless the old one still runs), and the ruleset is reinstalled. Both
+come from `net.json` in the sandbox's directory, which the daemon writes at launch and which
+keeps the box on the policy it was launched with even if the config changed. A sandbox launched
+before that record existed cannot get its proxy back and is reported `suspect`; recreate it (from
+a checkpoint if its files matter). Health is `HEALTHY` only while the control channel is up and,
+for `egress` and `allowlist`, while the proxy listens and the sandbox's tap device exists, so a
+sandbox whose slirp4netns died turns `SUSPECT` at the next health poll.
 
 ## Quarantine and stuck boots
 

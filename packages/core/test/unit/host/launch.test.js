@@ -8,6 +8,9 @@ import {
   ensureRootAccess,
   prepareDirs,
   writeBootFile,
+  writeNetState,
+  readNetState,
+  NET_STATE_FILE,
   hashNonce,
   bwrapArgs,
   launchEnv,
@@ -93,6 +96,32 @@ test('prepareDirs sets every mode itself, so a umask of 077 cannot hide /etc fro
     assert.equal(fs.statSync(dirs.root).mode & 0o777, 0o711);
   } finally {
     process.umask(saved);
+    cleanup();
+  }
+});
+
+test('the network record is host-only, round-trips, and is null when absent', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const dirs = sandboxDirs(dir, 'SBX3');
+    prepareDirs(dirs, { uidBase: BASE, hostname: 'box', nameservers: [] });
+    assert.equal(readNetState(dirs), null);
+    const state = {
+      policy: { mode: 'allowlist', allow: ['example.com'], ports: [] },
+      proxyHost: '198.18.0.1',
+      proxyPort: 40123,
+    };
+    writeNetState(dirs, state);
+    const file = path.join(dirs.root, NET_STATE_FILE);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(path.dirname(file), dirs.root, 'beside host-token, outside every bind mount');
+    assert.deepEqual(readNetState(dirs), state);
+    fs.writeFileSync(file, '{not json');
+    assert.throws(
+      () => readNetState(dirs),
+      (e) => e.code === 'E_STATE',
+    );
+  } finally {
     cleanup();
   }
 });

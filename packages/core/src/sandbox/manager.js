@@ -13,7 +13,7 @@ import {
   publicAsk,
 } from '../broker/index.js';
 import { secretRedactor } from '../secrets.js';
-import { sandboxDirs } from '../host/launch.js';
+import { sandboxDirs, writeNetState, readNetState } from '../host/launch.js';
 import { SandboxNet } from '../host/netns.js';
 import { normalizeAllowEntry } from '../host/proxy.js';
 import { buildSeccompProgram } from '../host/seccomp.js';
@@ -85,6 +85,8 @@ export class Manager extends EventEmitter {
       sandbox,
       hooks: {
         beforeGo: (s) => this._beforeGo(s),
+        afterAttach: (s) => this._afterAttach(s),
+        networkAlive: (s) => this._networkAlive(s),
         afterStop: (s) => this._afterStop(s),
       },
     });
@@ -120,26 +122,71 @@ export class Manager extends EventEmitter {
       }
     }
     if (!this.enableNetwork) return { network: { mode } };
-    const pid = sup.sandbox.pid;
-    if (!pid) throw E.state(`sandbox ${sup.id} has no pid before go`, { sandboxId: sup.id });
-    const sbNet = new SandboxNet({
-      pid,
-      sandboxId: sup.id,
-      policy: this.networkPolicy(sup),
-      audit: this.audit ?? undefined,
-      resolver: this.netResolver,
-      proxyHost: this.proxyHost,
-    });
-    this.nets.get(sup.id)?.stop();
-    this.nets.set(sup.id, sbNet);
+    const sbNet = this._replaceNet(sup, this.networkPolicy(sup));
     try {
       const { env, proxy } = await sbNet.start();
+      writeNetState(sandboxDirs(this.config.paths.sandboxes, sup.id), sbNet.state());
       return { env, network: proxy ? { mode, proxy } : { mode } };
     } catch (e) {
       sbNet.stop();
       this.nets.delete(sup.id);
       throw e;
     }
+  }
+
+  /**
+   * Bring a reattached sandbox's network back. Its proxy ran in the process that started it and
+   * its slirp4netns was that process's child, so both are gone after a daemon restart while the
+   * sandbox and its ruleset live on. The recorded policy wins over the current config, so a box
+   * keeps the network it was launched with.
+   * @param {Supervisor} sup
+   */
+  async _afterAttach(sup) {
+    if (!this.enableNetwork) return {};
+    const saved = readNetState(sandboxDirs(this.config.paths.sandboxes, sup.id));
+    const policy = saved?.policy ?? this.networkPolicy(sup);
+    const sbNet = this._replaceNet(sup, policy);
+    try {
+      const { env, proxy } = await sbNet.resume(saved);
+      this.audit?.append({
+        actor: 'manager',
+        action: 'net.resume',
+        sandboxId: sup.id,
+        data: { mode: policy.mode, proxy: proxy ?? null },
+      });
+      return { env, network: proxy ? { mode: policy.mode, proxy } : { mode: policy.mode } };
+    } catch (e) {
+      sbNet.stop();
+      this.nets.delete(sup.id);
+      throw e;
+    }
+  }
+
+  /** A fresh SandboxNet for `sup`, replacing (and stopping) any it had. */
+  _replaceNet(sup, policy) {
+    const pid = sup.sandbox.pid;
+    if (!pid) throw E.state(`sandbox ${sup.id} has no pid for its network`, { sandboxId: sup.id });
+    const sbNet = new SandboxNet({
+      pid,
+      sandboxId: sup.id,
+      policy,
+      audit: this.audit ?? undefined,
+      resolver: this.netResolver,
+      proxyHost: this.proxyHost,
+    });
+    this.nets.get(sup.id)?.stop();
+    this.nets.set(sup.id, sbNet);
+    return sbNet;
+  }
+
+  /**
+   * Whether the sandbox still has the network it was given; health is SUSPECT without it.
+   * @param {Supervisor} sup
+   */
+  _networkAlive(sup) {
+    if (!this.enableNetwork) return true;
+    const sbNet = this.nets.get(sup.id);
+    return sbNet ? sbNet.alive() : sup.networkMode === 'none';
   }
 
   /** Effective network policy of a supervised sandbox. @param {Supervisor} sup */

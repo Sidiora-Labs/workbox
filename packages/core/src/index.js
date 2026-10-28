@@ -114,7 +114,7 @@ export {
   isPrivateIpv4,
   DENIED_CIDRS,
 } from './host/nft.js';
-export { SandboxNet, slirpArgv, proxyEnv, NET_DEFAULTS } from './host/netns.js';
+export { SandboxNet, slirpArgv, proxyEnv, hasTap, NET_DEFAULTS } from './host/netns.js';
 export { createProxy, hostAllowed, normalizeAllowEntry, parseTarget } from './host/proxy.js';
 export {
   sandboxDirs,
@@ -122,6 +122,9 @@ export {
   prepareDirs,
   writeBootFile,
   readHostToken,
+  writeNetState,
+  readNetState,
+  NET_STATE_FILE,
   hashNonce,
   bwrapArgs,
   launchEnv,

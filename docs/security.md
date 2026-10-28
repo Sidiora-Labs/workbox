@@ -202,10 +202,12 @@ verify` checks the chain.
   redacted. Forms other than those listed above (compressed, encrypted, reversed, interleaved
   with other bytes, encoded twice) are not recognised.
 - **Proxy and slirp live in the managing process.** The per-sandbox proxy listener and the
-  slirp4netns child belong to the process that launched the sandbox (`workbox serve`, or a local
-  `workbox sandbox create`). When that process exits they stop; reconcile reattaches the control
-  channel but does not restart them, so a reattached `egress` or `allowlist` sandbox has no
-  outside network until it is recreated. The nftables rules stay in place, so this fails closed.
+  slirp4netns child belong to the engine driving the sandbox (`workbox serve`, or a local
+  `workbox sandbox` command). Between engines an `egress` or `allowlist` sandbox has no outside
+  network; the next engine's reconcile restores both from the sandbox's host-only `net.json`. The
+  nftables rules stay in place throughout, so the gap fails closed, and the sandbox is reported
+  `SUSPECT` while its network is down. Restoring trusts only the host's record: the port and
+  policy never come from inside the box.
 - **`workbox0` persists.** The dummy link and its address stay on the host after the last sandbox
   is gone.
 - **PTY through script(1).** PTY sessions use util-linux `script(1)` instead of a native

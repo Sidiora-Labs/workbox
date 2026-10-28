@@ -10,7 +10,8 @@ import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { Manager } from '../../src/sandbox/manager.js';
 import { Audit, auditFiles } from '../../src/audit.js';
-import { NET_DEFAULTS, PROXY_LINK, runInNetns } from '../../src/host/netns.js';
+import { NET_DEFAULTS, PROXY_LINK, runInNetns, hasTap } from '../../src/host/netns.js';
+import { NET_STATE_FILE } from '../../src/host/launch.js';
 import { hostAddresses } from '../../src/host/proxy.js';
 import { isPrivateIpv4 } from '../../src/host/nft.js';
 import { testEngine } from '../helpers/engine.js';
@@ -221,6 +222,14 @@ function boxOf(manager, id) {
       return { code, connect, body: lines.slice(0, -1).join('\n') };
     },
   };
+}
+
+async function until(fn, ms = 10_000) {
+  const deadline = Date.now() + ms;
+  while (!fn()) {
+    if (Date.now() > deadline) throw new Error('condition not met');
+    await new Promise((r) => setTimeout(r, 25));
+  }
 }
 
 function interfaces(stdout) {
@@ -472,16 +481,18 @@ test('network: none, egress and allowlist against real slirp4netns, nft and the 
     });
     hostListener.listen(0, '127.0.0.1');
     await once(hostListener, 'listening');
-    manager = new Manager({
-      config: eng.config,
-      store: eng.store,
-      audit: eng.audit,
-      cgroups: eng.cgroups,
-      rootfs: eng.rootfs,
-      runtime: eng.runtime,
-      logger: eng.logger,
-      netResolver: [`127.0.0.1:${dnsSock.address().port}`],
-    });
+    const newManager = () =>
+      new Manager({
+        config: eng.config,
+        store: eng.store,
+        audit: eng.audit,
+        cgroups: eng.cgroups,
+        rootfs: eng.rootfs,
+        runtime: eng.runtime,
+        logger: eng.logger,
+        netResolver: [`127.0.0.1:${dnsSock.address().port}`],
+      });
+    manager = newManager();
     const create = async (name, network) => {
       const sb = await manager.create({
         name,
@@ -522,10 +533,58 @@ test('network: none, egress and allowlist against real slirp4netns, nft and the 
       checkAllowlistA(a, b, eng),
     );
     await t.test("H12: sandbox B cannot use A's proxy or allowlist", () => checkAllowlistB(b, a));
+    let liveSlirps = 3;
+    await t.test(
+      'restart: reconcile brings back proxy and slirp; health is SUSPECT without them',
+      async () => {
+        const old = manager.nets.get(egress.id);
+        const urls = { egress: old.proxyUrl, a: manager.nets.get(a.id).proxyUrl };
+        const oldSlirp = old.child.pid;
+        // b loses its record, as a sandbox created before the record existed has none.
+        fs.rmSync(path.join(eng.config.paths.sandboxes, b.id, NET_STATE_FILE));
+        manager.close();
+        await until(() => !hasTap(old.nsPid));
+
+        manager = newManager();
+        const rec = await manager.reconcile();
+        assert.deepEqual(rec.attached.sort(), [none.id, egress.id, a.id].sort());
+        assert.deepEqual(rec.suspect, [b.id]);
+        assert.deepEqual(rec.quarantined, []);
+        const net = manager.nets.get(egress.id);
+        assert.equal(net.proxyUrl, urls.egress, 'the proxy is back on the URL the box holds');
+        assert.notEqual(net.child.pid, oldSlirp, 'a new slirp4netns serves the same netns');
+        assert.ok(hasTap(net.nsPid));
+        assert.equal(manager.nets.get(a.id).proxyUrl, urls.a);
+        assert.equal(manager.nets.has(b.id), false);
+
+        const e2 = boxOf(manager, egress.id);
+        const direct = await e2.sh(`curl -s --noproxy '*' --max-time 10 http://${PEER}:8081/after`);
+        assert.equal(direct.stdout, 'peer:8081:/after', direct.stderr);
+        assert.equal((await e2.viaProxy('http://pub.test:8081/after')).body, 'peer:8081:/after');
+        assert.equal((await e2.viaProxy(`http://${hostPublicAddress()}:8081/`)).code, '403');
+        const a2 = boxOf(manager, a.id);
+        assert.equal((await a2.viaProxy('http://pub.test:8081/a')).body, 'peer:8081:/a');
+        assert.equal((await a2.viaProxy('http://other.test/')).code, '403');
+        assert.equal(auditOf(eng, egress.id, 'net.resume').length, 1);
+
+        assert.equal(manager.supervisor(egress.id).observeHealth(), 'HEALTHY');
+        assert.equal(manager.supervisor(none.id).observeHealth(), 'HEALTHY');
+        assert.equal(manager.get(b.id).health, 'SUSPECT');
+        assert.equal(manager.supervisor(b.id).observeHealth(), 'SUSPECT');
+        process.kill(net.child.pid, 'SIGKILL');
+        await until(() => !hasTap(net.nsPid));
+        assert.equal(
+          manager.supervisor(egress.id).observeHealth(),
+          'SUSPECT',
+          'a slirp4netns that dies under a live sandbox turns it SUSPECT',
+        );
+        liveSlirps = 2;
+      },
+    );
     await t.test('teardown: destroy stops slirp and the proxy', async () => {
       const slirps = ids.map((id) => manager.nets.get(id)?.child?.pid).filter(Boolean);
       const proxies = ids.map((id) => manager.nets.get(id)?.proxy).filter(Boolean);
-      assert.equal(slirps.length, 3);
+      assert.equal(slirps.length, liveSlirps);
       for (const id of ids.splice(0)) await manager.destroy(id, { timeoutMs: 10_000 });
       assert.equal(manager.nets.size, 0);
       const gone = (pid) => {

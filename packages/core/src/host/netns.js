@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { E } from '../errors.js';
-import { renderRuleset, installArgv, assertIpv4 } from './nft.js';
+import { renderRuleset, installArgv, assertIpv4, assertPort } from './nft.js';
 import { createProxy, hostAddresses } from './proxy.js';
 import { removeUnder } from './safefs.js';
 
@@ -238,6 +238,23 @@ export function netnsPid(pid) {
   throw E.unavailable(`no process under pid ${pid} runs in its own network namespace`, { pid });
 }
 
+/**
+ * True when the network namespace of `pid` has the link `tap`: slirp4netns's tap device, which
+ * lives exactly as long as its slirp4netns. Read from /proc/<pid>/net/dev; nothing is entered.
+ * @param {number} pid
+ * @param {string} [tap]
+ */
+export function hasTap(pid, tap = 'tap0') {
+  try {
+    return fs
+      .readFileSync(`/proc/${pid}/net/dev`, 'utf8')
+      .split('\n')
+      .some((line) => line.trim().startsWith(`${tap}:`));
+  } catch {
+    return false;
+  }
+}
+
 /** Attach slirp, start the sandbox's proxy and install nft rules for one sandbox. */
 export class SandboxNet {
   /**
@@ -259,19 +276,67 @@ export class SandboxNet {
     this.child = null;
     this.proxy = null;
     this.proxyUrl = null;
+    this.listen = null;
     this.env = {};
     this.rules = null;
   }
 
   /** Start proxy and slirp (egress/allowlist), then install the ruleset; `none` gets rules only. */
-  async start() {
+  start() {
+    return this._bringUp(null);
+  }
+
+  /**
+   * Bring back the network of a sandbox that outlived the process that started it: the proxy on
+   * the address and port its sessions were given (`saved.proxyHost`/`saved.proxyPort`, from
+   * {@link SandboxNet#state}), slirp4netns again unless its tap is still up, and the ruleset
+   * reinstalled. Egress and allowlist need `saved`; without it the proxy URL the box holds is lost.
+   * @param {{proxyHost?: string, proxyPort?: number}|null} saved
+   */
+  async resume(saved) {
+    if (this.policy.mode !== 'none' && !saved?.proxyPort)
+      throw E.state(
+        `sandbox ${this.sandboxId} has no recorded proxy, so its network cannot return`,
+        {
+          sandboxId: this.sandboxId,
+        },
+      );
+    return this._bringUp(saved);
+  }
+
+  /** The policy and proxy address a restarted daemon passes to {@link SandboxNet#resume}. */
+  state() {
+    return {
+      policy: this.policy,
+      proxyHost: this.listen?.host ?? null,
+      proxyPort: this.listen?.port ?? null,
+    };
+  }
+
+  /**
+   * True while the network the sandbox was given is up: always for `none`; for egress and
+   * allowlist, while its proxy listens and its tap (so its slirp4netns) is present.
+   */
+  alive() {
+    if (this.policy.mode === 'none') return true;
+    return Boolean(this.proxy?.listening) && this.nsPid !== null && hasTap(this.nsPid);
+  }
+
+  async _bringUp(saved) {
     this.nsPid = netnsPid(this.pid);
     const rules = { mode: this.policy.mode, gateway: NET_DEFAULTS.gateway, dns: NET_DEFAULTS.dns };
     if (this.policy.mode !== 'none') {
-      const host = assertIpv4(this.proxyHost ?? NET_DEFAULTS.proxyHost, 'proxyHost');
+      const host = assertIpv4(
+        saved?.proxyHost ?? this.proxyHost ?? NET_DEFAULTS.proxyHost,
+        'proxyHost',
+      );
       await ensureProxyLink(host);
-      const port = await this._startProxy(host);
-      await this._startSlirp();
+      const port = await this._startProxy(
+        host,
+        saved ? assertPort(saved.proxyPort, 'proxyPort') : 0,
+      );
+      this.listen = { host, port };
+      if (!hasTap(this.nsPid)) await this._startSlirp();
       Object.assign(rules, {
         proxyHost: host,
         proxyPort: port,
@@ -284,7 +349,7 @@ export class SandboxNet {
     return { policy: this.policy, env: this.env, proxy: this.proxyUrl };
   }
 
-  async _startProxy(host) {
+  async _startProxy(host, port) {
     this.proxy = createProxy({
       policy: this.policy,
       resolver: this.resolver,
@@ -296,8 +361,12 @@ export class SandboxNet {
           data: info,
         }),
     });
-    this.proxy.listen(0, host);
-    await once(this.proxy, 'listening');
+    this.proxy.listen(port, host);
+    try {
+      await once(this.proxy, 'listening');
+    } catch (e) {
+      throw E.unavailable(`proxy cannot listen on ${host}:${port}: ${e.message}`, { host, port });
+    }
     return this.proxy.address().port;
   }
 

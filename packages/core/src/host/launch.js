@@ -174,6 +174,42 @@ export function readHostToken(dirs) {
   }
 }
 
+/** Host-only record of the network a sandbox was given, beside host-token in its directory. */
+export const NET_STATE_FILE = 'net.json';
+
+/**
+ * Record a sandbox's network policy and proxy address so a restarted daemon can bring the same
+ * proxy back: the box's sessions keep the proxy URL they were started with.
+ * @param {SandboxDirs} dirs
+ * @param {{policy: object, proxyHost: string|null, proxyPort: number|null}} state
+ */
+export function writeNetState(dirs, state) {
+  fs.writeFileSync(path.join(dirs.root, NET_STATE_FILE), `${JSON.stringify(state)}\n`, {
+    mode: 0o600,
+  });
+}
+
+/**
+ * The network state {@link writeNetState} recorded, or null for a sandbox that has none (one
+ * created before the record existed).
+ * @param {SandboxDirs} dirs
+ */
+export function readNetState(dirs) {
+  const file = path.join(dirs.root, NET_STATE_FILE);
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return null;
+    throw e;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw E.state(`network state ${file} is not JSON: ${e.message}`, { file });
+  }
+}
+
 /** @param {string} nonce */
 export function hashNonce(nonce) {
   return createHash('sha256').update(nonce).digest('hex');
