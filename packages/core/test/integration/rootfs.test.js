@@ -74,3 +74,23 @@ test('build minimal: exported, uid-shifted, setuid preserved, digest stable on r
     cleanup();
   }
 });
+
+test('export of a missing container reports docker’s error and extracts nothing', async () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const cfg = loadConfig({ env: { WORKBOX_ROOT: dir } });
+    const mgr = new RootfsManager({ paths: cfg.paths, uid: cfg.uid });
+    const into = path.join(dir, 'into');
+    fs.mkdirSync(into);
+    await assert.rejects(
+      mgr._exportInto(`workbox-missing-${process.pid}`, into),
+      (e) =>
+        e.code === 'E_UNAVAILABLE' &&
+        /^docker export failed: .*No such container/.test(e.message) &&
+        e.data.code === 1,
+    );
+    assert.deepEqual(fs.readdirSync(into), []);
+  } finally {
+    cleanup();
+  }
+});

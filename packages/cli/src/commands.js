@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { runDoctor, formatReport, Audit } from '@workbox/core';
 
 /**
@@ -106,20 +107,81 @@ export async function sandboxCommand(ctx, argv) {
   throw new Error(`unknown sandbox subcommand ${sub ?? ''}`);
 }
 
-/** Interactive shell via a PTY session (task 2.5). @param {object} ctx @param {string[]} argv */
+/**
+ * Interactive shell via a PTY session (task 2.5). With a terminal on stdin the local engine runs
+ * it in raw mode, forwarding keystrokes and window resizes until the shell exits; otherwise the
+ * session is started detached and described.
+ * @param {object} ctx
+ * @param {string[]} argv
+ */
 export async function shellCommand(ctx, argv) {
   const id = need(argv[0], 'workbox shell <id>');
-  const started = await managerOrRemoteStart(ctx, id, {
+  const input = ctx.in ?? process.stdin;
+  const out = ctx.out ?? process.stdout;
+  const params = {
     argv: ['/bin/bash', '-l'],
     pty: true,
-    rows: process.stdout.rows ?? 24,
-    cols: process.stdout.columns ?? 80,
+    rows: out.rows || 24,
+    cols: out.columns || 80,
     name: 'shell',
+  };
+  if (ctx.client || !input.isTTY) {
+    const started = await managerOrRemoteStart(ctx, id, params);
+    ctx.err.write(
+      `shell session ${started.sessionId} (pty) started detached: stdin is not a tty\n`,
+    );
+    return started;
+  }
+  return interactiveShell(manager(ctx), id, params, { input, out });
+}
+
+/**
+ * Run a PTY session with the local terminal in raw mode until it exits.
+ * @param {object} m the local sandbox manager
+ * @param {string} id sandbox id
+ * @param {object} params session.start params
+ * @param {{input: NodeJS.ReadStream, out: NodeJS.WriteStream}} io
+ */
+async function interactiveShell(m, id, params, { input, out }) {
+  const run = { sessionId: null, resolveExit: null };
+  const exited = new Promise((resolve) => {
+    run.resolveExit = resolve;
   });
-  ctx.err.write(
-    `shell session ${started.sessionId} (pty). Attach with: workbox sandbox exec ${id} -- true\n`,
-  );
-  return started;
+  const onEvent = (ev) => {
+    if (ev.sandboxId !== id || !run.sessionId || ev.params?.sessionId !== run.sessionId) return;
+    if (ev.method === 'session.output' && typeof ev.params.data === 'string')
+      out.write(Buffer.from(ev.params.data, 'base64'));
+    if (ev.method === 'session.exit') run.resolveExit(ev.params);
+  };
+  const call = (method, p) =>
+    m.request(id, method, { sessionId: run.sessionId, ...p }).catch(() => undefined);
+  const onData = (d) => call('session.input', { data: d.toString('base64') });
+  const onResize = () => {
+    if (out.rows && out.columns) call('session.resize', { rows: out.rows, cols: out.columns });
+  };
+  m.on('event', onEvent);
+  try {
+    run.sessionId = (await m.request(id, 'session.start', params)).sessionId;
+    const attached = await m.request(id, 'session.attach', {
+      sessionId: run.sessionId,
+      fromSeq: 0,
+    });
+    if (attached.exited) run.resolveExit(attached.exited);
+    input.setRawMode(true);
+    input.on('data', onData);
+    input.resume();
+    out.on('resize', onResize);
+    const exit = await exited;
+    const code = exit.code ?? 128 + (os.constants.signals[exit.signal] ?? 0);
+    return { text: true, sessionId: run.sessionId, exitCode: code };
+  } finally {
+    out.off('resize', onResize);
+    input.off('data', onData);
+    if (input.isRaw) input.setRawMode(false);
+    input.pause();
+    m.off('event', onEvent);
+    if (run.sessionId) await call('session.remove', {});
+  }
 }
 
 async function managerOrRemoteStart(ctx, id, params) {

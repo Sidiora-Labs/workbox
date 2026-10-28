@@ -32,5 +32,11 @@ export function eventEmit(ctx, params) {
     causation: params.causation,
     source: 'wb',
   });
-  return { seq, type: params.type };
+  ctx.audit?.append({
+    actor: 'broker',
+    action: 'event.emit',
+    sandboxId: ctx.sandboxId,
+    data: { seq, type: params.type, causation: params.causation ?? null },
+  });
+  return { seq, type: params.type, causation: params.causation ?? null };
 }

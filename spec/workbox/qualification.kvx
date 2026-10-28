@@ -5,3 +5,35 @@ exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/wave1-coverage.log"
 observed    = "178/178 tests pass and lines 92.38 and branches 83.57 meet the floor, but functions are 86.68 against 90; wave-1 files under 90 are cli main/local, manager, runner, sessions, runner fs, rootfs and redact, and the rest are unqualified wave 2-3 modules (proxy, netns, broker, server, sdk, mcp)."
 assumption  = "The wave 2-3 shortfall closes as those tasks qualify; the wave-1 files get a dedicated coverage pass that runs alongside wave 2."
+
+[finding.2.5-node-pty]
+revision    = "e1d9f5e"
+command     = "node scripts/check-tests.mjs && node --test packages/core/test/integration/pty.test.js"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.5-verify.log"
+observed    = "node-pty ships no Linux prebuild, so do_1 would need a host node-gyp compile and a registry fetch with no upstream digest to verify; PTY stays on rootfs script(1) and resize sets TIOCSWINSZ via stty -F, proven by stty size and SIGWINCH in a real sandbox."
+assumption  = "The rootfs keeps util-linux script and coreutils stty (Debian essential), and do_1's node-pty wording is satisfied by this recorded fallback per IMPLEMENTATION-PLAN P0-7."
+
+[finding.2.5-touches-path]
+revision    = "e1d9f5e"
+command     = "hyperfide spec done 2.5 --root /root/workbox/.claude/worktrees/agent-a677b281d35fe4424"
+exit_code   = 1
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.5-verify.log"
+observed    = "spec done reran verify_cmd green but refused: touched packages/cli/src/commands/shell.js has no matching change, because the shell command lives in packages/cli/src/commands.js."
+assumption  = "The [task.2.5] touches entry needs a spec-wording sync to packages/cli/src/commands.js before spec done can pass without --force."
+
+[finding.runner-fs-dead-realpath-loose]
+revision    = "e1d9f5e"
+command     = "node --test --experimental-test-coverage --test-coverage-include=<cli main/local, runner/fs, rootfs, redact> --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90 <cli, runner, rootfs, redact tests>"
+exit_code   = 0
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/cov-verify.log"
+observed    = "packages/runner/src/fs.js realpathLoose (lines 120-123) and the mustExist:false branch of resolve() are unreachable: every resolve() caller uses the default mustExist=true, so fs.js stops at 12/13 functions (92.31)."
+assumption  = "It is dead code left for a write-to-new-path check that resolve(path.dirname()) now covers; left uncovered and unfixed here, for the fs owner to delete or wire up."
+
+[finding.2-3-wb-attach-exited]
+revision    = "e1d9f5e"
+command     = "node --test packages/core/test/integration/broker.test.js"
+exit_code   = 1
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.3-verify-1.log"
+observed    = "wb session attach on an already-exited session crashes with TypeError at wb/src/client.js:80 (this.peer.off on a null peer) once the runner reply closes the client."
+assumption  = "This is a task 1.5 wb client defect outside 2.3 touches; the broker test replays the spool through the host attach path instead."

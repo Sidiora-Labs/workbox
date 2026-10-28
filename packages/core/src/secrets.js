@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { E } from './errors.js';
+import { Redactor } from './redact.js';
 
 /**
  * Host-side secret provider. Values come from a 0600 JSON file ({ "REF": "value" }) and/or the
@@ -91,6 +92,16 @@ export class SecretProvider {
   allValues() {
     return [...this.values.values()];
   }
+}
+
+/**
+ * Register every provider value with a redactor, labelled by its reference.
+ * @param {SecretProvider} provider @param {Redactor} [redactor]
+ * @returns {Redactor}
+ */
+export function secretRedactor(provider, redactor = new Redactor()) {
+  for (const [ref, value] of provider.values) redactor.add(value, ref);
+  return redactor;
 }
 
 /** @param {string} raw @returns {{ref: string, envName: string}} */

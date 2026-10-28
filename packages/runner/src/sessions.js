@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { ProtocolError, Codes, newId } from '@workbox/protocol';
 import { RingSpool, DEFAULT_SPOOL_BYTES } from './spool.js';
-import { spawnPty, resizePty } from './pty.js';
+import { spawnPty, resizePty, signalPtyGroup } from './pty.js';
 
 export const DEFAULT_STOP_GRACE_MS = 5000;
 
@@ -13,6 +13,44 @@ const SPAWN_ERRORS = Object.freeze({
   EACCES: Codes.DENIED,
   EPERM: Codes.DENIED,
 });
+
+/** Injected values shorter than this are not redacted: doing so would destroy ordinary output. */
+export const MIN_REDACT_LENGTH = 6;
+
+/**
+ * Redaction table for a session's injected secret env, longest value first.
+ * @param {Record<string, string>|undefined} secretEnv
+ * @returns {Array<{value: Buffer, marker: Buffer}>}
+ */
+export function redactions(secretEnv) {
+  return Object.entries(secretEnv ?? {})
+    .filter(([, v]) => typeof v === 'string' && v.length >= MIN_REDACT_LENGTH)
+    .sort(([, a], [, b]) => b.length - a.length)
+    .map(([name, v]) => ({ value: Buffer.from(v), marker: Buffer.from(`[REDACTED:${name}]`) }));
+}
+
+/**
+ * Replace every occurrence of a registered value in one output chunk, byte-wise.
+ * @param {Buffer} data @param {Array<{value: Buffer, marker: Buffer}>} table
+ * @returns {Buffer}
+ */
+export function redactChunk(data, table) {
+  let out = data;
+  for (const { value, marker } of table ?? []) {
+    let i = out.indexOf(value);
+    if (i === -1) continue;
+    const parts = [];
+    let from = 0;
+    while (i !== -1) {
+      parts.push(out.subarray(from, i), marker);
+      from = i + value.length;
+      i = out.indexOf(value, from);
+    }
+    parts.push(out.subarray(from));
+    out = Buffer.concat(parts);
+  }
+  return out;
+}
 
 /**
  * @typedef {object} Session
@@ -126,6 +164,7 @@ export class SessionManager extends EventEmitter {
       child,
       pty: Boolean(params.pty),
       stdinClosed: false,
+      redact: redactions(params.secretEnv),
     };
     this.sessions.set(sessionId, session);
     child.stdout.on('data', (d) => this._output(session, session.pty ? 'pty' : 'stdout', d));
@@ -146,7 +185,8 @@ export class SessionManager extends EventEmitter {
     return info;
   }
 
-  _output(session, stream, data) {
+  _output(session, stream, raw) {
+    const data = redactChunk(raw, session.redact);
     const seq = session.spool.append(stream, data, this.clock());
     const event = { sessionId: session.sessionId, stream, seq, data: data.toString('base64') };
     for (const peer of session.subscribers)
@@ -227,16 +267,16 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Resize a PTY session.
+   * Resize a PTY session; resolves once the new window size is set on the pty.
    * @param {string} sessionId @param {number} rows @param {number} cols
    */
-  resize(sessionId, rows, cols) {
+  async resize(sessionId, rows, cols) {
     const s = this.get(sessionId);
     if (!s.pty)
       throw new ProtocolError(Codes.UNSUPPORTED, 'session is not a pty session', { sessionId });
     if (s.exited)
       throw new ProtocolError(Codes.STATE, `session ${sessionId} has exited`, { sessionId });
-    const size = resizePty(s.child, rows, cols);
+    const size = await resizePty(s.child, rows, cols);
     return { sessionId, ...size };
   }
 
@@ -316,6 +356,7 @@ export class SessionManager extends EventEmitter {
     const timer = setTimeout(() => {
       if (!s.exited) {
         escalated = true;
+        if (s.pty) signalPtyGroup(s.child, 'SIGKILL');
         try {
           process.kill(-s.pid, 'SIGKILL');
         } catch {

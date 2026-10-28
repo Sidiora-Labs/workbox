@@ -148,3 +148,26 @@ test('manager validates names, reports missing builds and surfaces docker failur
     cleanup();
   }
 });
+
+test('list returns every built rootfs sorted by name, skipping unbuilt and staging dirs', () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const mgr = new RootfsManager({
+      paths: { rootfs: path.join(dir, 'rootfs') },
+      uid: { base: BASE, count: 65536 },
+    });
+    for (const name of ['zeta', 'mid', 'alpha']) {
+      fs.mkdirSync(mgr.dir(name), { recursive: true });
+      fs.writeFileSync(path.join(mgr.dir(name), ROOTFS_MANIFEST), JSON.stringify({ name }));
+    }
+    fs.mkdirSync(mgr.dir('unbuilt'));
+    fs.mkdirSync(path.join(dir, 'rootfs/beta.tmp'));
+    fs.writeFileSync(path.join(dir, 'rootfs/beta.tmp', ROOTFS_MANIFEST), '{"name":"beta"}');
+    assert.deepEqual(
+      mgr.list().map((m) => m.name),
+      ['alpha', 'mid', 'zeta'],
+    );
+  } finally {
+    cleanup();
+  }
+});
