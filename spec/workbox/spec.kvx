@@ -368,7 +368,7 @@ reqs       = ["7.3"]
 
 [task.4.2]
 title      = "Documentation"
-status     = "pending"
+status     = "done"
 wave       = 4
 requires   = ["3.3", "2.4", "2.5"]
 touches    = ["docs/**", "README.md"]
