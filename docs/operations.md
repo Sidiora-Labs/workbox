@@ -7,7 +7,7 @@ Procedures for running Workbox on one Linux host. `workbox` below is the operato
 ## Install
 
 1. Run `sh deploy/install.sh`. It creates the Workbox root (`/var/lib/workbox`, mode 0700, or
-   `WORKBOX_ROOT`) and `/etc/workbox`, adds `root:200000:65536` to `/etc/subuid` and
+   `WORKBOX_ROOT`) and `/etc/workbox`, adds `root:300000:65536` to `/etc/subuid` and
    `/etc/subgid`, enables unprivileged user namespaces where the sysctl exists, and creates the
    `workbox` cgroup parent with the cpu, memory and pids controllers delegated. It is safe to run
    again.

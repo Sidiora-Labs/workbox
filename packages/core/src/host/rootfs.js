@@ -68,6 +68,13 @@ export class RootfsManager {
         name,
         remedy: `workbox rootfs build ${name}`,
       });
+    if (m.uid?.base !== this.uid.base)
+      throw E.state(`rootfs ${name} is shifted for uid base ${m.uid?.base}, not ${this.uid.base}`, {
+        name,
+        built: m.uid?.base ?? null,
+        configured: this.uid.base,
+        remedy: `workbox rootfs build ${name}`,
+      });
     return m;
   }
 
@@ -100,15 +107,17 @@ export class RootfsManager {
     const seen = this.get(name);
     return withLockFile(lockPathFor(this.dirRoot, name), async () => {
       const now = this.get(name);
+      const current = now?.uid?.base === this.uid.base;
       if (
-        now &&
+        current &&
         now.createdAt !== seen?.createdAt &&
         now.source?.dockerfileSha256 === sha256File(dockerfile)
       ) {
         this.log.info('rootfs built by a concurrent builder', { name, digest: now.digest });
         return now;
       }
-      if (fs.existsSync(target) && !opts.force)
+      // A rootfs shifted for another uid base is unusable (require refuses it), so it is rebuilt.
+      if (fs.existsSync(target) && !opts.force && (current || !now))
         throw E.conflict(`rootfs ${name} already exists`, { name, path: target });
       const tag = opts.tag ?? `workbox-rootfs-${name}:latest`;
       return this._buildLocked(name, { target, dockerfileDir, dockerfile, tag });

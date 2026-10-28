@@ -14,7 +14,8 @@ and API clients holding admin keys are trusted.
 
 - The launch chain (see [architecture](architecture.md#launch-chain)) puts every sandbox in a
   user namespace that maps inner uids and gids 0..65535 onto the subordinate range (default base
-  200000, 65536 ids), plus private mount, pid, net, ipc, uts and cgroup namespaces.
+  300000, 65536 ids; it must not overlap another user's range, which `workbox doctor` checks), plus
+  private mount, pid, net, ipc, uts and cgroup namespaces.
 - Every sandbox process carries exactly 14 capabilities as its effective, permitted and bounding
   sets: chown, dac_override, fowner, fsetid, kill, setgid, setuid, setpcap, net_bind_service,
   net_raw, sys_chroot, mknod, audit_write, setfcap. bwrap drops all others

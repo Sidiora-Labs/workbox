@@ -19,7 +19,7 @@ import { tmpDir } from '../helpers/tmp.js';
 test('defaults resolve with derived paths and are frozen', () => {
   const cfg = loadConfig({ env: {} });
   assert.equal(cfg.root, DEFAULT_ROOT);
-  assert.equal(cfg.uid.base, 200000);
+  assert.equal(cfg.uid.base, 300000);
   assert.equal(cfg.network.mode, 'egress');
   assert.equal(cfg.paths.db, path.join(DEFAULT_ROOT, 'workbox.db'));
   assert.equal(cfg.paths.cgroup, '/sys/fs/cgroup/workbox');

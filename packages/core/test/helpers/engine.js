@@ -20,7 +20,7 @@ export async function ensureAssets() {
   const cfg = loadConfig({ env: { WORKBOX_ROOT: ASSETS_ROOT } });
   const rootfs = new RootfsManager({ paths: cfg.paths, uid: cfg.uid });
   const runtime = new RuntimeManager({ paths: cfg.paths, cacheDir: '/var/cache/workbox' });
-  if (!rootfs.get('minimal')) await rootfs.build('minimal');
+  if (rootfs.get('minimal')?.uid?.base !== cfg.uid.base) await rootfs.build('minimal');
   await runtime.ensureFresh();
   return { rootfs, runtime, assetsConfig: cfg };
 }

@@ -151,6 +151,45 @@ test('manager validates names, reports missing builds and surfaces docker failur
   }
 });
 
+test('require refuses a rootfs shifted for a different uid base and build replaces it', async () => {
+  const { dir, cleanup } = tmpDir();
+  try {
+    const mgr = new RootfsManager({
+      paths: { rootfs: path.join(dir, 'rootfs') },
+      uid: { base: BASE, count: 65536 },
+    });
+    fs.mkdirSync(mgr.dir('minimal'), { recursive: true });
+    const write = (manifest) =>
+      fs.writeFileSync(path.join(mgr.dir('minimal'), ROOTFS_MANIFEST), JSON.stringify(manifest));
+    write({ name: 'minimal', uid: { base: BASE } });
+    assert.equal(mgr.require('minimal').uid.base, BASE);
+    const docker = new RootfsManager({
+      paths: { rootfs: path.join(dir, 'rootfs') },
+      uid: { base: BASE, count: 65536 },
+      docker: 'definitely-not-docker-workbox',
+    });
+    await assert.rejects(docker.build('minimal'), (e) => e.code === 'E_CONFLICT');
+    for (const stale of [{ base: BASE - 100000 }, undefined]) {
+      write({ name: 'minimal', uid: stale });
+      assert.throws(
+        () => mgr.require('minimal'),
+        (e) =>
+          e.code === 'E_STATE' &&
+          e.data.configured === BASE &&
+          e.data.built === (stale?.base ?? null) &&
+          /workbox rootfs build minimal/.test(e.data.remedy),
+      );
+      // The remedy works: a stale-base rootfs is not a conflict, so build proceeds to docker.
+      await assert.rejects(
+        docker.build('minimal'),
+        (e) => e.code === 'E_UNAVAILABLE' && /definitely-not-docker-workbox/.test(e.message),
+      );
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test('list returns every built rootfs sorted by name, skipping unbuilt and staging dirs', () => {
   const { dir, cleanup } = tmpDir();
   try {
@@ -219,6 +258,7 @@ test('concurrent builds serialise on the lock; a waiter returns the build finish
       name: 'minimal',
       digest: 'd'.repeat(64),
       createdAt: Date.now(),
+      uid: { base: BASE },
       source: { dockerfileSha256: sha256File(path.join(BUILTIN_ROOTFS_DIR, 'minimal/Dockerfile')) },
     };
     fs.mkdirSync(path.join(root, 'minimal'));

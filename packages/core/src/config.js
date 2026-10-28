@@ -10,7 +10,7 @@ export const NETWORK_MODES = Object.freeze(['none', 'egress', 'allowlist']);
 export const DEFAULTS = Object.freeze({
   root: DEFAULT_ROOT,
   secretsFile: DEFAULT_SECRETS_FILE,
-  uid: Object.freeze({ base: 200000, count: 65536 }),
+  uid: Object.freeze({ base: 300000, count: 65536 }),
   cgroup: Object.freeze({ root: '/sys/fs/cgroup', parent: 'workbox' }),
   limits: Object.freeze({ memoryBytes: 2 * 1024 ** 3, swapBytes: 0, cpuMillis: 2000, pids: 4096 }),
   network: Object.freeze({ mode: 'egress', allow: Object.freeze([]) }),

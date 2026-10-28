@@ -111,10 +111,10 @@ dry_run_clean() {
 if grep -q 'subuid .*present (covered by' "$tmp/install1.log"; then
   judge "install.sh detects the existing subuid/subgid range and appends nothing" copies_unchanged
 else
-  judge "install.sh appends the range once to the subuid copy" test "$(grep -c '^root:200000:65536$' "$tmp/subuid")" = 1
+  judge "install.sh appends the range once to the subuid copy" test "$(grep -c '^root:300000:65536$' "$tmp/subuid")" = 1
 fi
 grep 'warning' "$tmp/install1.log" | sed 's/^/note  /'
-judge "install.sh appends root:200000:65536 to subid files without one" install_run "$tmp/subuid.bare" "$tmp/subgid.bare" "$tmp/install2.log"
+judge "install.sh appends root:300000:65536 to subid files without one" install_run "$tmp/subuid.bare" "$tmp/subgid.bare" "$tmp/install2.log"
 judge "install.sh appended exactly one subuid line" test "$(diff <(grep -Ev '^(root|0):' /etc/subuid) "$tmp/subuid.bare" | grep -c '^>')" = 1
 judge "install.sh appended exactly one subgid line" test "$(diff <(grep -Ev '^(root|0):' /etc/subgid) "$tmp/subgid.bare" | grep -c '^>')" = 1
 state1="$(snapshot)"

@@ -9,7 +9,7 @@
 # Environment defaults: WORKBOX_ROOT (/var/lib/workbox), WORKBOX_ETC (/etc/workbox),
 # WORKBOX_CGROUP_ROOT (/sys/fs/cgroup), WORKBOX_CGROUP_PARENT (workbox), WORKBOX_SUBUID_FILE
 # (/etc/subuid), WORKBOX_SUBGID_FILE (/etc/subgid), WORKBOX_USER (root), WORKBOX_UID_BASE
-# (200000), WORKBOX_UID_COUNT (65536). --dry-run prints every change it would make and makes none.
+# (300000), WORKBOX_UID_COUNT (65536). --dry-run prints every change it would make and makes none.
 # The cgroup parent lives in cgroupfs and is gone after a reboot; the daemon recreates it at start.
 set -eu
 
@@ -20,7 +20,7 @@ parent="${WORKBOX_CGROUP_PARENT:-workbox}"
 subuid="${WORKBOX_SUBUID_FILE:-/etc/subuid}"
 subgid="${WORKBOX_SUBGID_FILE:-/etc/subgid}"
 user="${WORKBOX_USER:-root}"
-base="${WORKBOX_UID_BASE:-200000}"
+base="${WORKBOX_UID_BASE:-300000}"
 count="${WORKBOX_UID_COUNT:-65536}"
 dry=0
 
