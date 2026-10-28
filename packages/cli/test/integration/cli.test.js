@@ -81,6 +81,38 @@ function spawnCli(env, args) {
 
 const cli = (env, ...args) => spawnCli(env, args).done;
 
+const shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * Run the real `workbox` binary on a real pseudo-terminal: util-linux `script` gives it a tty for
+ * stdin and stdout, and `stty -a` then prints the modes the CLI left on that tty. `done` resolves
+ * with the CLI's exit code and everything the terminal showed; `child.stdin` types into it.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string[]} args
+ */
+function spawnTty(env, args) {
+  const argv = [process.execPath, '--disable-warning=ExperimentalWarning', MAIN, ...args];
+  const cmd = `${argv.map(shQuote).join(' ')}; rc=$?; stty -a; exit $rc`;
+  const child = spawn('script', ['-qefc', cmd, '/dev/null'], {
+    env: { ...env, SHELL: '/bin/sh' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let screen = '';
+  child.stdout.on('data', (d) => (screen += d));
+  child.stderr.on('data', (d) => (screen += d));
+  const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
+  const done = new Promise((resolve) => {
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal, screen });
+    });
+  });
+  return { child, done, screen: () => screen };
+}
+
+/** True when `stty -a` output shows a cooked terminal: canonical input with echo. */
+const cooked = (screen) => /(^|\s)icanon(\s|$)/m.test(screen) && /(^|\s)echo(\s|$)/m.test(screen);
+
 /** GET `url` on a fresh connection; resolves with the HTTP status. */
 function httpStatus(url, token) {
   const headers = token ? { authorization: `Bearer ${token}` } : {};
@@ -246,6 +278,37 @@ test('operator CLI: assets, create, kill the manager, rediscover with sessions, 
     assert.equal(audit.code, 0, audit.stderr);
     assert.equal(audit.json.ok, true, 'the audit chain verifies across every manager process');
   } finally {
+    await root.cleanup();
+  }
+});
+
+test('local shell on a real terminal: keystrokes in, output back, exit code out, session removed, terminal restored', async () => {
+  const root = await cliRoot('tty');
+  const { env } = root;
+  let shell = null;
+  try {
+    const created = await cli(env, 'sandbox', 'create', '--name', 'tty');
+    assert.equal(created.code, 0, created.stderr);
+    const id = created.json.id;
+    shell = spawnTty(env, ['sandbox', 'shell', id]);
+    await until(() => shell.screen().length > 0);
+    shell.child.stdin.write('echo wb-$((40+2)); exit 3\n');
+    const ran = await shell.done;
+    assert.equal(ran.code, 3, `the CLI exits with the shell's own code:\n${ran.screen}`);
+    assert.match(ran.screen, /wb-42/, 'the keystrokes ran in the box and its output came back');
+    assert.ok(cooked(ran.screen), `the terminal is restored:\n${ran.screen}`);
+    const inspect = await cli(env, 'sandbox', 'inspect', id);
+    assert.equal(inspect.code, 0, inspect.stderr);
+    assert.equal(
+      inspect.json.sessions.some((s) => s.argv.join(' ') === '/bin/bash -l'),
+      false,
+      'the exited shell session was removed',
+    );
+    const removed = await cli(env, 'sandbox', 'rm', id);
+    assert.equal(removed.json.state, 'DELETED');
+  } finally {
+    shell?.child.kill('SIGKILL');
+    await shell?.done;
     await root.cleanup();
   }
 });

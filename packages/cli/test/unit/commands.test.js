@@ -2,14 +2,54 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
+import net from 'node:net';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
+import { WorkboxClient } from '@workbox/sdk';
 import {
   parseOpts,
   connectionOpts,
   withoutConnection,
   sandboxCommand,
   doctorCommand,
+  shellCommand,
+  runInteractive,
+  sessionExitCode,
 } from '../../src/commands.js';
+
+/** A loopback URL nothing listens on. */
+async function closedUrl() {
+  const srv = net.createServer();
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  const { port } = srv.address();
+  await new Promise((resolve) => srv.close(resolve));
+  return `http://127.0.0.1:${port}`;
+}
+
+test('session exit status: its code, else 128 + the signal number', () => {
+  assert.equal(sessionExitCode({ code: 3, signal: null }), 3);
+  assert.equal(sessionExitCode({ code: 0, signal: null }), 0);
+  assert.equal(sessionExitCode({ code: null, signal: 'SIGKILL' }), 137);
+  assert.equal(sessionExitCode({ code: null, signal: 'SIGHUP' }), 129);
+});
+
+test('interactive runs need a terminal; without one the shell starts detached', async () => {
+  const client = new WorkboxClient({ baseUrl: await closedUrl(), token: 't', retries: 0 });
+  const input = new PassThrough();
+  const errs = [];
+  const ctx = { client, in: input, out: new PassThrough(), err: { write: (s) => errs.push(s) } };
+  await assert.rejects(
+    runInteractive(ctx, 'sb-1', { argv: ['/bin/bash'] }),
+    (e) => e.code === 'E_INVALID_PARAMS' && /needs a terminal on stdin/.test(e.message),
+    'refused before any request: the closed server would have answered E_UNAVAILABLE',
+  );
+  await assert.rejects(runInteractive({}, 'sb-1', { argv: ['/bin/bash'] }, { input }), (e) =>
+    /needs a terminal/.test(e.message),
+  );
+  await assert.rejects(shellCommand(ctx, ['sb-1']), (e) => e.code === 'E_UNAVAILABLE');
+  assert.deepEqual(errs, [], 'nothing claims a detached session that never started');
+  await assert.rejects(shellCommand(ctx, []), /workbox shell <id>/);
+});
 
 test('option parsing and remote sandbox routing', async () => {
   assert.deepEqual(

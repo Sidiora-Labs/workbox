@@ -119,6 +119,38 @@ function spawnCli(env, args) {
   return { child, done, out: () => stdout };
 }
 
+const shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * Run the real `workbox` binary on a real pseudo-terminal: util-linux `script` gives it a tty for
+ * stdin and stdout, and `stty -a` then prints the modes the CLI left on that tty. `done` resolves
+ * with the CLI's exit code and everything the terminal showed; `child.stdin` types into it.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string[]} args
+ */
+function spawnTty(env, args) {
+  const cli = [process.execPath, '--disable-warning=ExperimentalWarning', MAIN, ...args];
+  const cmd = `${cli.map(shQuote).join(' ')}; rc=$?; stty -a; exit $rc`;
+  const child = spawn('script', ['-qefc', cmd, '/dev/null'], {
+    env: { ...env, SHELL: '/bin/sh' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let screen = '';
+  child.stdout.on('data', (d) => (screen += d));
+  child.stderr.on('data', (d) => (screen += d));
+  const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
+  const done = new Promise((resolve) => {
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal, screen, at: Date.now() });
+    });
+  });
+  return { child, done, screen: () => screen };
+}
+
+/** True when `stty -a` output shows a cooked terminal: canonical input with echo. */
+const cooked = (screen) => /(^|\s)icanon(\s|$)/m.test(screen) && /(^|\s)echo(\s|$)/m.test(screen);
+
 /** One HTTP request on a fresh connection; resolves with the status. */
 function httpStatus(method, url, token) {
   const headers = token ? { authorization: `Bearer ${token}` } : {};
@@ -272,6 +304,56 @@ test('remote mode: serve with a config file, then create, ls, inspect, exec and 
     );
     assert.equal(fs.existsSync(r.clientRoot), false, 'remote commands never opened a local engine');
   } finally {
+    for (const s of live) {
+      s.child.kill('SIGKILL');
+      await s.done;
+    }
+    await r.cleanup();
+  }
+});
+
+test('remote mode: an interactive shell on a real terminal, then a server stopped mid-session', async () => {
+  const r = await serveRoot('shell');
+  const live = new Set();
+  const ttys = [];
+  try {
+    const serve = await startServe(r, live);
+    const admin = ['--server', serve.origin, '--token', TOKENS.admin];
+    const created = await spawnCli(r.clientEnv, ['sandbox', 'create', ...admin]).done;
+    assert.equal(created.code, 0, created.stderr);
+    const id = created.json.id;
+    const exec = ['--server', serve.origin, '--token', TOKENS.exec];
+
+    const shell = spawnTty(r.clientEnv, ['sandbox', 'shell', id, ...exec]);
+    ttys.push(shell);
+    await until(() => shell.screen().length > 0);
+    shell.child.stdin.write('echo wb-$((40+2)); exit 3\n');
+    const ran = await shell.done;
+    assert.equal(ran.code, 3, `the CLI exits with the shell's own code:\n${ran.screen}`);
+    assert.match(ran.screen, /wb-42/, 'the keystrokes ran in the box and its output came back');
+    assert.ok(cooked(ran.screen), `the terminal is restored:\n${ran.screen}`);
+
+    const dropped = spawnTty(r.clientEnv, ['sandbox', 'shell', id, ...exec]);
+    ttys.push(dropped);
+    await until(() => dropped.screen().length > 0);
+    dropped.child.stdin.write('echo live-$((6*7))\n');
+    await until(() => dropped.screen().includes('live-42'));
+    const stoppedAt = Date.now();
+    const [lost] = await Promise.all([dropped.done, stopServe(serve, live)]);
+    assert.ok(lost.at - stoppedAt < 5000, `the CLI hung ${lost.at - stoppedAt} ms after the stop`);
+    assert.equal(lost.signal, null);
+    assert.equal(lost.code, 4, lost.screen);
+    assert.match(
+      lost.screen,
+      /workbox: connection to http:\/\/127\.0\.0\.1:\d+ lost: .*; session \S+ keeps running in sandbox \S+ \(E_UNAVAILABLE\)/,
+    );
+    assert.ok(cooked(lost.screen), `the terminal is restored after the drop:\n${lost.screen}`);
+    assert.equal(fs.existsSync(r.clientRoot), false, 'remote shells never opened a local engine');
+  } finally {
+    for (const t of ttys) {
+      t.child.kill('SIGKILL');
+      await t.done;
+    }
     for (const s of live) {
       s.child.kill('SIGKILL');
       await s.done;
