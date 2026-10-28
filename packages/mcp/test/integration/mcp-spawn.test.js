@@ -105,7 +105,7 @@ test(
         assert.deepEqual(init.result, {
           protocolVersion: '2025-06-18',
           capabilities: { tools: {} },
-          serverInfo: { name: 'workbox', version: '0.1.0-dev' },
+          serverInfo: { name: 'workbox', version: '0.1.0-alpha.1' },
         });
         mcp.notify('notifications/initialized');
         assert.deepEqual((await mcp.request('ping')).result, {});

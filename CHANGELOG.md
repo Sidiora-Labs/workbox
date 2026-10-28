@@ -5,6 +5,10 @@ All notable changes to Workbox are documented in this file. The format is based 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] - 2026-10-28
+
+First pre-release.
+
 ### Added
 
 - Sandboxes built from bubblewrap, a range-mapped user namespace and cgroup v2 limits, on a

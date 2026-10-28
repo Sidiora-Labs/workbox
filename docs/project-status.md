@@ -1,6 +1,6 @@
 # Project status and compatibility
 
-Workbox is at version `0.1.0-dev` and has no tagged release yet.
+The current release is `0.1.0-alpha.1`, a pre-release.
 
 ## Implementation status
 

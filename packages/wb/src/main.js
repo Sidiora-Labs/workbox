@@ -6,7 +6,7 @@ import { WbClient } from './client.js';
 import { COMMANDS, findCommand, toolsJson, toolsText, helpFor } from './registry.js';
 
 /** wb version string. */
-export const WB_VERSION = '0.1.0-dev';
+export const WB_VERSION = '0.1.0-alpha.1';
 
 /**
  * Stable exit codes (plan E2): 0 ok, 1 internal, 2 usage, 3 not-found, 4 denied/unavailable,

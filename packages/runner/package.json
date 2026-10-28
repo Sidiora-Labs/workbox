@@ -1,6 +1,6 @@
 {
   "name": "@workbox/runner",
-  "version": "0.1.0-dev",
+  "version": "0.1.0-alpha.1",
   "description": "In-box supervisor: durable sessions, spool, broker relay. Runs inside every sandbox on the mounted runtime.",
   "type": "module",
   "license": "Apache-2.0",

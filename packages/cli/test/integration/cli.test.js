@@ -397,7 +397,7 @@ test('one engine per root: serve holds it, a local engine is refused, a symlinke
         env,
         encoding: 'utf8',
       });
-    assert.equal(run('--version'), 'workbox 0.1.0-dev\n');
+    assert.equal(run('--version'), 'workbox 0.1.0-alpha.1\n');
     assert.deepEqual(
       JSON.parse(run('sandbox', 'ls', ...remote)).items.map((x) => x.id),
       [id],

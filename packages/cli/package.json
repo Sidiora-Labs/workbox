@@ -1,6 +1,6 @@
 {
   "name": "@workbox/cli",
-  "version": "0.1.0-dev",
+  "version": "0.1.0-alpha.1",
   "description": "Operator command line: doctor, rootfs, runtime, sandboxes, serve.",
   "type": "module",
   "license": "Apache-2.0",

@@ -51,7 +51,7 @@ export function readBootFile(file) {
 export async function main(argv, deps = {}) {
   const args = parseArgs(argv);
   if (args.version) {
-    process.stdout.write('workbox-runner 0.1.0-dev\n');
+    process.stdout.write('workbox-runner 0.1.0-alpha.1\n');
     return null;
   }
   if (args.help) {

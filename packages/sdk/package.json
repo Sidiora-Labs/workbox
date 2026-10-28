@@ -1,6 +1,6 @@
 {
   "name": "@workbox/sdk",
-  "version": "0.1.0-dev",
+  "version": "0.1.0-alpha.1",
   "description": "JavaScript client for the Workbox API.",
   "type": "module",
   "license": "Apache-2.0",

@@ -16,7 +16,7 @@ import { createLog } from './log.js';
 import { SessionManager } from './sessions.js';
 import { createFs } from './fs.js';
 
-export const RUNNER_VERSION = '0.1.0-dev';
+export const RUNNER_VERSION = '0.1.0-alpha.1';
 
 /**
  * @typedef {object} Boot

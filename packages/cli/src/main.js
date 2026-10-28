@@ -17,7 +17,7 @@ import {
 } from './commands.js';
 
 /** CLI version. */
-export const CLI_VERSION = '0.1.0-dev';
+export const CLI_VERSION = '0.1.0-alpha.1';
 
 /** Top-level help text. */
 export const HELP = `workbox — operator CLI

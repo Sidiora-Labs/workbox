@@ -6,7 +6,7 @@ threat model, what is enforced and the known limits are in [docs/security.md](do
 
 ## Supported versions
 
-Workbox has no tagged release yet. Security fixes land on `master`.
+Workbox is in pre-release. Security fixes land on `main` and in the next release.
 
 ## Reporting a vulnerability
 
@@ -62,5 +62,5 @@ Out of scope:
 
 ## Disclosure
 
-Please keep details private until a fix is on `master`. We credit reporters in the changelog
+Please keep details private until a fix is on `main`. We credit reporters in the changelog
 unless they prefer otherwise.

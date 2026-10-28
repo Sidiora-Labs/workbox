@@ -1,6 +1,6 @@
 {
   "name": "@workbox/protocol",
-  "version": "0.1.0-dev",
+  "version": "0.1.0-alpha.1",
   "description": "Wire protocol shared by the host, the in-box runner and the wb CLI: NDJSON framing, envelopes, error codes.",
   "type": "module",
   "license": "Apache-2.0",

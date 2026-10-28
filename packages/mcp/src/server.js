@@ -7,7 +7,7 @@ import { TOOLS, ToolCallError, callTool } from './tools.js';
  */
 
 /** Server version reported in `initialize`. */
-export const VERSION = '0.1.0-dev';
+export const VERSION = '0.1.0-alpha.1';
 
 /** MCP protocol revisions this server speaks, newest first. */
 export const PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26', '2024-11-05']);

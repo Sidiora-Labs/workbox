@@ -25,7 +25,7 @@ const listCall = {
 
 test('--version prints the version without serving', async () => {
   const text = await run({ argv: ['--version'], env: {} }, [listCall]);
-  assert.equal(text, 'workbox-mcp 0.1.0-dev\n');
+  assert.equal(text, 'workbox-mcp 0.1.0-alpha.1\n');
   assert.equal(DEFAULT_SERVER, 'http://127.0.0.1:8790');
 });
 
