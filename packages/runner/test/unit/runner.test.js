@@ -39,7 +39,8 @@ test('boot barrier, control channel, nonce once, status and shutdown', async () 
     );
     await assert.rejects(
       local.request('session.start', { argv: ['sh'] }),
-      (e) => e.code === 'E_UNKNOWN_METHOD',
+      (e) => e.code === 'E_STATE' && e.data.phase === 'boot',
+      'no session may start before the host lifts the boot barrier',
     );
 
     const host = await connectPeer(fx.socket, 'host');

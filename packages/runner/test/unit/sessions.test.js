@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { PassThrough, Duplex } from 'node:stream';
 import { Peer } from '@workbox/protocol';
 import { SessionManager, DEFAULT_STOP_GRACE_MS } from '../../src/sessions.js';
@@ -187,7 +188,7 @@ test('input, eof, signal, detach and stop escalation with a TERM-ignoring child'
   r.close();
 });
 
-test('errors: bad argv, bad cwd, pty, secrets, uid switching, stopAll', async () => {
+test('errors: bad argv, bad cwd, pty, secrets, stopAll', async () => {
   const sm = new SessionManager();
   await assert.rejects(
     sm.start({ argv: ['definitely-not-a-binary-xyz'] }),
@@ -204,44 +205,18 @@ test('errors: bad argv, bad cwd, pty, secrets, uid switching, stopAll', async ()
     cols: 40,
   });
   await until(() => sm.get(pty.sessionId).exited);
-  assert.match(
-    sm
-      .get(pty.sessionId)
-      .spool.replayFrom(0)
-      .chunks.map((c) => c.data.toString())
-      .join(''),
-    /tty/,
-  );
+  const ptyText = sm
+    .get(pty.sessionId)
+    .spool.replayFrom(0)
+    .chunks.map((c) => c.data.toString())
+    .join('');
+  assert.match(ptyText, /tty/);
+  assert.doesNotMatch(ptyText, /notty/, 'stdin of a pty session is a terminal');
   await assert.rejects(
     sm.start({ argv: ['sh'], secretRefs: ['x'] }),
     (e) => e.code === 'E_UNSUPPORTED',
   );
   await assert.rejects(sm.start({ argv: ['/etc/passwd'] }), (e) => e.code === 'E_DENIED');
-  let who = null;
-  try {
-    who = await sm.start({
-      argv: ['sh', '-c', 'id -u; echo $CUSTOM; echo $PATH | cut -c1-4'],
-      uid: 65534,
-      gid: 65534,
-      env: { CUSTOM: 'yes' },
-      inheritEnv: false,
-      cwd: '/',
-    });
-  } catch (e) {
-    // Restricted sandboxes cannot setuid to an unmapped uid (spawn EINVAL); the coded,
-    // non-crashing failure is the contract there. On a capable host who is non-null.
-    assert.equal(e.code, 'E_INVALID_PARAMS');
-    assert.equal(e.data.errno, 'EINVAL');
-  }
-  if (who) {
-    await until(() => sm.get(who.sessionId).exited);
-    const text = sm
-      .get(who.sessionId)
-      .spool.replayFrom(0)
-      .chunks.map((c) => c.data.toString())
-      .join('');
-    assert.equal(text, '65534\nyes\n\n');
-  }
   const fx = bootFixture();
   const a = await sm.start({ argv: ['sleep', '30'] });
   const b = await sm.start({ argv: ['sleep', '30'] });
@@ -255,3 +230,41 @@ test('errors: bad argv, bad cwd, pty, secrets, uid switching, stopAll', async ()
   assert.equal(sm.get(b.sessionId).exited.signal, 'SIGTERM');
   fx.cleanup();
 });
+
+/** True when this process may start children under another uid (root on a bare host). */
+function canSwitchUid() {
+  const r = spawnSync('true', [], { uid: 65534, gid: 65534 });
+  return !r.error && r.status === 0;
+}
+
+test(
+  'uid and gid switching with a clean environment',
+  { skip: canSwitchUid() ? false : 'this host cannot setuid to 65534; not run' },
+  async () => {
+    const sm = new SessionManager();
+    const who = await sm.start({
+      argv: [
+        'sh',
+        '-c',
+        'id -u; id -g; echo $CUSTOM; test -n "$HOME" && echo "$HOME" || echo unset',
+      ],
+      uid: 65534,
+      gid: 65534,
+      env: { CUSTOM: 'yes' },
+      inheritEnv: false,
+      cwd: '/',
+    });
+    await until(() => sm.get(who.sessionId).exited);
+    const text = sm
+      .get(who.sessionId)
+      .spool.replayFrom(0)
+      .chunks.map((c) => c.data.toString())
+      .join('');
+    assert.equal(
+      text,
+      '65534\n65534\nyes\nunset\n',
+      'runs as nobody and inherits nothing it was not given',
+    );
+    assert.equal(sm.get(who.sessionId).exited.code, 0);
+  },
+);
