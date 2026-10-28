@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { E } from '../errors.js';
+import { removeUnder } from '../host/safefs.js';
 
 /**
  * The agent→host file crossing (spec design `artifacts`). The agent sends only a name, size and
@@ -76,7 +77,7 @@ export function acceptOutboxFile(opts) {
     }
     const digest = hash.digest('hex');
     if (digest !== opts.sha256 || total !== opts.size) {
-      fs.rmSync(tmp, { force: true });
+      removeUnder(opts.artifactsDir, tmp);
       throw E.invalid('outbox digest/size mismatch', {
         expectedSha256: opts.sha256,
         actualSha256: digest,
@@ -84,7 +85,7 @@ export function acceptOutboxFile(opts) {
         actualSize: total,
       });
     }
-    if (fs.existsSync(dest)) fs.rmSync(tmp, { force: true });
+    if (fs.existsSync(dest)) removeUnder(opts.artifactsDir, tmp);
     else fs.renameSync(tmp, dest);
     return { sha256: digest, size: total, path: dest };
   } finally {

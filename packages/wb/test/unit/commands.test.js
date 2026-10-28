@@ -1,8 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import { once } from 'node:events';
+import { Peer, PROTOCOL_VERSION } from '@workbox/protocol';
+import { Runner } from '@workbox/runner';
+import { WbClient } from '../../src/client.js';
 import {
   splitAtDoubleDash,
+  sessionCommand,
   parseOpts,
   runProcess,
   runCommand,
@@ -87,4 +96,72 @@ test('runCommand stores the log and records evidence; status/ask/event route to 
   assert.ok(client.calls.some((c) => c.method === 'broker.event.emit'));
   assert.ok(client.calls.some((c) => c.method === 'broker.ask.raise'));
   await assert.rejects(() => runCommand(ctx, []), /requires a command/);
+});
+
+test('session attach on an exited session replays the spool, prints the exit and carries its status', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-attach-'));
+  const socketPath = path.join(dir, 'runner.sock');
+  const runner = new Runner({
+    socketPath,
+    boot: { bootId: 'b1', nonce: 'n1', sandboxId: 's1', protocol: PROTOCOL_VERSION },
+    checks: async () => ({ ok: true, problems: [] }),
+  });
+  await runner.start();
+  const hostSocket = net.connect(socketPath);
+  await once(hostSocket, 'connect');
+  const host = new Peer(hostSocket, { name: 'host' });
+  const crashes = [];
+  const onCrash = (e) => crashes.push(e);
+  process.on('uncaughtException', onCrash);
+  process.on('unhandledRejection', onCrash);
+  try {
+    await host.request('runner.hello', { protocol: PROTOCOL_VERSION, role: 'host' });
+    await host.request('runner.go', {});
+    const starter = new WbClient({ socketPath });
+    const { sessionId } = await starter.request('session.start', {
+      argv: ['sh', '-c', 'echo replayed-one; echo replayed-two >&2; exit 3'],
+    });
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const { sessions } = await starter.request('session.list');
+      if (sessions.find((x) => x.sessionId === sessionId)?.exited) break;
+      assert.ok(Date.now() < deadline, 'session did not exit');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    starter.close();
+
+    for (let round = 0; round < 3; round++) {
+      const out = [];
+      const err = [];
+      const client = new WbClient({ socketPath });
+      const result = await sessionCommand(
+        {
+          client,
+          out: { write: (d) => out.push(Buffer.from(d)) },
+          err: { write: (d) => err.push(String(d)) },
+        },
+        ['attach', sessionId],
+      );
+      client.close();
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(result.sessionId, sessionId);
+      assert.equal(result.exited.code, 3);
+      assert.equal(result.exitCode, 3);
+      const text = Buffer.concat(out).toString();
+      assert.match(text, /replayed-one\n/);
+      assert.match(text, /replayed-two\n/);
+      assert.equal(err.join(''), `wb: session ${sessionId} exited with code 3\n`);
+    }
+    assert.deepEqual(crashes, [], 'closing the client after the exit does not crash');
+    await assert.rejects(
+      sessionCommand({ client: new WbClient({ socketPath }), out: {}, err: {} }, ['attach']),
+      (e) => e.code === 'E_INVALID_PARAMS',
+    );
+  } finally {
+    process.off('uncaughtException', onCrash);
+    process.off('unhandledRejection', onCrash);
+    host.close();
+    await runner.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

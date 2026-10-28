@@ -227,6 +227,38 @@ async function checkSessions(box) {
   assert.equal(after.find((s) => s.sessionId === sleepId).exited.signal, 'SIGTERM');
 }
 
+async function checkAttachExited(box) {
+  const started = await box.wb([
+    'session',
+    'start',
+    '--json',
+    '--',
+    'sh',
+    '-c',
+    'echo kept-out; echo kept-err >&2; exit 7',
+  ]);
+  assert.equal(started.exitCode, 0, started.stderr);
+  const { sessionId } = JSON.parse(started.stdout);
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const { sessions } = await box.request('session.list');
+    if (sessions.find((s) => s.sessionId === sessionId)?.exited) break;
+    if (Date.now() > deadline) throw new Error(`session ${sessionId} did not exit`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const attached = await box.wb(['session', 'attach', sessionId]);
+  assert.equal(attached.exitCode, 7, attached.stderr);
+  assert.match(attached.stdout, /kept-out\n/);
+  assert.match(attached.stdout, /kept-err\n/);
+  assert.equal(attached.stderr, `wb: session ${sessionId} exited with code 7\n`);
+  assert.doesNotMatch(attached.stderr, /TypeError/);
+  const json = await box.wb(['session', 'attach', sessionId, '--json']);
+  assert.equal(json.exitCode, 7, json.stderr);
+  const result = lastJson(json.stdout);
+  assert.equal(result.exited.code, 7);
+  assert.equal(result.exitCode, 7);
+}
+
 async function checkHandoffAndRelayGuards(box, eng) {
   const genuine = 'genuine bytes\n';
   const secretFile = path.join(eng.dir, 'host-secret.txt');
@@ -331,6 +363,10 @@ test(
         checkRun(box, eng),
       );
       await t.test('ac_3: wb session start|list|attach|input|stop', () => checkSessions(box));
+      await t.test(
+        'ac_3: wb session attach on an exited session replays and exits with its status',
+        () => checkAttachExited(box),
+      );
       await t.test('ac_2: outbox and relay guards reject a hostile local peer', () =>
         checkHandoffAndRelayGuards(box, eng),
       );

@@ -29,6 +29,7 @@ exit_code   = 0
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/cov-verify.log"
 observed    = "packages/runner/src/fs.js realpathLoose (lines 120-123) and the mustExist:false branch of resolve() are unreachable: every resolve() caller uses the default mustExist=true, so fs.js stops at 12/13 functions (92.31)."
 assumption  = "It is dead code left for a write-to-new-path check that resolve(path.dirname()) now covers; left uncovered and unfixed here, for the fs owner to delete or wire up."
+resolved    = "Add the H14 removeUnder choke point for host deletes, cap launch.log and fix wb attach on exited sessions"
 
 [finding.2-3-wb-attach-exited]
 revision    = "e1d9f5e"
@@ -37,3 +38,12 @@ exit_code   = 1
 log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/2.3-verify-1.log"
 observed    = "wb session attach on an already-exited session crashes with TypeError at wb/src/client.js:80 (this.peer.off on a null peer) once the runner reply closes the client."
 assumption  = "This is a task 1.5 wb client defect outside 2.3 touches; the broker test replays the spool through the host attach path instead."
+resolved    = "Add the H14 removeUnder choke point for host deletes, cap launch.log and fix wb attach on exited sessions"
+
+[finding.runtime-install-staging-race]
+revision    = "dc1962a"
+command     = "WORKBOX_TEST_ASSETS=/var/tmp/workbox-test-assets-hc node --test <H14 unit tests> packages/core/test/integration/launch.test.js packages/core/test/integration/wb.test.js"
+exit_code   = 1
+log         = "/tmp/claude-0/-root-workbox/94650d8f-5921-40f1-b770-58a0d1ed4e49/scratchpad/logs/hc-verify-1.log"
+observed    = "With the runtime stale after a runner/wb change, two test files ran ensureAssets in parallel and RuntimeManager.install raced on the shared <version>.tmp staging dir (EEXIST on symlinkSync, ENOENT in digestTree); a later install in the same run succeeded."
+assumption  = "Pre-existing: install stages into a fixed name with no cross-process lock; it only bites on the first parallel run after an in-box package change and needs a per-process staging dir or a lock."

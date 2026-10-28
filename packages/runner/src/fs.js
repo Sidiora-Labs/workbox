@@ -17,12 +17,12 @@ export const MAX_READ_BYTES = 4 * 1024 * 1024;
 export function createFs(opts = {}) {
   const root = path.resolve(opts.root ?? '/');
 
-  function resolve(p, { mustExist = true } = {}) {
+  function resolve(p) {
     if (typeof p !== 'string' || p.length === 0 || p.includes('\0') || !path.isAbsolute(p))
       throw new ProtocolError(Codes.INVALID_PARAMS, `path must be absolute: ${String(p)}`);
     let real;
     try {
-      real = mustExist ? fs.realpathSync(p) : realpathLoose(p);
+      real = fs.realpathSync(p);
     } catch (e) {
       throw new ProtocolError(Codes.NOT_FOUND, `path not found: ${p}`, { errno: e.code });
     }
@@ -115,11 +115,6 @@ function entryType(e) {
   if (e.isSymbolicLink()) return 'symlink';
   if (e.isFile()) return 'file';
   return 'other';
-}
-
-function realpathLoose(p) {
-  const dir = fs.realpathSync(path.dirname(p));
-  return path.join(dir, path.basename(p));
 }
 
 /** Strict base64 decode; Buffer.from alone silently ignores bad input. @param {string} s */

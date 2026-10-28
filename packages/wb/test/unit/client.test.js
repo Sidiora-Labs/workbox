@@ -80,3 +80,27 @@ test('concurrent first requests share one runner connection and close releases i
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('onEvent unsubscribes from the peer it subscribed on, also twice and after close', async () => {
+  const [sa, sb] = memoryPair();
+  const server = new Peer(sb, { name: 'runner' });
+  const peer = new Peer(sa, { name: 'wb' });
+  const wb = new WbClient({ peer });
+  const seen = [];
+  const off = wb.onEvent((method, params) => seen.push([method, params]));
+  assert.equal(peer.listenerCount('event'), 1);
+  await server.notify('session.output', { sessionId: 's1', stream: 'stdout', seq: 0, data: '' });
+  const deadline = Date.now() + 5000;
+  while (seen.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(seen[0][0], 'session.output');
+  off();
+  assert.equal(peer.listenerCount('event'), 0);
+  wb.close();
+  assert.equal(wb.peer, null);
+  off();
+  assert.throws(
+    () => wb.onEvent(() => {}),
+    (e) => e.code === 'E_CLOSED',
+  );
+  server.close();
+});

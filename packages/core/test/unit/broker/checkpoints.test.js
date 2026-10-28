@@ -29,3 +29,25 @@ test('create/list/restore round-trip; unsafe tar names rejected', async () => {
   store.close();
   t.cleanup();
 });
+
+test('a failed checkpoint create removes its partial archive and nothing outside the checkpoints dir', async () => {
+  const t = tmpDir();
+  const store = Store.open(':memory:');
+  try {
+    const sb = store.createSandbox({ rootfs: 'minimal', runtime: 'current', profile: {} });
+    const upperDir = path.join(t.dir, 'upper');
+    fs.mkdirSync(upperDir, { recursive: true });
+    fs.writeFileSync(path.join(upperDir, 'kept.txt'), 'upper data');
+    const ctx = { store, sandboxId: sb.id, upperDir, checkpointsDir: path.join(t.dir, 'cps') };
+    await assert.rejects(
+      checkpointCreate(ctx, { paths: ['/does-not-exist'] }),
+      (e) => e.code === 'E_UNAVAILABLE' && /tar failed/.test(e.message),
+    );
+    assert.deepEqual(fs.readdirSync(ctx.checkpointsDir), [], 'partial archive removed');
+    assert.equal(fs.readFileSync(path.join(upperDir, 'kept.txt'), 'utf8'), 'upper data');
+    assert.equal(checkpointList(ctx).checkpoints.length, 0);
+  } finally {
+    store.close();
+    t.cleanup();
+  }
+});

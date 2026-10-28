@@ -75,9 +75,11 @@ export class WbClient {
 
   /** Subscribe to runner events (session output/exit). @param {(method: string, params: object) => void} fn */
   onEvent(fn) {
-    if (!this.peer) throw new ProtocolError(Codes.CLOSED, 'wb client is not connected');
-    this.peer.on('event', fn);
-    return () => this.peer.off('event', fn);
+    const peer = this.peer;
+    if (!peer) throw new ProtocolError(Codes.CLOSED, 'wb client is not connected');
+    peer.on('event', fn);
+    // Bound to the peer it subscribed on: safe to call twice and after close().
+    return () => peer.off('event', fn);
   }
 
   close() {
