@@ -1,0 +1,8 @@
+**/node_modules
+.git
+.claude
+.codegraph
+spec
+docs
+test
+packages/*/test

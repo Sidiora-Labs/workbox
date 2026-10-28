@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { runDoctor, formatReport, Audit } from '@workbox/core';
+import { runDoctor, formatReport, Audit, loadConfig } from '@workbox/core';
 
 /**
  * Operator CLI command bodies. Each receives `(ctx, argv)`; ctx is either local
@@ -56,9 +56,13 @@ function manager(ctx) {
   throw new Error('this command needs a local engine or --server');
 }
 
-/** @param {object} ctx @param {string[]} argv */
+/**
+ * Probe this host's prerequisites. With `--server` there is no local engine, so the config is
+ * resolved from the environment; the host checked is always the local one.
+ * @param {object} ctx @param {string[]} argv
+ */
 export async function doctorCommand(ctx, argv) {
-  const report = await runDoctor(ctx.engine?.config);
+  const report = await runDoctor(ctx.engine?.config ?? loadConfig());
   if (argv.includes('--json')) return report;
   ctx.out.write(`${formatReport(report)}\n`);
   return { text: true, ok: report.ok ?? true };

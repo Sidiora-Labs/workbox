@@ -8,15 +8,32 @@ Type=simple
 User=root
 Environment=WORKBOX_ROOT=/var/lib/workbox
 EnvironmentFile=-/etc/workbox/workbox.env
-ExecStart=/usr/bin/node /opt/workbox-src/packages/cli/src/main.js serve --host 127.0.0.1 --port 8790
+ExecStart=node /opt/workbox-src/packages/cli/src/main.js serve --host 127.0.0.1 --port 8790
 Restart=on-failure
 RestartSec=2s
-# The launch chain needs user namespaces, cgroup delegation and bwrap; do not add
-# NoNewPrivileges/PrivateUsers here — they break unshare --map-users. Containment comes
-# from the per-sandbox namespaces plus the seccomp filter, not from unit sandboxing.
-ProtectSystem=full
-ReadWritePaths=/var/lib/workbox /sys/fs/cgroup/workbox
 LimitNOFILE=65536
+# Hardening kept: every path the launch chain writes (the Workbox root, /sys/fs/cgroup/<parent>,
+# /proc/<pid>/{uid,gid}_map, /dev/net/tun) stays writable, and the nft ruleset files written to
+# the private /tmp are read by `nsenter -n`, which keeps the daemon's mount namespace. The
+# chain's setuid helpers (newuidmap, newgidmap, mount) already run as root or as mapped root, so
+# no_new_privs costs them nothing; the sandbox payload gets it again from setpriv.
+ProtectSystem=full
+PrivateTmp=yes
+NoNewPrivileges=yes
+# Deliberately absent, each breaks a step of the chain:
+#   PrivateUsers, RestrictNamespaces, CapabilityBoundingSet/AmbientCapabilities: unshare
+#     --map-users and bwrap need CAP_SYS_ADMIN and CAP_SETUID in the host user namespace.
+#   ProtectControlGroups, ProtectKernelTunables: make /sys/fs/cgroup read-only (sandbox cgroups).
+#   PrivateNetwork, IPAddressDeny, RestrictAddressFamilies: the workbox0 link, slirp4netns and
+#     netlink for nft must live in the host network namespace.
+#   PrivateDevices, DevicePolicy/DeviceAllow, ProtectClock (implies a device allowlist):
+#     slirp4netns opens /dev/net/tun.
+#   ProtectProc=invisible, ProcSubset=pid: hide the mapped sandbox pids and /proc/sys from
+#     nsenter, slirp4netns and the doctor.
+#   RestrictSUIDSGID: the rootfs build keeps setuid and setgid bits while shifting ownership.
+#   ProtectHome: docker build writes ~/.docker; ReadWritePaths: redundant under
+#     ProtectSystem=full and fails the unit (226/NAMESPACE) while the cgroup parent is absent.
+#   MemoryDenyWriteExecute: Node's JIT needs writable executable memory.
 
 [Install]
 WantedBy=multi-user.target

@@ -1,12 +1,24 @@
-# Workbox server image.
-# WARNING: the daemon must run privileged (user namespaces, cgroup v2 delegation, bwrap,
-# slirp4netns, nft). Run with: docker run --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup ...
+# Workbox server image. Build from the repository root:
+#   docker build -f deploy/Dockerfile.server -t workbox-server .
+#
+# PRIVILEGED MODE REQUIRED. The daemon maps a subordinate uid range into user namespaces, writes
+# cgroup v2 files under its parent, mounts overlayfs, runs bwrap, attaches slirp4netns, installs
+# nft rules inside sandbox network namespaces and creates the workbox0 dummy link; a default
+# container may do none of this. Run it as:
+#   docker run --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+#     -v workbox:/var/lib/workbox -e WORKBOX_TOKEN=<token> -p 127.0.0.1:8790:8790 workbox-server
+# With --cgroupns=host the sandbox cgroups live under the host's /sys/fs/cgroup/workbox and the
+# range 200000..265535 is the host's, so keep it out of every other user's subuid entry. Docker
+# is not in the image: build the rootfs on the host into the mounted Workbox root.
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    bubblewrap util-linux slirp4netns nftables uidmap ca-certificates git curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bubblewrap util-linux slirp4netns nftables uidmap iproute2 tar ca-certificates git curl \
+  && rm -rf /var/lib/apt/lists/* \
+  && echo 'root:200000:65536' >> /etc/subuid \
+  && echo 'root:200000:65536' >> /etc/subgid
 WORKDIR /opt/workbox-src
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 COPY packages ./packages
 COPY rootfs ./rootfs
 COPY scripts ./scripts
