@@ -2,6 +2,7 @@
   "name": "workbox",
   "version": "0.1.0-dev",
   "private": true,
+  "license": "Apache-2.0",
   "description": "CLI-native agent sandbox: bubblewrap + cgroup v2 isolation, an in-box runner, the wb toolkit, and REST/WS, SDK, MCP and CLI surfaces.",
   "type": "module",
   "engines": {

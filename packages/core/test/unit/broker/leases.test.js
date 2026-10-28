@@ -39,7 +39,8 @@ test('a presented token reaches the store as presented: the stored digest is ref
     assert.equal(digest, hashToken(token));
     const mismatch = { code: 'E_DENIED', message: 'lease token mismatch' };
     assert.throws(() => leaseRenew(c, { token: digest }), mismatch);
-    assert.throws(() => leaseRenew(c, { token: `${token.slice(0, -1)}0` }), mismatch);
+    const lastFlipped = `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`;
+    assert.throws(() => leaseRenew(c, { token: lastFlipped }), mismatch);
     assert.throws(() => leaseRenew(c, { token: '' }), mismatch);
     assert.equal(store.getLease(sb.id).renewedAt, null, 'nothing was renewed');
     clock.advance(1000);

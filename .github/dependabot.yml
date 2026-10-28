@@ -10,3 +10,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directories:
+      - /rootfs/minimal
+      - /rootfs/agents
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

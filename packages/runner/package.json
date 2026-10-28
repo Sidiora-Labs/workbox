@@ -3,7 +3,7 @@
   "version": "0.1.0-dev",
   "description": "In-box supervisor: durable sessions, spool, broker relay. Runs inside every sandbox on the mounted runtime.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22.13.0"
   },

@@ -3,7 +3,7 @@
   "version": "0.1.0-dev",
   "description": "Sandbox engine: launch chain, cgroups, rootfs and runtime management, lifecycle store, supervisor and broker.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22.13.0"
   },

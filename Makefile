@@ -16,6 +16,7 @@ PRIVILEGED_UNIT := \
 	packages/core/test/unit/host/doctor.test.js \
 	packages/core/test/unit/host/launch.test.js \
 	packages/core/test/unit/host/rootfs.test.js \
+	packages/core/test/unit/host/runtime.test.js \
 	packages/core/test/unit/sandbox/exec.test.js \
 	packages/mcp/test/unit/main.test.js \
 	packages/mcp/test/unit/server.test.js \

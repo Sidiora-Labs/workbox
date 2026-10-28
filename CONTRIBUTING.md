@@ -39,9 +39,9 @@ make test
 
 `pnpm test` runs the unit, integration and end-to-end tests against real sandboxes, and
 `pnpm test:coverage` enforces the coverage floors (90% lines, 80% branches, 90% functions). CI
-cannot run the integration and end-to-end tests, so it runs the static checks and the unit tests
-that work without root. If you change the launch chain, cgroups, the network policy or one of the
-interfaces, run `make test` before opening the pull request and say so in its description.
+runs all of them on every pull request: the static checks and the unprivileged unit tests on Node
+22 and 24, and the full suite as root on a prepared GitHub-hosted runner. It also builds the server
+image and smoke-tests it.
 
 The design is described in [docs/architecture.md](docs/architecture.md) and the operating
 procedures in [docs/operations.md](docs/operations.md).
@@ -66,3 +66,8 @@ procedures in [docs/operations.md](docs/operations.md).
 - Keep formatting-only changes separate from behavior changes.
 - Fill in the pull request template, including the commands you ran.
 - [CHANGELOG.md](CHANGELOG.md) is updated when a release is cut.
+
+## License
+
+By contributing, you agree that your contributions are licensed under the
+[Apache License, Version 2.0](LICENSE).
