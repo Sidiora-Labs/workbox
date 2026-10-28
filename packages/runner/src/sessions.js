@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { ProtocolError, Codes, newId } from '@workbox/protocol';
 import { RingSpool, DEFAULT_SPOOL_BYTES } from './spool.js';
-import { spawnPty, resizePty } from './pty.js';
+import { spawnPty, resizePty, signalPtyGroup } from './pty.js';
 
 export const DEFAULT_STOP_GRACE_MS = 5000;
 
@@ -227,16 +227,16 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Resize a PTY session.
+   * Resize a PTY session; resolves once the new window size is set on the pty.
    * @param {string} sessionId @param {number} rows @param {number} cols
    */
-  resize(sessionId, rows, cols) {
+  async resize(sessionId, rows, cols) {
     const s = this.get(sessionId);
     if (!s.pty)
       throw new ProtocolError(Codes.UNSUPPORTED, 'session is not a pty session', { sessionId });
     if (s.exited)
       throw new ProtocolError(Codes.STATE, `session ${sessionId} has exited`, { sessionId });
-    const size = resizePty(s.child, rows, cols);
+    const size = await resizePty(s.child, rows, cols);
     return { sessionId, ...size };
   }
 
@@ -316,6 +316,7 @@ export class SessionManager extends EventEmitter {
     const timer = setTimeout(() => {
       if (!s.exited) {
         escalated = true;
+        if (s.pty) signalPtyGroup(s.child, 'SIGKILL');
         try {
           process.kill(-s.pid, 'SIGKILL');
         } catch {

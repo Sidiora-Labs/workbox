@@ -298,7 +298,7 @@ reqs       = ["4.7"]
 
 [task.2.5]
 title      = "PTY sessions and interactive shell"
-status     = "pending"
+status     = "in_progress"
 wave       = 2
 requires   = ["1.6"]
 touches    = ["packages/runner/src/pty.js", "packages/runner/src/sessions.js", "packages/core/src/host/runtime.js", "packages/cli/src/commands/shell.js", "packages/core/test/integration/pty.test.js"]
@@ -392,7 +392,8 @@ reqs       = ["7.5"]
 # - Exit codes (wb and workbox): 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable,
 #   5 timeout; wb run propagates the wrapped command's exit code.
 # - Deviation, task 2.5: PTY uses util-linux script(1) instead of node-pty to keep the runner
-#   dependency-free; resize records the size and delivers SIGWINCH (no winsize ioctl).
+#   dependency-free; resize sets TIOCSWINSZ on the slave with coreutils stty -F and the kernel
+#   delivers SIGWINCH.
 # - Deviation, task 3.1: the server is built on node:http, not Fastify, keeping the same route,
 #   auth, schema-400 and audit contract without a framework dependency.
 # - Seccomp (task 2.2): ptrace is denied outright (non-descendant scoping is not expressible in

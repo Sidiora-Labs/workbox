@@ -77,7 +77,7 @@
     - wb preset list|install writes /var/lib/workbox-preset/<name>.json with versions and digests and mirrors it to the host store through the broker.
     - The test installs python in a real sandbox with egress and asserts the manifest and that uv and python3 run.
     - _Requirements: 4.7_
-  - [ ] 2.5 PTY sessions and interactive shell
+  - [-] 2.5 PTY sessions and interactive shell
     - Add node-pty to the runtime bundle with its prebuilt binary verified against the rootfs glibc; sessions accept pty with rows and cols and support resize.
     - workbox shell opens an interactive PTY session with raw mode and resize forwarding; tests assert isatty inside and resize propagation.
     - _Requirements: 3.5_
