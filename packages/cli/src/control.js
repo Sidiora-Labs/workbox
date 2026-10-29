@@ -215,7 +215,7 @@ async function download(ctx, from, local) {
   try {
     await pipeline(source, fs.createWriteStream(target));
   } catch (e) {
-    fs.rmSync(target, { force: true });
+    if (fs.existsSync(target)) fs.unlinkSync(target);
     throw e;
   }
   return { from: `${from.id}:${from.path}`, to: target, bytes: fs.statSync(target).size };
