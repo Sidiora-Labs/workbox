@@ -257,3 +257,116 @@ test('readiness follows the probe; graceful close stops listening', async () => 
   await assert.rejects(call(port, { path: '/healthz' }), /ECONNREFUSED/);
   await assert.rejects(app.listen(port, '256.0.0.1'));
 });
+
+test('stored keys: whoami, minting, fleet refusals, hidden sandboxes and revocation', async () => {
+  const api = (token, method, path, body) => call(srv.port, { token, method, path, body });
+  const errorOf = (res) => {
+    const { requestId, ...rest } = res.json.error;
+    assert.ok(requestId);
+    return rest;
+  };
+  assert.deepEqual((await api(TOKENS.read, 'GET', '/v1/whoami')).json, {
+    id: 'observer',
+    scopes: ['read'],
+    binding: null,
+    source: 'config',
+    expiresAt: null,
+  });
+  assert.equal((await api(undefined, 'GET', '/v1/whoami')).status, 401);
+  const bad = await api(TOKENS.admin, 'POST', '/v1/keys', { name: 'x', scopes: ['root'] });
+  assert.equal(bad.status, 400);
+  assert.ok(bad.json.error.details.errors.some((e) => e.path.includes('scopes')));
+  const byReader = await api(TOKENS.read, 'POST', '/v1/keys', { name: 'x', scopes: ['read'] });
+  assert.equal(byReader.status, 403);
+
+  const minted = await api(TOKENS.admin, 'POST', '/v1/keys', {
+    name: 'unit-bound',
+    scopes: ['admin'],
+    labels: { team: 'a' },
+    ttlSeconds: 600,
+  });
+  assert.equal(minted.status, 201, minted.text);
+  const { token, id } = minted.json;
+  assert.match(token, /^wbk_[A-Za-z0-9_-]{43}$/);
+  assert.equal(minted.json.expiresAt - minted.json.createdAt, 600_000);
+  assert.deepEqual((await api(token, 'GET', '/v1/whoami')).json, {
+    id,
+    scopes: ['admin'],
+    binding: { labels: { team: 'a' } },
+    source: 'store',
+    expiresAt: minted.json.expiresAt,
+  });
+  assert.deepEqual((await api(token, 'GET', '/v1/sandboxes')).json, {
+    items: [],
+    cursor: null,
+    complete: true,
+  });
+  assert.deepEqual((await api(token, 'GET', '/v1/asks')).json, { asks: [] });
+
+  for (const [method, p, body] of [
+    ['GET', '/metrics'],
+    ['POST', '/v1/reconcile'],
+    ['GET', '/v1/keys'],
+    ['POST', '/v1/keys', { name: 'y', scopes: ['read'] }],
+    ['DELETE', `/v1/keys/${id}`],
+  ]) {
+    const res = await api(token, method, p, body);
+    assert.equal(res.status, 403, `${method} ${p}`);
+    assert.match(res.json.error.message, /not bound to sandboxes/);
+  }
+
+  const hidden = await api(token, 'GET', '/v1/sandboxes/sb-none');
+  const missing = await api(TOKENS.admin, 'GET', '/v1/sandboxes/sb-none');
+  assert.equal(hidden.status, 404);
+  assert.deepEqual(errorOf(hidden), errorOf(missing));
+  assert.deepEqual(errorOf(hidden), {
+    code: 'E_NOT_FOUND',
+    message: 'sandbox sb-none not found',
+    details: { id: 'sb-none' },
+  });
+  const files = await api(token, 'GET', '/v1/sandboxes/sb-none/files');
+  assert.equal(files.status, 404, 'visibility is checked before the route runs');
+  assert.match(
+    await rawUpgrade(srv.port, `/v1/sandboxes/sb-none/sessions/s/ws?token=${token}`),
+    /^HTTP\/1\.1 404/,
+  );
+  const answer = await api(token, 'POST', '/v1/asks/ask-none/answer', { answer: 1 });
+  const answerMissing = await api(TOKENS.admin, 'POST', '/v1/asks/ask-none/answer', { answer: 1 });
+  assert.equal(answer.status, 404);
+  assert.deepEqual(errorOf(answer), errorOf(answerMissing));
+  const conflict = await api(token, 'POST', '/v1/sandboxes', { labels: { team: 'b' } });
+  assert.equal(conflict.status, 403);
+  assert.match(conflict.json.error.message, /label team must be "a"/);
+
+  const ids = await api(TOKENS.admin, 'POST', '/v1/keys', {
+    name: 'unit-ids',
+    scopes: ['admin'],
+    sandboxIds: ['sb-none'],
+  });
+  assert.equal(ids.status, 201, ids.text);
+  const idsCreate = await api(ids.json.token, 'POST', '/v1/sandboxes', { name: 'nope' });
+  assert.equal(idsCreate.status, 403);
+  assert.match(idsCreate.json.error.message, /sandbox ids cannot create/);
+
+  const listed = await api(TOKENS.admin, 'GET', '/v1/keys');
+  assert.equal(listed.status, 200);
+  const row = listed.json.keys.find((k) => k.id === id);
+  assert.equal(row.name, 'unit-bound');
+  assert.equal(row.createdBy, 'root');
+  assert.equal(typeof row.lastUsedAt, 'number');
+  assert.equal(row.revokedAt, null);
+  assert.equal(listed.text.includes(token), false);
+  assert.equal(listed.text.includes('token'), false);
+
+  const revoked = await api(TOKENS.admin, 'DELETE', `/v1/keys/${id}`);
+  assert.equal(revoked.status, 200);
+  assert.equal(typeof revoked.json.revokedAt, 'number');
+  assert.equal((await api(token, 'GET', '/v1/whoami')).status, 401);
+  assert.equal((await api(TOKENS.admin, 'DELETE', '/v1/keys/key_none')).status, 404);
+
+  const actions = srv.auditEntries();
+  assert.ok(actions.some((e) => e.action === 'api.key.create' && e.data.keyId === id));
+  assert.ok(actions.some((e) => e.action === 'api.key.revoke' && e.data.keyId === id));
+  const recorded = JSON.stringify(actions) + JSON.stringify(srv.logs);
+  for (const t of [token, ids.json.token]) assert.equal(recorded.includes(t), false);
+});

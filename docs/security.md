@@ -4,7 +4,8 @@ What Workbox enforces, where in the code, and the [known limits](#stated-limits)
 
 The threat model is an agent with root inside its sandbox that runs arbitrary code. The boundary
 protects the host, other sandboxes, the shared rootfs and the host's network from it. Operators
-and API clients holding admin keys are trusted.
+and API clients holding unbound admin keys are trusted. A client holding a bound key, such as an
+outside agent given one key, is trusted only with the sandboxes that key is bound to.
 
 ## What is enforced
 
@@ -152,6 +153,16 @@ Network setup must only ever touch a sandbox's own network namespace, never the 
   Keys are configured as `tokenSha256` (or a plaintext `token`, hashed at load) and compared in
   constant time over the digest. The scope each route needs is `SCOPE_MATRIX` in
   `packages/server/src/auth.js`.
+- Stored keys (`POST /v1/keys`, `workbox key create`) are kept in the store as the SHA-256 of the
+  token only. The token is `wbk_` and 32 random bytes in base64url, returned once. The store
+  lookup runs on every request, so an expired or revoked key fails on the next one. The
+  redactor removes any `wbk_` token from log lines and audit entries.
+- A key bound by labels or sandbox ids sees only those sandboxes. The server checks visibility
+  once, in its dispatch, for every route with a sandbox `:id` and for the session WebSocket; a
+  sandbox the key cannot see answers 404 exactly like one that does not exist. Lists are
+  filtered in the database query. A label-bound key's labels are forced onto any sandbox it
+  creates, and a key bound only by ids cannot create. Fleet routes (`/metrics`, reconcile and
+  the key routes) refuse bound keys with 403. The checks are in `packages/server/src/access.js`.
 - Any request carrying `Origin` or `Sec-Fetch-Site`, or a `Host` other than `localhost`,
   `127.0.0.1`, `::1` or a configured server name, is refused with 403 before authentication
   (H15, against CSRF and DNS rebinding).
@@ -209,6 +220,11 @@ verify` checks the chain.
   is gone.
 - **WebSocket token in the query.** Besides the `Authorization` header, an upgrade accepts
   `?token=`. A query-string token can end up in the logs of anything between client and server.
+- **A bound key is as strong as its scopes inside its sandboxes.** A bound `admin` key can
+  destroy, drain and checkpoint the sandboxes it sees, and grant them any host secret reference
+  when it creates one. Give an outside agent the fewest scopes it needs. A label binding follows
+  the labels: any sandbox an unbound admin later creates with the same labels becomes visible to
+  the key.
 - **Lease expiry does not stop a sandbox.** An expired lease is reported; nothing is killed.
 - **Audit integrity is tamper-evidence, not tamper-proofing.** Anyone with root on the host can
   rewrite the whole chain consistently. Back up the audit directory off the host if that matters.

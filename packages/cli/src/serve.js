@@ -62,7 +62,7 @@ function envKeys(env) {
  * local engine until SIGTERM, SIGINT or `opts.signal` aborts, then a graceful close. Sandboxes are
  * detached from this process and keep running. The listen address comes from the flags, then
  * WORKBOX_PORT, then the config file, then 127.0.0.1:8790; the keys are the config file's plus
- * those from the environment.
+ * those from the environment, and the stored keys of the engine's store (`workbox key`).
  * @param {{engine: object, out: NodeJS.WritableStream}} ctx
  * @param {string[]} argv
  * @param {{env?: NodeJS.ProcessEnv, signal?: AbortSignal}} [opts]
@@ -76,7 +76,7 @@ export async function serveCommand(ctx, argv, opts = {}) {
   const host = flags.host ?? file.host ?? '127.0.0.1';
   const app = createServer({
     manager: ctx.engine.manager,
-    keys: [...file.keys, ...envKeys(env)],
+    auth: createAuth({ keys: [...file.keys, ...envKeys(env)], store: ctx.engine.store }),
     audit: ctx.engine.audit,
     serverNames: file.serverNames,
   });

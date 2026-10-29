@@ -6,10 +6,14 @@ import { newId } from '@workbox/protocol';
 import { E, WorkboxError } from './errors.js';
 import { States, Health, assertTransition } from './sandbox/state.js';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const TOKEN_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const KEY_DIGEST = /^[0-9a-f]{64}$/;
 const MAX_PAGE = 1000;
+
+/** The shortest interval between two `last_used_at` writes of one API key. */
+export const KEY_TOUCH_INTERVAL_MS = 60_000;
 
 const MIGRATIONS = [
   `
@@ -153,6 +157,22 @@ const MIGRATIONS = [
     for (const r of db.prepare(`SELECT sandbox_id, token FROM leases`).all())
       if (!TOKEN_DIGEST.test(r.token)) update.run(leaseDigest(r.token), r.sandbox_id);
   },
+  // v3: stored API keys. Only the SHA-256 hex digest of a token is kept.
+  `
+  CREATE TABLE api_keys (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_sha256 TEXT NOT NULL UNIQUE,
+    scopes TEXT NOT NULL,
+    binding TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    revoked_at INTEGER,
+    last_used_at INTEGER,
+    created_by TEXT
+  );
+  CREATE INDEX api_keys_created ON api_keys(created_at, id);
+  `,
 ];
 
 const SANDBOX_COLS = `id, name, state, state_reason, health, rootfs, runtime, profile, labels, idempotency_key, pid, boot_id, cgroup, version, created_at, updated_at, ready_at, deleted_at, last_observed_at`;
@@ -207,6 +227,8 @@ export class Store {
     this.path = dbPath;
     this.clock = clock;
     this.depth = 0;
+    /** @type {Map<string, number>} key id -> when this process last wrote its last_used_at */
+    this.keyTouches = new Map();
   }
 
   close() {
@@ -345,7 +367,9 @@ export class Store {
 
   /**
    * Cursor pagination ordered by id (time-ordered). `complete` is true when no further page exists.
-   * @param {{states?: string[], includeDeleted?: boolean, cursor?: string|null, limit?: number}} [opts]
+   * With `binding`, only the sandboxes it makes visible are listed, filtered in SQL so every page
+   * is full.
+   * @param {{states?: string[], includeDeleted?: boolean, cursor?: string|null, limit?: number, binding?: Binding|null}} [opts]
    */
   listSandboxes(opts = {}) {
     const limit = pageSize(opts.limit, 50);
@@ -360,6 +384,11 @@ export class Store {
     if (opts.cursor) {
       clauses.push('id > ?');
       params.push(opts.cursor);
+    }
+    if (opts.binding) {
+      const filter = bindingFilter(opts.binding);
+      clauses.push(filter.sql);
+      params.push(...filter.params);
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.db
@@ -862,8 +891,9 @@ export class Store {
   }
 
   /**
-   * At most `limit` asks (default 100, cap 1000) in creation order, after ask `after`.
-   * @param {{sandboxId?: string, status?: 'open'|'answered'|'expired'|'all', after?: string, limit?: number}} [opts]
+   * At most `limit` asks (default 100, cap 1000) in creation order, after ask `after`. With
+   * `binding`, only asks of the sandboxes it makes visible.
+   * @param {{sandboxId?: string, status?: 'open'|'answered'|'expired'|'all', after?: string, limit?: number, binding?: Binding|null}} [opts]
    */
   listAsks(opts = {}) {
     const clauses = [];
@@ -871,6 +901,11 @@ export class Store {
     if (opts.sandboxId) {
       clauses.push('sandbox_id = ?');
       params.push(opts.sandboxId);
+    }
+    if (opts.binding) {
+      const filter = bindingFilter(opts.binding, { sandboxColumn: 'sandbox_id' });
+      clauses.push(filter.sql);
+      params.push(...filter.params);
     }
     if (opts.status && opts.status !== 'all') {
       clauses.push('status = ?');
@@ -992,7 +1027,173 @@ export class Store {
       .all(sandboxId)
       .map((r) => r.ref);
   }
+
+  // ── api keys ──
+
+  /**
+   * Store an API key. Only the token's SHA-256 hex digest is kept; an id or digest already stored
+   * is an E_CONFLICT. The returned row never carries the digest.
+   * @param {{id?: string, name: string, tokenSha256: string, scopes: string[], binding?: Binding|null, expiresAt?: number|null, createdBy?: string|null}} k
+   * @returns {ApiKeyRow}
+   */
+  createApiKey(k) {
+    if (typeof k.tokenSha256 !== 'string' || !KEY_DIGEST.test(k.tokenSha256))
+      throw E.invalid('tokenSha256 must be a SHA-256 hex digest', { field: 'tokenSha256' });
+    const now = this.clock();
+    const id = k.id ?? `key_${newId(now)}`;
+    return this.tx(() => {
+      const taken = this.db
+        .prepare(`SELECT id FROM api_keys WHERE id = ? OR token_sha256 = ?`)
+        .get(id, k.tokenSha256);
+      if (taken) throw E.conflict('an API key with this id or token already exists', { id });
+      this.db
+        .prepare(
+          `INSERT INTO api_keys (id, name, token_sha256, scopes, binding, created_at, expires_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          k.name,
+          k.tokenSha256,
+          JSON.stringify(k.scopes),
+          k.binding ? JSON.stringify(k.binding) : null,
+          now,
+          k.expiresAt ?? null,
+          k.createdBy ?? null,
+        );
+      return this.getApiKey(id);
+    });
+  }
+
+  /** @param {string} id @returns {ApiKeyRow|null} */
+  getApiKey(id) {
+    const r = this.db.prepare(`SELECT ${KEY_COLS} FROM api_keys WHERE id = ?`).get(id);
+    return r ? apiKeyRow(r) : null;
+  }
+
+  /**
+   * The key whose token hashes to `digest`, revoked and expired ones included.
+   * @param {string} digest SHA-256 hex of the token
+   * @returns {ApiKeyRow|null}
+   */
+  getApiKeyByDigest(digest) {
+    const r = this.db
+      .prepare(`SELECT ${KEY_COLS} FROM api_keys WHERE token_sha256 = ?`)
+      .get(String(digest));
+    return r ? apiKeyRow(r) : null;
+  }
+
+  /**
+   * At most `limit` keys (default and cap 1000) in creation order, after key `after`.
+   * @param {{after?: string, limit?: number}} [opts]
+   * @returns {ApiKeyRow[]}
+   */
+  listApiKeys(opts = {}) {
+    const params = [];
+    let where = '';
+    if (opts.after) {
+      where = 'WHERE (created_at, id) > (SELECT created_at, id FROM api_keys WHERE id = ?)';
+      params.push(opts.after);
+    }
+    return this.db
+      .prepare(`SELECT ${KEY_COLS} FROM api_keys ${where} ORDER BY created_at, id LIMIT ?`)
+      .all(...params, pageSize(opts.limit, MAX_PAGE))
+      .map(apiKeyRow);
+  }
+
+  /**
+   * Revoke a key; it stops authenticating at once. Revoking a revoked key keeps the first
+   * revocation time. An unknown id is E_NOT_FOUND.
+   * @param {string} id
+   * @returns {ApiKeyRow}
+   */
+  revokeApiKey(id) {
+    return this.tx(() => {
+      if (!this.getApiKey(id)) throw E.notFound(`key ${id} not found`, { id });
+      this.db
+        .prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
+        .run(this.clock(), id);
+      return this.getApiKey(id);
+    });
+  }
+
+  /**
+   * Record that a key was used. Writes at most once per `minIntervalMs` per key, within this
+   * process and across processes sharing the database.
+   * @param {string} id
+   * @param {number} [minIntervalMs] default KEY_TOUCH_INTERVAL_MS
+   * @returns {boolean} true when last_used_at was written
+   */
+  touchApiKey(id, minIntervalMs = KEY_TOUCH_INTERVAL_MS) {
+    const now = this.clock();
+    const last = this.keyTouches.get(id);
+    if (last !== undefined && now - last < minIntervalMs) return false;
+    this.keyTouches.set(id, now);
+    const r = this.db
+      .prepare(
+        `UPDATE api_keys SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)`,
+      )
+      .run(now, id, now - minIntervalMs);
+    return Number(r.changes) > 0;
+  }
 }
+
+/**
+ * Sandboxes a bound API key may see: those whose id is listed, and those carrying every label.
+ * @typedef {{labels?: Record<string, string>, sandboxIds?: string[]}} Binding
+ */
+
+/**
+ * @typedef {object} ApiKeyRow
+ * @property {string} id
+ * @property {string} name
+ * @property {string[]} scopes
+ * @property {Binding|null} binding
+ * @property {number} createdAt
+ * @property {number|null} expiresAt
+ * @property {number|null} revokedAt
+ * @property {number|null} lastUsedAt
+ * @property {string|null} createdBy
+ */
+
+/**
+ * A SQL condition selecting the sandboxes a binding makes visible: an id in `sandboxIds`, or
+ * every `labels` entry equal to the sandbox's label of that name. A binding with neither selects
+ * nothing; no binding selects everything. Without `sandboxColumn` the condition reads the `id`
+ * and `labels` columns of a query over `sandboxes`; with it, it limits that column of another
+ * table to the ids of visible sandboxes.
+ * @param {Binding|null|undefined} binding
+ * @param {{sandboxColumn?: string}} [opts]
+ * @returns {{sql: string, params: string[]}}
+ */
+export function bindingFilter(binding, opts = {}) {
+  if (!binding) return { sql: '1', params: [] };
+  const alternatives = [];
+  const params = [];
+  const ids = binding.sandboxIds ?? [];
+  if (ids.length) {
+    alternatives.push(`sandboxes.id IN (${ids.map(() => '?').join(', ')})`);
+    params.push(...ids);
+  }
+  const labels = Object.entries(binding.labels ?? {});
+  if (labels.length) {
+    const each = labels.map(
+      () =>
+        'EXISTS (SELECT 1 FROM json_each(sandboxes.labels) AS l WHERE l.key = ? AND l.value = ?)',
+    );
+    alternatives.push(`(${each.join(' AND ')})`);
+    for (const [k, val] of labels) params.push(k, val);
+  }
+  const cond = alternatives.length ? `(${alternatives.join(' OR ')})` : '0';
+  if (!opts.sandboxColumn) return { sql: cond, params };
+  return {
+    sql: `${opts.sandboxColumn} IN (SELECT sandboxes.id FROM sandboxes WHERE ${cond})`,
+    params,
+  };
+}
+
+Store.bindingFilter = bindingFilter;
+
+const KEY_COLS = `id, name, scopes, binding, created_at, expires_at, revoked_at, last_used_at, created_by`;
 
 const digestOf = (s) => createHash('sha256').update(s).digest();
 
@@ -1101,6 +1302,20 @@ function checkpointRow(r) {
     size: r.size,
     envelope: parseColumn(r.envelope, 'checkpoints', r.id, 'envelope'),
     createdAt: r.created_at,
+  };
+}
+
+function apiKeyRow(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    scopes: parseColumn(r.scopes, 'api_keys', r.id, 'scopes'),
+    binding: r.binding === null ? null : parseColumn(r.binding, 'api_keys', r.id, 'binding'),
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+    revokedAt: r.revoked_at,
+    lastUsedAt: r.last_used_at,
+    createdBy: r.created_by,
   };
 }
 

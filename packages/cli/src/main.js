@@ -5,6 +5,7 @@ import { WorkboxClient } from '@workbox/sdk';
 import { openLocalEngine } from './local.js';
 import { serveCommand } from './serve.js';
 import { agentCommand } from './agent.js';
+import { keyCommand } from './keys.js';
 import {
   connectionOpts,
   withoutConnection,
@@ -32,6 +33,9 @@ Usage:
   workbox agent <claude|codex> [<sandbox-id>] [-p|--prompt TEXT] [--name N]
         [--network allowlist|egress|none] [--allow HOST|@set]... [--secret REF[=ENV]]...
         [--no-secret] [--detach] [--server URL --token T]
+  workbox key create --name N --scope S [--scope S]... [--label k=v]... [--sandbox ID]...
+        [--ttl 30d|12h|3600s] [--server URL --token T]
+  workbox key ls|rm <keyId> [--server URL --token T]
   workbox serve [--config server.json] [--port 8790] [--host 127.0.0.1]
   workbox audit verify
   workbox --help | --version
@@ -42,6 +46,8 @@ given): interactive on this terminal, headless with -p, or detached with --detac
 --network none). It grants the agent's API key host secret (claude ANTHROPIC_API_KEY, codex
 OPENAI_API_KEY as CODEX_API_KEY); --secret replaces it, --no-secret grants none so you can sign in
 inside the box. \`sandbox attach\` replays a session from its start and follows it to its exit.
+\`key create\` mints a stored API key and prints its token once; --label and --sandbox bind it to
+the sandboxes it may see, --ttl makes it expire, and \`key rm\` revokes it at once.
 The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames"}.
 Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable/busy (and doctor on a
 host that is not ready), 5 timeout. Local sandbox commands refuse a root another engine drives.`;
@@ -64,6 +70,7 @@ export function exitCodeForError(e) {
 const COMMANDS = {
   doctor: doctorCommand,
   agent: agentCommand,
+  key: keyCommand,
   sandbox: sandboxCommand,
   shell: shellCommand,
   rootfs: rootfsCommand,

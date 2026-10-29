@@ -1,7 +1,34 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { Redactor, MIN_LENGTH, MAX_DEPTH } from '../../src/redact.js';
+import { Redactor, MIN_LENGTH, MAX_DEPTH, TOKEN_SHAPES } from '../../src/redact.js';
+import { createLogger } from '../../src/log.js';
+
+test('API key tokens are redacted by their shape without being registered', () => {
+  const token = `wbk_${randomBytes(32).toString('base64url')}`;
+  assert.equal(token.length, 47);
+  assert.equal(TOKEN_SHAPES.length, 1);
+  const r = new Redactor();
+  assert.equal(r.size, 0);
+  assert.equal(
+    r.apply(`Authorization: Bearer ${token}`),
+    'Authorization: Bearer [REDACTED:api-key]',
+  );
+  assert.deepEqual(r.applyDeep({ headers: { authorization: `Bearer ${token}` }, list: [token] }), {
+    headers: { authorization: 'Bearer [REDACTED:api-key]' },
+    list: ['[REDACTED:api-key]'],
+  });
+  assert.equal(r.apply('wbk_short and wbk_'), 'wbk_short and wbk_');
+  assert.equal(r.apply(7), 7);
+  r.add('registered-secret-value', 'SECRET');
+  assert.equal(r.apply(`registered-secret-value ${token}`), '[REDACTED:SECRET] [REDACTED:api-key]');
+  const lines = [];
+  const log = createLogger({ stream: { write: (l) => lines.push(l) }, redactor: new Redactor() });
+  log.info('request', { authorization: `Bearer ${token}` });
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].includes(token), false);
+  assert.equal(JSON.parse(lines[0]).authorization, 'Bearer [REDACTED:api-key]');
+});
 
 test('redacts registered values, longest first, in text and nested objects', () => {
   const r = new Redactor();

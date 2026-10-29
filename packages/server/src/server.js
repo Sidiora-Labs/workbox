@@ -1,8 +1,23 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_MAX_LINE_BYTES, Methods, v, validate } from '@workbox/protocol';
-import { checkpointCreate, createLogger, httpStatusFor, publicAsk } from '@workbox/core';
-import { createAuth, browserGuard, SCOPE_MATRIX } from './auth.js';
+import {
+  E,
+  Redactor,
+  checkpointCreate,
+  createLogger,
+  httpStatusFor,
+  publicAsk,
+} from '@workbox/core';
+import {
+  createAuth,
+  createStoredKey,
+  browserGuard,
+  FLEET_ROUTES,
+  KEY_CREATE_SCHEMA,
+  SCOPE_MATRIX,
+} from './auth.js';
+import { createLabels, isBound, requireUnbound, sandboxVisible } from './access.js';
 import { Metrics } from './metrics.js';
 import { WsSocket, acceptKey, rejectUpgrade } from './ws.js';
 
@@ -53,6 +68,7 @@ export const BODY_SCHEMAS = Object.freeze({
   'POST /v1/sandboxes/:id/sessions': Methods['session.start'].params,
   'POST /v1/sandboxes/:id/checkpoints': Methods['broker.checkpoint.create'].params,
   'POST /v1/asks/:askId/answer': v.object({ answer: v.any() }, { required: ['answer'] }),
+  'POST /v1/keys': KEY_CREATE_SCHEMA,
 });
 
 /** Audit action of every mutating route. */
@@ -66,6 +82,8 @@ const MUTATIONS = Object.freeze({
   'POST /v1/sandboxes/:id/checkpoints': 'checkpoint.create',
   'POST /v1/reconcile': 'reconcile',
   'POST /v1/asks/:askId/answer': 'ask.answer',
+  'POST /v1/keys': 'key.create',
+  'DELETE /v1/keys/:keyId': 'key.revoke',
 });
 
 const ROUTES = Object.keys(SCOPE_MATRIX).map((key) => {
@@ -112,11 +130,13 @@ function matchParts(template, parts) {
 /**
  * @param {object} deps
  * @param {object} deps.manager the core Manager
- * @param {object} [deps.auth] a createAuth() result (else built from keys/keysFile)
+ * @param {object} [deps.auth] a createAuth() result (else built from keys/keysFile and the
+ *   manager's store, so keys minted through `POST /v1/keys` authenticate)
  * @param {object[]} [deps.keys] scoped keys
  * @param {string} [deps.keysFile] JSON file with scoped keys
  * @param {{append: (entry: object) => unknown}} [deps.audit] the core Audit
- * @param {import('@workbox/core').Logger} [deps.logger] structured JSON logger
+ * @param {import('@workbox/core').Logger} [deps.logger] structured JSON logger (default: one
+ *   that redacts API key tokens)
  * @param {string[]} [deps.serverNames] Host names accepted besides localhost, 127.0.0.1 and ::1
  * @param {() => boolean} [deps.ready] readiness probe
  * @param {{heartbeatMs?: number, maxBufferedBytes?: number, maxFrameBytes?: number}} [deps.ws]
@@ -124,9 +144,11 @@ function matchParts(template, parts) {
  */
 export function createServer(deps) {
   const manager = deps.manager;
-  const auth = deps.auth ?? createAuth({ keys: deps.keys ?? [], keysFile: deps.keysFile });
+  const auth =
+    deps.auth ??
+    createAuth({ keys: deps.keys ?? [], keysFile: deps.keysFile, store: manager.store });
   const audit = deps.audit ?? null;
-  const logger = deps.logger ?? createLogger({ component: 'server' });
+  const logger = deps.logger ?? createLogger({ component: 'server', redactor: new Redactor() });
   const serverNames = (deps.serverNames ?? []).map((n) => n.toLowerCase());
   const maxBody = deps.maxBodyBytes ?? MAX_BODY_BYTES;
   const metrics = new Metrics()
@@ -197,6 +219,8 @@ export function createServer(deps) {
     ctx.params = match.params;
     ctx.principal = auth.authenticate(req.headers.authorization);
     requireScope(ctx.principal, SCOPE_MATRIX[match.key]);
+    if (FLEET_ROUTES.includes(match.key)) requireUnbound(ctx.principal);
+    if (match.params.id !== undefined) requireVisible(ctx.principal, match.params.id);
     const schema = BODY_SCHEMAS[match.key];
     const body = schema ? checked(schema, await readJson(req, maxBody)) : undefined;
     return handlers[match.key]({ url, params: match.params, body, principal: ctx.principal });
@@ -212,6 +236,16 @@ export function createServer(deps) {
     if (!principal) throw httpError(401, 'E_DENIED', 'missing or invalid bearer token');
     if (!auth.authorize(principal, scope))
       throw httpError(403, 'E_DENIED', `scope ${scope} required`);
+  }
+
+  /**
+   * The one visibility check of every route with an `:id`: a sandbox a bound principal cannot
+   * see answers as a missing one. Unbound principals see every sandbox; the route itself reports
+   * one that does not exist.
+   */
+  function requireVisible(principal, id) {
+    if (!isBound(principal)) return;
+    if (!sandboxVisible(principal, manager.store.getSandbox(id))) throw sandboxNotFound(id);
   }
 
   function finish(ctx, status) {
@@ -267,6 +301,7 @@ export function createServer(deps) {
     if (!principal) return rejectUpgrade(socket, 401, 'missing or invalid bearer token');
     if (!auth.authorize(principal, SCOPE_MATRIX[match.key]))
       return rejectUpgrade(socket, 403, `scope ${SCOPE_MATRIX[match.key]} required`);
+    if (match.params.id !== undefined) requireVisible(principal, match.params.id);
     if (shuttingDown) return rejectUpgrade(socket, 503, 'shutting down');
     const key = req.headers['sec-websocket-key'];
     if (!key) return rejectUpgrade(socket, 400, 'missing Sec-WebSocket-Key');
@@ -341,11 +376,17 @@ function routeHandlers(manager, renderMetrics) {
   };
   return {
     'GET /metrics': () => ({ text: renderMetrics() }),
-    'GET /v1/sandboxes': ({ url }) => ({
-      body: manager.list({ ...page(url), includeDeleted: query(url, 'includeDeleted') === '1' }),
+    'GET /v1/sandboxes': ({ url, principal }) => ({
+      body: manager.list({
+        ...page(url),
+        includeDeleted: query(url, 'includeDeleted') === '1',
+        binding: principal.binding,
+      }),
     }),
-    'POST /v1/sandboxes': async ({ body }) => {
-      const row = await manager.create(body);
+    'POST /v1/sandboxes': async ({ body, principal }) => {
+      const input = boundCreate(manager.store, principal, body);
+      const row = await manager.create(input);
+      if (!sandboxVisible(principal, row)) throw idempotencyTaken(input.idempotencyKey);
       return { status: 201, body: row, audit: { sandboxId: row.id } };
     },
     'GET /v1/sandboxes/:id': ({ params }) => ({ body: manager.inspect(params.id) }),
@@ -406,20 +447,78 @@ function routeHandlers(manager, renderMetrics) {
       },
     }),
     'POST /v1/reconcile': async () => ({ body: await manager.reconcile() }),
-    'GET /v1/asks': ({ url }) => {
+    'GET /v1/asks': ({ url, principal }) => {
       manager.store.expireAsks();
       const rows = manager.store.listAsks({
         status: query(url, 'status') ?? 'all',
         sandboxId: query(url, 'sandboxId'),
         limit: num(url, 'limit'),
+        binding: principal.binding,
       });
       return { body: { asks: rows.map(publicAsk) } };
     },
-    'POST /v1/asks/:askId/answer': ({ params, body, principal }) => ({
-      body: manager.answerAsk(params.askId, { answer: body.answer, by: principal.id }),
-      audit: { askId: params.askId },
+    'POST /v1/asks/:askId/answer': ({ params, body, principal }) => {
+      if (isBound(principal)) {
+        const ask = manager.store.getAsk(params.askId);
+        if (!ask || !sandboxVisible(principal, manager.store.getSandbox(ask.sandboxId)))
+          throw E.notFound(`ask ${params.askId} not found`, { askId: params.askId });
+      }
+      return {
+        body: manager.answerAsk(params.askId, { answer: body.answer, by: principal.id }),
+        audit: { askId: params.askId },
+      };
+    },
+    'GET /v1/whoami': ({ principal }) => ({
+      body: {
+        id: principal.id,
+        scopes: principal.scopes,
+        binding: principal.binding ?? null,
+        source: principal.source ?? 'config',
+        expiresAt: principal.expiresAt ?? null,
+      },
     }),
+    'POST /v1/keys': ({ body, principal }) => {
+      const key = createStoredKey(manager.store, body, principal.id);
+      return {
+        status: 201,
+        body: key,
+        audit: { keyId: key.id, name: key.name, scopes: key.scopes, binding: key.binding },
+      };
+    },
+    'GET /v1/keys': () => ({ body: { keys: manager.store.listApiKeys() } }),
+    'DELETE /v1/keys/:keyId': ({ params }) => ({ body: manager.store.revokeApiKey(params.keyId) }),
   };
+}
+
+/**
+ * The create input a principal may send. A bound principal gets its binding labels forced on
+ * (see createLabels); it cannot replay another sandbox's idempotency key or restore a checkpoint
+ * of a sandbox it cannot see.
+ */
+function boundCreate(store, principal, body) {
+  if (!isBound(principal)) return body;
+  const input = { ...body, labels: createLabels(principal, body.labels) };
+  if (input.idempotencyKey) {
+    const existing = store.getSandboxByIdempotencyKey(input.idempotencyKey);
+    if (existing && !sandboxVisible(principal, existing))
+      throw idempotencyTaken(input.idempotencyKey);
+  }
+  if (input.fromCheckpoint) {
+    const cp = store.getCheckpoint(input.fromCheckpoint);
+    if (!cp || !sandboxVisible(principal, store.getSandbox(cp.sandboxId)))
+      throw E.notFound(`checkpoint ${input.fromCheckpoint} not found`, {
+        checkpointId: input.fromCheckpoint,
+      });
+  }
+  return input;
+}
+
+function sandboxNotFound(id) {
+  return E.notFound(`sandbox ${id} not found`, { id });
+}
+
+function idempotencyTaken(idempotencyKey) {
+  return E.conflict('idempotency key already used by another sandbox', { idempotencyKey });
 }
 
 async function attachWsSession(manager, sandboxId, sessionId, ws) {

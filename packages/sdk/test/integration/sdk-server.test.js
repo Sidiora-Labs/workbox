@@ -327,6 +327,51 @@ test('the sdk drives every route of a real server over a real engine', async (t)
       );
     });
 
+    await t.test('a stored key is minted, sees only its sandbox and stops at revoke', async () => {
+      assert.deepEqual(await reader.whoami(), {
+        id: 'observer',
+        scopes: ['read'],
+        binding: null,
+        source: 'config',
+        expiresAt: null,
+      });
+      const minted = await admin.createKey({
+        name: 'sdk-agent',
+        scopes: ['read'],
+        sandboxIds: [a.id],
+        ttlSeconds: 3600,
+      });
+      assert.match(minted.token, /^wbk_[A-Za-z0-9_-]{43}$/);
+      assert.equal(minted.expiresAt - minted.createdAt, 3_600_000);
+      const agent = new WorkboxClient({ baseUrl: srv.base, token: minted.token, retryDelayMs: 20 });
+      assert.deepEqual(await agent.whoami(), {
+        id: minted.id,
+        scopes: ['read'],
+        binding: { sandboxIds: [a.id] },
+        source: 'store',
+        expiresAt: minted.expiresAt,
+      });
+      assert.deepEqual(
+        (await agent.listSandboxes()).items.map((s) => s.id),
+        [a.id],
+      );
+      assert.equal((await agent.sandbox(a.id).inspect()).id, a.id);
+      await assert.rejects(
+        agent.sandbox(b.id).inspect(),
+        (e) => e instanceof WorkboxApiError && e.status === 404 && e.code === 'E_NOT_FOUND',
+      );
+      await assert.rejects(agent.listKeys(), (e) => e.status === 403 && e.code === 'E_DENIED');
+      const { keys } = await admin.listKeys();
+      const row = keys.find((k) => k.id === minted.id);
+      assert.equal(row.name, 'sdk-agent');
+      assert.equal(typeof row.lastUsedAt, 'number');
+      assert.equal('token' in row, false);
+      const revoked = await admin.revokeKey(minted.id);
+      assert.equal(typeof revoked.revokedAt, 'number');
+      assert.equal((await admin.revokeKey(minted.id)).revokedAt, revoked.revokedAt);
+      await assert.rejects(agent.whoami(), (e) => e.status === 401 && !e.retryable);
+    });
+
     await t.test('drain, reconcile and destroy', async () => {
       assert.equal((await admin.sandbox(b.id).drain('sdk test')).state, 'DRAINING');
       const rec = await admin.reconcile();
@@ -344,7 +389,7 @@ test('the sdk drives every route of a real server over a real engine', async (t)
       const metrics = await reader.metrics();
       const ok = okRoutes(metrics);
       const httpRoutes = Object.keys(SCOPE_MATRIX).filter((k) => !k.endsWith('/ws'));
-      assert.equal(httpRoutes.length, 19);
+      assert.equal(httpRoutes.length, 23);
       assert.deepEqual(
         httpRoutes.filter((k) => !ok.has(k)),
         [],
