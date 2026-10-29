@@ -23,8 +23,8 @@ contract's parameters or result require. Paths are relative to `workbox serve`; 
 | `observe`      | `GET /v1/sandboxes/:id` (read)                                                   | mapped  |
 | `attach`       | WebSocket `GET /v1/sandboxes/:id/sessions/:sessionId/ws` (exec)                  | partial |
 | `execute`      | `POST /v1/sandboxes/:id/exec` (exec) or `POST /v1/sandboxes/:id/sessions` (exec) | partial |
-| `inspect`      | `GET /v1/sandboxes/:id/sessions` (read)                                          | partial |
-| `stop`         | `signal` message on the session WebSocket (exec)                                 | partial |
+| `inspect`      | `GET /v1/sandboxes/:id/sessions/:sessionId` (read)                               | partial |
+| `stop`         | `POST /v1/sandboxes/:id/sessions/:sessionId/stop` (exec)                         | mapped  |
 | `transfer`     | `PUT /v1/sandboxes/:id/files` (exec), `GET /v1/sandboxes/:id/files?path=` (read) | partial |
 | `lifetime`     | none                                                                             | gap     |
 | `destroy`      | `DELETE /v1/sandboxes/:id` (admin)                                               | mapped  |
@@ -100,17 +100,23 @@ there is no separate `wait_timeout_ms`.
 
 ### inspect
 
-Partial. `GET /v1/sandboxes/:id/sessions` lists every session of the sandbox with its exit, when
-it has one; there is no single-session route, so an adapter filters by `process_ref`. Output
-completeness and digest are not reported.
+Partial. `GET /v1/sandboxes/:id/sessions/:sessionId` returns one session with `exited`
+(`{code, signal, at}`, or null while it runs), which gives `phase`, `exit_code` and
+`termination_confirmed`. `GET /v1/sandboxes/:id/sessions/:sessionId/output` reports `truncated`
+and a `gap` when output was dropped from the spool, so an adapter can tell whether the retained
+output is complete. The output's byte count and SHA-256 are not reported; an adapter must read the
+output and count and hash it itself.
 
 ### stop
 
-Partial. A `{"type": "signal", "signal": "SIGTERM"}` or `"SIGKILL"` message on the session
-WebSocket signals the session; termination is confirmed by the `session.exit` event that follows,
-which carries the exit code. There is no REST route for stopping a session, and the runner's
-TERM-then-KILL `session.stop` is not exposed over the API. Draining a whole sandbox is
-`POST /v1/sandboxes/:id/drain`, which the contract does not have.
+Mapped. `POST /v1/sandboxes/:id/sessions/:sessionId/stop` sends SIGTERM to the session's process
+group, then SIGKILL after `graceMs`, and answers once the session has exited with
+`{sessionId, exited, escalated}`: that is `termination: CONFIRMED`. `signal: 'TERM'` maps to
+`stop`; `signal: 'KILL'` maps to `stop` with `graceMs: 0`, or to
+`POST /v1/sandboxes/:id/sessions/:sessionId/signal` with `SIGKILL` followed by `POST .../wait`.
+`exited.code` is null when the process died by a signal; the adapter reports `128 + n` for signal
+`n` as `exit_code`. Draining a whole sandbox is `POST /v1/sandboxes/:id/drain`, which the
+contract does not have.
 
 ### transfer
 

@@ -5,6 +5,42 @@ All notable changes to Workbox are documented in this file. The format is based 
 
 ## [Unreleased]
 
+### Added
+
+- An event log per sandbox: the host records sandbox state and health, session starts and exits,
+  exec results, asks, checkpoints and artifacts, beside the events agents emit with
+  `wb event emit`. Read it with `GET /v1/events`, `GET /v1/sandboxes/:id/events` and
+  `workbox events`, filtered by type, and long-poll it with `waitMs`.
+- Event streams over WebSocket (`/v1/events/ws` and `/v1/sandboxes/:id/events/ws`) that replay
+  the stored events after `afterSeq` and then follow new ones, and `client.events()` in the SDK,
+  which reconnects and resumes where it stopped.
+- Webhooks: signed `POST` deliveries of matching events in the Standard Webhooks format, kept
+  and retried across restarts, managed through `/v1/webhooks` and `workbox webhook`, and checked
+  on the receiving side with the SDK's `verifyWebhook`.
+- Stored API keys with an optional lifetime, bound to sandbox labels or ids, managed through
+  `/v1/keys` and `workbox key`, and `GET /v1/whoami` to show the calling key.
+- Session and file control over plain HTTP: one session's state, its output, wait, input,
+  signal, stop and remove; streamed raw upload and download of files of any size; directory
+  creation and removal; artifact download; and `workbox sandbox run`, `logs`, `wait`, `kill` and
+  `cp`.
+- HTTPS and WSS from `workbox serve` when it is given a certificate, reloaded on SIGHUP.
+- `GET /v1/openapi.json`, an OpenAPI 3.1 description of every route, also kept in the repository
+  as `docs/reference/openapi.json`.
+- Guides for webhooks and for giving an agent on another machine access through the API.
+
+### Security
+
+- Repeated failed authentication slows a client down: after 20 failures within 60 s, its address
+  gets 429 `E_LIMIT` with `Retry-After` until the 60 s are over.
+- Stored keys are kept only as SHA-256 digests. A token is shown once and removed from logs and
+  the audit log, and a revoked or expired key fails on its next request.
+- A key bound to some sandboxes gets 404 for every other sandbox, WebSockets included, as if it
+  did not exist, and 403 on the fleet routes; sandboxes it creates carry its labels.
+- Webhook endpoints must use HTTPS and resolve only to public addresses, checked when they are
+  registered and before every attempt; the request goes to the checked address and redirects are
+  not followed. Signing secrets are never logged or listed.
+- `workbox serve` warns when it listens beyond loopback without TLS.
+
 ## [0.1.0-alpha.1] - 2026-10-28
 
 First pre-release.
