@@ -33,6 +33,7 @@ Usage:
         [--network allowlist|egress|none] [--allow HOST|@set]... [--secret REF[=ENV]]...
         [--no-secret] [--detach] [--server URL --token T]
   workbox serve [--config server.json] [--port 8790] [--host 127.0.0.1]
+        [--tls-cert cert.pem --tls-key key.pem]
   workbox audit verify
   workbox --help | --version
 
@@ -42,7 +43,8 @@ given): interactive on this terminal, headless with -p, or detached with --detac
 --network none). It grants the agent's API key host secret (claude ANTHROPIC_API_KEY, codex
 OPENAI_API_KEY as CODEX_API_KEY); --secret replaces it, --no-secret grants none so you can sign in
 inside the box. \`sandbox attach\` replays a session from its start and follows it to its exit.
-The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames"}.
+The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames",
+"tls": {"certFile", "keyFile"}}. With TLS, serve answers HTTPS and WSS and SIGHUP reloads the certificate.
 Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable/busy (and doctor on a
 host that is not ready), 5 timeout. Local sandbox commands refuse a root another engine drives.`;
 

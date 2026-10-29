@@ -90,7 +90,8 @@ Start at the [documentation index](docs/README.md).
 ## Project status
 
 Workbox is pre-release (`0.1.0-alpha.1`). It supports one Linux host with cgroup v2 and a root
-daemon; there is no high availability and no TLS. See [project status](docs/project-status.md).
+daemon; there is no high availability. The API is served over TLS when the server is given a
+certificate. See [project status](docs/project-status.md).
 
 ## Security
 

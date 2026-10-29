@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { createLogger } from '@workbox/core';
@@ -74,7 +75,7 @@ export async function bootServer(opts = {}) {
     app,
     logs,
     port,
-    base: `http://127.0.0.1:${port}`,
+    base: `${opts.server?.tls ? 'https' : 'http'}://127.0.0.1:${port}`,
     auditEntries: () => auditEntries(eng.config.paths.audit),
     async stop() {
       await app.close({ timeoutMs: 2000 });
@@ -96,10 +97,12 @@ export function auditEntries(dir) {
 }
 
 /**
- * One HTTP request over node:http with full control of the headers (Host included).
+ * One HTTP request over node:http with full control of the headers (Host included); over
+ * node:https, trusting only `ca`, when `ca` is given. `peer` is the SHA-256 fingerprint of the
+ * certificate the server presented.
  * @param {number} port
- * @param {{method?: string, path: string, token?: string, body?: unknown, raw?: string|Buffer, headers?: Record<string, string>}} req
- * @returns {Promise<{status: number, headers: object, text: string, json: any}>}
+ * @param {{method?: string, path: string, token?: string, body?: unknown, raw?: string|Buffer, headers?: Record<string, string>, ca?: (string|Buffer)[]}} req
+ * @returns {Promise<{status: number, headers: object, text: string, json: any, peer: string|null}>}
  */
 export function call(port, req) {
   const payload =
@@ -111,7 +114,7 @@ export function call(port, req) {
     headers['content-length'] = String(Buffer.byteLength(payload));
   }
   return new Promise((resolve, reject) => {
-    const r = http.request(
+    const r = (req.ca ? https : http).request(
       {
         host: '127.0.0.1',
         port,
@@ -119,8 +122,10 @@ export function call(port, req) {
         path: req.path,
         headers,
         agent: false,
+        ...(req.ca ? { ca: req.ca } : {}),
       },
       (res) => {
+        const peer = res.socket.getPeerCertificate?.().fingerprint256 ?? null;
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => {
@@ -131,7 +136,7 @@ export function call(port, req) {
           } catch {
             // not JSON (metrics)
           }
-          resolve({ status: res.statusCode, headers: res.headers, text, json });
+          resolve({ status: res.statusCode, headers: res.headers, text, json, peer });
         });
       },
     );

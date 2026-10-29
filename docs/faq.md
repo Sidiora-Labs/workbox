@@ -21,7 +21,7 @@ box cannot do alone is a `wb` subcommand the agent finds with `wb tools` and `--
 ## Which hosts does it run on?
 
 One Linux host with cgroup v2 and user namespaces, driven by a root daemon. There is no macOS or
-Windows support, no multi-host scheduling, no HA and no TLS in v1. `workbox doctor` checks a host.
+Windows support, no multi-host scheduling and no HA in v1. `workbox doctor` checks a host.
 See [project status](project-status.md#supported-host).
 
 ## How does an agent reach the network?

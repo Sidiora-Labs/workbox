@@ -33,17 +33,23 @@ agents` builds the rootfs with Claude Code and Codex
 WORKBOX_TOKEN=$(openssl rand -hex 24) workbox serve --host 127.0.0.1 --port 8790
 ```
 
-- `workbox serve [--config file] [--port n] [--host h]` serves the REST and WebSocket API on the
-  local engine until SIGTERM or SIGINT, then closes gracefully. The address comes from the flags,
-  then `WORKBOX_PORT`, then the config file, then `127.0.0.1:8790`.
+- `workbox serve [--config file] [--port n] [--host h] [--tls-cert f --tls-key f]` serves the
+  REST and WebSocket API on the local engine until SIGTERM or SIGINT, then closes gracefully. The
+  address comes from the flags, then `WORKBOX_PORT`, then the config file, then `127.0.0.1:8790`.
+- With a certificate and key it serves HTTPS and WSS, and the startup line shows an `https://`
+  address. Listening on an address other than loopback without TLS prints a warning on stderr.
 - Keys come from the config file and the environment. `WORKBOX_TOKEN` defines one key with every
   scope; otherwise `WORKBOX_API_KEYS` may hold a JSON array of keys.
-- The config file is `{"keys": [{"id", "tokenSha256", "scopes"}], "host", "port",
-"serverNames"}`. Scopes are `read`, `exec`, `admin` and `answer`. Unknown keys, bad types and
-  unusable keys refuse to start. `serverNames` lists the `Host` names accepted besides
-  `localhost`, `127.0.0.1` and `::1`; add the name a TLS-terminating proxy forwards.
+- The config file holds `keys` (each `{"id", "tokenSha256", "scopes"}`), `host`, `port`,
+  `serverNames` and `tls` (`{"certFile", "keyFile"}`). Scopes are `read`, `exec`, `admin` and
+  `answer`. Unknown keys, bad types and unusable keys refuse to start. `serverNames` lists the
+  `Host` names accepted besides `localhost`, `127.0.0.1` and `::1`; add the public name clients
+  use. See [Configuration](reference/configuration.md#serve-config-file).
 - To rotate a key: add the new key, restart, move clients over, remove the old key, restart.
 - `deploy/workbox.service` runs `serve` under systemd with `EnvironmentFile=-/etc/workbox/workbox.env`.
+- A client address that fails authentication 20 times within 60 s gets 429 `E_LIMIT` with
+  `Retry-After` on every request until those 60 s are over. Behind a reverse proxy every client
+  shares the proxy's address.
 
 Drive sandboxes through the server (`--server http://127.0.0.1:8790 --token ...`, the SDK or MCP).
 One engine drives a Workbox root at a time: `serve` and the local `workbox sandbox` and `workbox
@@ -55,6 +61,21 @@ the next engine breaks. The engine driving a sandbox runs its proxy and slirp4ne
 `workbox sandbox create` without `--server` exits right after the sandbox is ready, and the box
 is offline until the next engine reconciles it (see
 [the stated limits](security.md#stated-limits)).
+
+### Reload the TLS certificate
+
+Send `workbox serve` a SIGHUP after replacing the certificate or key files. It reads both files
+again and presents the new certificate on new connections; open connections keep the old one.
+If a file is missing or the pair is unusable, it writes the error to stderr and keeps serving the
+old certificate. A server without TLS does not handle SIGHUP, so the signal stops it.
+
+Under systemd, signal only the main process, not the helper processes that share its unit:
+
+```sh
+systemctl kill --kill-whom=main --signal=HUP workbox
+```
+
+An ACME client can run that command as its renewal hook (for certbot, `--deploy-hook`).
 
 ## Configuration
 

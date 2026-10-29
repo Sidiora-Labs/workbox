@@ -159,6 +159,14 @@ Network setup must only ever touch a sandbox's own network namespace, never the 
   route schema (400 with field paths). Every non-GET request is appended to the audit log with
   its outcome, including refused ones.
 - WebSocket upgrades are authenticated and scope-checked before the 101 response.
+- With a certificate and key (`tls` in the serve config, or `--tls-cert` and `--tls-key`) the
+  server speaks only HTTPS and WSS on its port, using Node's TLS defaults. SIGHUP swaps the
+  certificate without a restart. Without them it speaks plain HTTP, and `workbox serve` warns on
+  stderr when it listens on an address other than loopback.
+- Failed authentications (a missing or invalid token, on REST or a WebSocket upgrade) are counted
+  per client address; IPv6 addresses are counted per /64. After 20 within 60 s, every request from
+  that address is answered 429 `E_LIMIT` with `Retry-After` before authentication runs, until the
+  60 s are over. At most 10000 addresses are tracked; past that the oldest is dropped.
 
 ### Audit
 
@@ -212,6 +220,11 @@ verify` checks the chain.
 - **Lease expiry does not stop a sandbox.** An expired lease is reported; nothing is killed.
 - **Audit integrity is tamper-evidence, not tamper-proofing.** Anyone with root on the host can
   rewrite the whole chain consistently. Back up the audit directory off the host if that matters.
-- **Single host, no TLS.** There is no HA, no live migration and no TLS in v1. Bind the server to
-  loopback (the default) or a trusted network, or put a TLS-terminating proxy in front and list
-  its name in `serverNames`.
+- **Single host.** There is no HA and no live migration in v1.
+- **TLS is opt-in.** The server speaks plain HTTP unless it is given a certificate. Without one,
+  bind it to loopback (the default) or a trusted network, or put a TLS-terminating proxy in front
+  and list its name in `serverNames`. Client certificates are not checked.
+- **The failed-authentication limit slows guessing; it does not stop floods.** Behind a reverse
+  proxy every client shares the proxy's address, so one client's bad tokens can lock the others
+  out for up to 60 s. A client with many addresses gets 20 tries per address, and only failed
+  authentications count toward the limit.
