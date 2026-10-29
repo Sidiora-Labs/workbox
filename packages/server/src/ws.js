@@ -29,7 +29,8 @@ export function rejectUpgrade(socket, status, reason) {
 /**
  * Minimal RFC 6455 server-side socket: text frames out; masked text, ping, pong and close in.
  * A heartbeat pings the client and drops it after a missed pong; a consumer whose unsent bytes
- * exceed `maxBufferedBytes` is dropped instead of buffering without bound.
+ * exceed `maxBufferedBytes` is dropped instead of buffering without bound. A peer that ends its
+ * side of the connection without a close frame is dropped at once.
  */
 export class WsSocket {
   /**
@@ -50,6 +51,10 @@ export class WsSocket {
     socket.on('data', (d) => this._data(d));
     socket.on('close', () => this._closed());
     socket.on('error', () => this._closed());
+    // HTTP servers keep sockets half-open; a peer that ends its side without a close frame is gone.
+    socket.on('end', () => {
+      if (!this.closed) this.terminate();
+    });
     this.timer = setInterval(() => this._beat(), this.opts.heartbeatMs);
     this.timer.unref?.();
     if (this.buf.length) this._drain();

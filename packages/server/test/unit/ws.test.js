@@ -5,8 +5,8 @@ import { once } from 'node:events';
 import { WsSocket, WS_DEFAULTS, acceptKey, rejectUpgrade } from '../../src/ws.js';
 
 /** A real TCP pair: the server end wrapped in WsSocket, the client end raw. */
-async function pair(opts) {
-  const srv = net.createServer();
+async function pair(opts, serverOpts = {}) {
+  const srv = net.createServer(serverOpts);
   srv.listen(0, '127.0.0.1');
   await once(srv, 'listening');
   const client = net.connect(srv.address().port, '127.0.0.1');
@@ -157,4 +157,16 @@ test('rejectUpgrade answers a status line and closes', async () => {
   } finally {
     srv.close();
   }
+});
+
+test('a client that half-closes without a close frame is dropped at once', async () => {
+  const { srv, client, ws } = await pair({}, { allowHalfOpen: true });
+  let closed = 0;
+  ws.onClose(() => closed++);
+  client.end();
+  await until(() => closed === 1, 'the drop');
+  assert.equal(ws.closed, true);
+  assert.equal(ws.socket.destroyed, true);
+  client.destroy();
+  srv.close();
 });
