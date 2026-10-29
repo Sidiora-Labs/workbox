@@ -1,15 +1,18 @@
 import http from 'node:http';
+import https from 'node:https';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_MAX_LINE_BYTES, Methods, v, validate } from '@workbox/protocol';
-import { checkpointCreate, createLogger, httpStatusFor, publicAsk } from '@workbox/core';
+import { E, checkpointCreate, createLogger, httpStatusFor, publicAsk } from '@workbox/core';
 import { createAuth, browserGuard, SCOPE_MATRIX } from './auth.js';
 import { Metrics } from './metrics.js';
+import { addressKey, createFailureLimiter } from './ratelimit.js';
 import { WsSocket, acceptKey, rejectUpgrade } from './ws.js';
 
 /**
- * REST + WebSocket harness surface (task 3.1), built on node:http (no framework dependency;
- * the route/validation behaviour is the spec contract). Every request passes the H15 browser
- * guard, then bearer auth against the scope matrix, then its body schema. Failures return the
+ * REST + WebSocket harness surface (task 3.1), built on node:http, or node:https when given a
+ * certificate (no framework dependency; the route/validation behaviour is the spec contract).
+ * Every request passes the H15 browser guard, then the failed-authentication limit for its
+ * address, then bearer auth against the scope matrix, then its body schema. Failures return the
  * envelope `{error:{code,message,details?,requestId}}`; every mutating request is audited.
  *
  * The `manager` dependency is the core Manager.
@@ -121,6 +124,11 @@ function matchParts(template, parts) {
  * @param {() => boolean} [deps.ready] readiness probe
  * @param {{heartbeatMs?: number, maxBufferedBytes?: number, maxFrameBytes?: number}} [deps.ws]
  * @param {number} [deps.maxBodyBytes]
+ * @param {{cert: string|Buffer, key: string|Buffer}} [deps.tls] PEM certificate chain and key:
+ *   serve HTTPS and WSS instead of plain HTTP
+ * @param {{max?: number, windowMs?: number, maxEntries?: number}} [deps.authFailures] failed
+ *   authentications one address may make per window before it is answered 429 (default 20 per
+ *   60 s)
  */
 export function createServer(deps) {
   const manager = deps.manager;
@@ -129,6 +137,7 @@ export function createServer(deps) {
   const logger = deps.logger ?? createLogger({ component: 'server' });
   const serverNames = (deps.serverNames ?? []).map((n) => n.toLowerCase());
   const maxBody = deps.maxBodyBytes ?? MAX_BODY_BYTES;
+  const failures = createFailureLimiter(deps.authFailures);
   const metrics = new Metrics()
     .describe('workbox_http_requests_total', 'HTTP requests by route, method and status')
     .describe('workbox_ws_connections_total', 'WebSocket session connections accepted')
@@ -143,9 +152,12 @@ export function createServer(deps) {
     return metrics.render();
   });
 
-  const server = http.createServer((req, res) => {
+  const onRequest = (req, res) => {
     handle(req, res).catch(() => res.destroy());
-  });
+  };
+  const server = deps.tls
+    ? withTls(deps.tls, (material) => https.createServer(material, onRequest))
+    : http.createServer(onRequest);
   server.on('upgrade', (req, socket, head) => {
     upgrade(req, socket, head).catch((e) => rejectUpgrade(socket, errorStatus(e), e.message));
   });
@@ -176,6 +188,7 @@ export function createServer(deps) {
         res.setHeader('connection', 'close');
         req.resume();
       }
+      if (e.retryAfter) res.setHeader('retry-after', String(e.retryAfter));
       sendError(res, status, e, ctx.requestId);
     } finally {
       finish(ctx, status);
@@ -195,7 +208,10 @@ export function createServer(deps) {
       throw httpError(405, 'E_INVALID_PARAMS', `method ${req.method} not allowed here`);
     ctx.key = match.key;
     ctx.params = match.params;
+    const retryAfter = failures.retryAfter(peer(req));
+    if (retryAfter) throw limited(retryAfter);
     ctx.principal = auth.authenticate(req.headers.authorization);
+    if (!ctx.principal) failures.fail(peer(req));
     requireScope(ctx.principal, SCOPE_MATRIX[match.key]);
     const schema = BODY_SCHEMAS[match.key];
     const body = schema ? checked(schema, await readJson(req, maxBody)) : undefined;
@@ -260,11 +276,16 @@ export function createServer(deps) {
     const url = new URL(req.url ?? '/', 'http://workbox');
     const match = matchRoute('GET', url.pathname);
     if (!match?.key?.endsWith('/ws')) return rejectUpgrade(socket, 404, 'no websocket route');
+    const retryAfter = failures.retryAfter(peer(req));
+    if (retryAfter) return refuseLimited(socket, limited(retryAfter));
     const queryToken = url.searchParams.get('token');
     const principal = auth.authenticate(
       req.headers.authorization ?? (queryToken ? `Bearer ${queryToken}` : undefined),
     );
-    if (!principal) return rejectUpgrade(socket, 401, 'missing or invalid bearer token');
+    if (!principal) {
+      failures.fail(peer(req));
+      return rejectUpgrade(socket, 401, 'missing or invalid bearer token');
+    }
     if (!auth.authorize(principal, SCOPE_MATRIX[match.key]))
       return rejectUpgrade(socket, 403, `scope ${SCOPE_MATRIX[match.key]} required`);
     if (shuttingDown) return rejectUpgrade(socket, 503, 'shutting down');
@@ -302,6 +323,15 @@ export function createServer(deps) {
     server,
     metrics,
     auth,
+    /**
+     * Swap the TLS certificate and key. New connections get the new certificate; open ones keep
+     * theirs. Invalid material throws E_INVALID_PARAMS and the old certificate stays in use.
+     * @param {{cert: string|Buffer, key: string|Buffer}} material PEM certificate chain and key
+     */
+    reloadTls(material) {
+      if (!deps.tls) throw E.invalid('this server was not started with TLS');
+      withTls(material, (pem) => server.setSecureContext(pem));
+    },
     /** @param {number} port @param {string} [host] */
     listen(port, host = '127.0.0.1') {
       return new Promise((resolve, reject) => {
@@ -460,6 +490,36 @@ function wsCall(text, sessionId) {
   if (msg?.type === 'signal')
     return { method: 'session.signal', params: { sessionId, signal: msg.signal } };
   return null;
+}
+
+/** Hand `{cert, key}` to `use`; a missing or unusable certificate or key is E_INVALID_PARAMS. */
+function withTls(material, use) {
+  if (!material?.cert || !material?.key) throw E.invalid('TLS needs a certificate and a key');
+  try {
+    return use({ cert: material.cert, key: material.key });
+  } catch (e) {
+    throw E.invalid(`invalid TLS certificate or key: ${e.message}`);
+  }
+}
+
+/** The address a request's failed authentications are counted under. */
+function peer(req) {
+  return addressKey(req.socket.remoteAddress);
+}
+
+function limited(retryAfter) {
+  const e = httpError(429, 'E_LIMIT', 'too many failed authentications from this address', {
+    retryAfterSeconds: retryAfter,
+  });
+  e.retryAfter = retryAfter;
+  return e;
+}
+
+function refuseLimited(socket, e) {
+  const body = JSON.stringify({ error: { code: e.code, message: e.message, details: e.details } });
+  socket.end(
+    `HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: ${e.retryAfter}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+  );
 }
 
 function requestIdOf(req) {

@@ -15,7 +15,7 @@ import { WorkboxApiError } from './errors.js';
 
 /**
  * @typedef {object} ClientOptions
- * @property {string} baseUrl e.g. `http://127.0.0.1:8790`
+ * @property {string} baseUrl e.g. `http://127.0.0.1:8790`, or `https://host:8790` for a TLS server
  * @property {string} [token] bearer token of a scoped key
  * @property {number} [retries] retries after the first attempt of an idempotent call (default 2)
  * @property {number} [retryDelayMs] base backoff (default 100); retry n waits about base*2^n

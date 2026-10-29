@@ -53,8 +53,9 @@ Out of scope:
 ## Running Workbox securely
 
 - Run `workbox doctor` and fix every failure before creating sandboxes.
-- Keep the server on loopback (the default) or a trusted network. It has no TLS; put a
-  TLS-terminating proxy in front of it on any other network.
+- Keep the server on loopback (the default) or a trusted network. On any other network serve it
+  over TLS, with its own certificate (`--tls-cert`, `--tls-key`) or behind a TLS-terminating
+  proxy.
 - Give each API key only the scopes its client needs.
 - Keep the secrets file (default `/etc/workbox/secrets.json`) readable by root only; Workbox
   refuses it otherwise.

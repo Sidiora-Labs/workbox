@@ -25,8 +25,8 @@ the [security model](security.md) and the [architecture](architecture.md).
 
 ## What it is not
 
-- Not a multi-host scheduler. It runs on one Linux host with cgroup v2 and has no HA, live
-  migration or TLS in v1.
+- Not a multi-host scheduler. It runs on one Linux host with cgroup v2 and has no HA or live
+  migration in v1.
 - Not a hypervisor boundary. Sandboxes share the host kernel; the [stated
   limits](security.md#stated-limits) list what that means.
 - Not a model runtime. It runs the commands an agent issues; it does not call models.

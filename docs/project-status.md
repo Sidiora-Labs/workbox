@@ -19,7 +19,8 @@ The current release is `0.1.0-alpha.1`, a pre-release.
 | Reconcile after a restart                                 | Implemented              | [Operations](operations.md#reconcile-after-a-restart) |
 | Hash-chained audit log with `workbox audit verify`        | Implemented              | [Security model](security.md#audit)                   |
 | Hyperfide provider adapter                                | Not shipped              | [Provider mapping](hyperfide-provider.md)             |
-| TLS, high availability, live migration                    | Not in v1                | [Stated limits](security.md#stated-limits)            |
+| TLS for the REST and WebSocket server                     | Implemented              | [Deploy guide](guides/deploy.md#built-in-tls)         |
+| High availability, live migration                         | Not in v1                | [Stated limits](security.md#stated-limits)            |
 
 ## Supported host
 

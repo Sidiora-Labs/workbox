@@ -18,7 +18,6 @@ Planned direction, without dates.
 
 ## Later
 
-- TLS in the server.
 - High availability and live migration across hosts.
 - Lower runner memory per sandbox; see [docs/measurements.md](docs/measurements.md).
 

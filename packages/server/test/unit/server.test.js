@@ -257,3 +257,51 @@ test('readiness follows the probe; graceful close stops listening', async () => 
   await assert.rejects(call(port, { path: '/healthz' }), /ECONNREFUSED/);
   await assert.rejects(app.listen(port, '256.0.0.1'));
 });
+
+test('TLS material is checked at creation; reloadTls needs a TLS server', () => {
+  const deps = { manager: srv.manager, keys: [], logger: { info() {}, error() {} } };
+  const invalid = (pattern) => (e) => e.code === 'E_INVALID_PARAMS' && pattern.test(e.message);
+  assert.throws(() => srv.app.reloadTls({ cert: 'x', key: 'y' }), invalid(/not started with TLS/));
+  assert.throws(
+    () => createServer({ ...deps, tls: { cert: 'x' } }),
+    invalid(/needs a certificate and a key/),
+  );
+  assert.throws(
+    () => createServer({ ...deps, tls: { cert: 'not pem', key: 'not pem' } }),
+    invalid(/invalid TLS certificate or key/),
+  );
+  assert.throws(() => createServer({ ...deps, authFailures: { max: 0 } }), RangeError);
+});
+
+test('repeated failed authentications from one address are answered 429 before auth', async () => {
+  const app = createServer({
+    manager: srv.manager,
+    keys: [{ id: 'k', token: 'good-token', scopes: ['admin'] }],
+    authFailures: { max: 2, windowMs: 60_000 },
+    logger: { info() {}, error() {} },
+  });
+  const { port } = await app.listen(0);
+  try {
+    for (let i = 0; i < 3; i++)
+      assert.equal(
+        (await call(port, { path: '/v1/sandboxes', token: 'good-token' })).status,
+        200,
+        'successes are not counted',
+      );
+    assert.equal((await call(port, { path: '/v1/sandboxes' })).status, 401);
+    assert.match(await rawUpgrade(port, '/v1/sandboxes/sb-none/sessions/s/ws'), /^HTTP\/1\.1 401/);
+    const limited = await call(port, { path: '/v1/sandboxes', token: 'good-token' });
+    assert.equal(limited.status, 429);
+    assert.equal(limited.json.error.code, 'E_LIMIT');
+    const wait = Number(limited.headers['retry-after']);
+    assert.ok(wait >= 1 && wait <= 60, String(wait));
+    assert.equal(limited.json.error.details.retryAfterSeconds, wait);
+    assert.match(
+      await rawUpgrade(port, '/v1/sandboxes/sb-none/sessions/s/ws?token=good-token'),
+      /^HTTP\/1\.1 429/,
+    );
+    assert.equal((await call(port, { path: '/healthz' })).status, 200, 'health needs no token');
+  } finally {
+    await app.close();
+  }
+});

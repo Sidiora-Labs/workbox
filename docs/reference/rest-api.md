@@ -1,8 +1,9 @@
 # REST and WebSocket API
 
-Served by `workbox serve` (default `http://127.0.0.1:8790`) on `node:http`. The routes, scopes and
-body schemas below are `SCOPE_MATRIX` in `packages/server/src/auth.js` and `BODY_SCHEMAS` in
-`packages/server/src/server.js`. The [SDK](../guides/sdk.md) covers every route; the table in
+Served by `workbox serve` (default `http://127.0.0.1:8790`) on `node:http`, or on `node:https` when
+it is given a certificate. The routes, scopes and body schemas below are `SCOPE_MATRIX` in
+`packages/server/src/auth.js` and `BODY_SCHEMAS` in `packages/server/src/server.js`. The
+[SDK](../guides/sdk.md) covers every route; the table in
 [the provider mapping](../hyperfide-provider.md) shows how they line up with Hyperfide's contract.
 
 ## Requests
@@ -12,6 +13,10 @@ body schemas below are `SCOPE_MATRIX` in `packages/server/src/auth.js` and `BODY
 - A request carrying `Origin` or `Sec-Fetch-Site`, or addressed to a `Host` other than
   `localhost`, `127.0.0.1`, `::1` or a configured `serverNames` entry, is refused with 403 before
   authentication.
+- After 20 failed authentications (a missing or invalid token, on REST or a WebSocket upgrade)
+  within 60 s, every request from that client address is answered 429 `E_LIMIT` with a
+  `Retry-After` header, before authentication, until the 60 s that began with its first failure
+  have passed. Successful requests do not count.
 - Bodies are JSON, capped at 8 MiB (the protocol's frame limit) and validated against the route's
   schema; a violation is a 400 naming the first offending path.
 - Send `x-request-id` (letters, digits, `.`, `_`, `-`, up to 128) to choose the request id; otherwise

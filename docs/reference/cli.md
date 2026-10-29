@@ -26,11 +26,14 @@ a report.
 | `workbox sandbox rm <id>`                                                                                                                            | Destroy the sandbox (`destroy` also works).                                                                                                       | no         |
 | `workbox sandbox events <id>`                                                                                                                        | Events; locally also the state transitions.                                                                                                       | no         |
 | `workbox agent <claude\|codex> [<sandbox-id>] [-p TEXT] [--name n] [--network mode] [--allow h]... [--secret REF[=ENV]]... [--no-secret] [--detach]` | Run Claude Code or Codex in a sandbox of the `agents` rootfs: interactive, one task with `-p`, or detached. See [the guide](../guides/agents.md). | no         |
-| `workbox serve [--config file] [--port n] [--host h]`                                                                                                | Serve the REST and WebSocket API on the local engine until SIGTERM or SIGINT.                                                                     | yes        |
+| `workbox serve [--config file] [--port n] [--host h] [--tls-cert f --tls-key f]`                                                                     | Serve the REST and WebSocket API on the local engine until SIGTERM or SIGINT; HTTPS and WSS with a certificate.                                   | yes        |
 | `workbox audit verify`                                                                                                                               | Verify the audit hash chain; prints `{ok, entries, brokenAt}`.                                                                                    | yes        |
 
 `serve` takes no `--server`. The listen address comes from the flags, then `WORKBOX_PORT`, then the
-config file, then `127.0.0.1:8790`; see [Configuration](configuration.md#serve-config-file).
+config file, then `127.0.0.1:8790`; see [Configuration](configuration.md#serve-config-file). With
+`--tls-cert` and `--tls-key` (or `tls` in the config file) it serves HTTPS and WSS, and SIGHUP
+reloads the certificate. Listening on an address other than loopback without TLS prints a warning
+on stderr.
 
 ## One engine per root
 

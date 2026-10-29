@@ -47,17 +47,24 @@ A rootfs is shifted on disk for one uid base; using it under another base is ref
   "serverNames": ["workbox.example.internal"],
   "keys": [
     { "id": "agent", "tokenSha256": "<hex sha-256 of the token>", "scopes": ["read", "exec"] }
-  ]
+  ],
+  "tls": { "certFile": "/etc/workbox/tls/cert.pem", "keyFile": "/etc/workbox/tls/key.pem" }
 }
 ```
 
 - `host` and `port` are used when the flags and `WORKBOX_PORT` do not set them: flags first, then
   `WORKBOX_PORT`, then the file, then `127.0.0.1:8790`.
 - `serverNames` lists the `Host` names accepted besides `localhost`, `127.0.0.1` and `::1`; add the
-  name a TLS-terminating proxy forwards.
+  public name clients use, whether the server presents the certificate itself or a
+  TLS-terminating proxy forwards that name.
 - `keys` entries carry an `id`, a `tokenSha256` (or a plaintext `token`) and `scopes`
   (`read`, `exec`, `admin`, `answer`; what each allows is in the
   [REST API reference](rest-api.md#scopes)).
+- `tls` turns on HTTPS and WSS. `certFile` is a PEM certificate chain (the server's certificate
+  first) and `keyFile` its PEM private key; relative paths are resolved against the config file's
+  directory. The flags `--tls-cert` and `--tls-key` override them, and both files must be given.
+  The files are read at start and again on SIGHUP; a reload that fails keeps the old certificate
+  ([Operations](../operations.md#reload-the-tls-certificate)).
 
 Keys also come from the environment: `WORKBOX_TOKEN` defines one key with every scope; otherwise
 `WORKBOX_API_KEYS` may hold a JSON array of keys. File and environment keys are combined. To
@@ -72,6 +79,7 @@ rotate a key, add the new one, restart, move clients over, remove the old one, r
 | `WORKBOX_PORT`         | `serve`           | Listen port when `--port` is absent.                                                                        |
 | `WORKBOX_LOG_LEVEL`    | logger            | Log level; default `info`.                                                                                  |
 | `WORKBOX_SECRET_<REF>` | daemon            | A secret value for reference `<REF>`; see below.                                                            |
+| `NODE_EXTRA_CA_CERTS`  | CLI, SDK, MCP     | A PEM file of extra CA certificates Node trusts, for a server certificate signed by a private CA.           |
 
 `deploy/install.sh` reads its own set (`WORKBOX_ETC`, `WORKBOX_SUBUID_FILE`, `WORKBOX_SUBGID_FILE`,
 `WORKBOX_USER`, plus the root, cgroup and uid variables above); its header documents each.
