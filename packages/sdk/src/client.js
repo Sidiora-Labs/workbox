@@ -53,6 +53,9 @@ export const ROUTES = Object.freeze({
   'GET /v1/sandboxes/:id/checkpoints': ['Sandbox#listCheckpoints'],
   'POST /v1/sandboxes/:id/checkpoints': ['Sandbox#createCheckpoint'],
   'GET /v1/sandboxes/:id/events': ['Sandbox#listEvents', 'Sandbox#events'],
+  'GET /v1/sandboxes/:id/events/ws': ['Sandbox#events'],
+  'GET /v1/events': ['WorkboxClient#listEvents'],
+  'GET /v1/events/ws': ['WorkboxClient#events'],
   'POST /v1/reconcile': ['WorkboxClient#reconcile'],
   'GET /v1/asks': ['WorkboxClient#listAsks'],
   'POST /v1/asks/:askId/answer': ['WorkboxClient#answerAsk'],
@@ -197,6 +200,32 @@ export class WorkboxClient {
       body: { answer },
       signal: opts.signal,
     });
+  }
+
+  /**
+   * One page of events across the sandboxes this key can see, in `seq` order. With `waitMs`
+   * (at most 60000) and nothing after `afterSeq` yet, the server holds the request until a
+   * matching event is logged or the time is up. Pass `nextSeq` back as `afterSeq`.
+   * @param {CallOptions & EventsOptions & {limit?: number, waitMs?: number}} [opts]
+   * @returns {Promise<{events: EventRow[], nextSeq: number}>}
+   */
+  listEvents(opts = {}) {
+    return this.request('GET', '/v1/events', {
+      query: eventsQueryOf(opts, { sandboxId: opts.sandboxId }),
+      signal: opts.signal,
+    });
+  }
+
+  /**
+   * Events across the sandboxes this key can see, pushed over a WebSocket: those after
+   * `afterSeq` first when it is given, then live ones as they are logged. After a dropped
+   * connection it reconnects with backoff and resumes after the last event it yielded, so none is
+   * missed or repeated. Iterate until `close()` or the signal aborts (which throws its reason).
+   * @param {CallOptions & EventsOptions} [opts]
+   * @returns {EventStream}
+   */
+  events(opts = {}) {
+    return new EventStream(this, '/v1/events', opts);
   }
 
   /**
@@ -374,37 +403,218 @@ export class Sandbox {
   }
 
   /**
-   * One page of events with `seq` greater than `afterSeq`.
-   * @param {CallOptions & {afterSeq?: number, limit?: number}} [opts]
-   * @returns {Promise<{events: {seq: number, type: string, payload: unknown, at: number, [k: string]: unknown}[]}>}
+   * One page of this sandbox's events with `seq` greater than `afterSeq`. With `waitMs` (at most
+   * 60000) and nothing newer yet, the server holds the request until one is logged.
+   * @param {CallOptions & {afterSeq?: number, limit?: number, types?: string[], waitMs?: number}} [opts]
+   * @returns {Promise<{events: EventRow[], nextSeq: number}>}
    */
   listEvents(opts = {}) {
-    const query = { afterSeq: opts.afterSeq, limit: opts.limit };
-    return this.client.request('GET', `${this.path}/events`, { query, signal: opts.signal });
+    return this.client.request('GET', `${this.path}/events`, {
+      query: eventsQueryOf(opts),
+      signal: opts.signal,
+    });
   }
 
   /**
-   * Every event after `afterSeq` as an async iterator. The server's events route is paged
-   * polling, not a push stream: this pages with `afterSeq` until a page comes back empty; with
-   * `follow` it keeps polling every `intervalMs` (default 1000) until the signal aborts.
-   * @param {CallOptions & {afterSeq?: number, limit?: number, follow?: boolean, intervalMs?: number}} [opts]
-   * @returns {AsyncGenerator<{seq: number, type: string, payload: unknown, at: number, [k: string]: unknown}>}
+   * This sandbox's events after `afterSeq` (default 0) as an async iterator. Without `follow` it
+   * pages the events route until a page comes back empty. With `follow` it streams over the
+   * events WebSocket: the stored events first, then live ones as they are logged, reconnecting
+   * after a drop without missing or repeating one, until the signal aborts.
+   * @param {CallOptions & {afterSeq?: number, limit?: number, types?: string[], follow?: boolean}} [opts]
+   * @returns {AsyncIterable<EventRow>}
    */
-  async *events(opts = {}) {
+  events(opts = {}) {
+    if (opts.follow)
+      return new EventStream(this.client, `${this.path}/events`, {
+        afterSeq: opts.afterSeq ?? 0,
+        types: opts.types,
+        signal: opts.signal,
+      });
+    return this.#pages(opts);
+  }
+
+  async *#pages(opts) {
     let afterSeq = opts.afterSeq ?? 0;
     for (;;) {
       const { events } = await this.listEvents({
         afterSeq,
         limit: opts.limit,
+        types: opts.types,
         signal: opts.signal,
       });
       for (const evt of events) {
         afterSeq = evt.seq;
         yield evt;
       }
-      if (events.length) continue;
-      if (!opts.follow) return;
-      await sleep(opts.intervalMs ?? 1000, opts.signal);
+      if (!events.length) return;
+    }
+  }
+}
+
+/**
+ * @typedef {{seq: number, sandboxId: string, type: string, source: string, payload: unknown, causation: string|null, at: number}} EventRow
+ */
+
+/**
+ * @typedef {object} EventsOptions
+ * @property {number} [afterSeq] start after this seq; without it a stream is live only
+ * @property {string[]} [types] exact types or `prefix.*` patterns
+ * @property {string} [sandboxId] one sandbox only
+ */
+
+/**
+ * Events pushed over an events WebSocket (`<route>/ws`), as an async iterator. It reconnects with
+ * jittered backoff after a drop and resumes after the last event it yielded, or after the point
+ * where the stream turned live. A refused upgrade is explained by the REST route: an error that
+ * would not succeed on retry (401, 403, 404, 400) is thrown; anything else is retried.
+ */
+export class EventStream {
+  #client;
+  #route;
+  #types;
+  #sandboxId;
+  #signal;
+  #resume;
+  #attempt = 0;
+  #closed = false;
+  #conn = null;
+
+  /**
+   * @param {WorkboxClient} client
+   * @param {string} route the REST events route; the WebSocket is `${route}/ws`
+   * @param {CallOptions & EventsOptions} [opts]
+   */
+  constructor(client, route, opts = {}) {
+    this.#client = client;
+    this.#route = route;
+    this.#types = opts.types;
+    this.#sandboxId = opts.sandboxId;
+    this.#signal = opts.signal;
+    this.#resume = opts.afterSeq;
+  }
+
+  /** The seq a reconnect resumes after: the last event yielded, or where the stream went live. */
+  get lastSeq() {
+    return this.#resume;
+  }
+
+  /** Stop the stream; the iteration ends. */
+  close() {
+    this.#closed = true;
+    this.#conn?.close();
+  }
+
+  /** @returns {AsyncGenerator<EventRow>} */
+  async *[Symbol.asyncIterator]() {
+    const signal = this.#signal;
+    const onAbort = () => this.close();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      for (;;) {
+        if (signal?.aborted) throw signal.reason;
+        if (this.#closed) return;
+        const conn = this.#connect();
+        while (!this.#closed) {
+          const msg = conn.queue.shift();
+          if (!msg && conn.ended) break;
+          if (!msg) await conn.next();
+          const event = msg ? this.#advance(msg) : null;
+          if (event) yield event;
+        }
+        conn.close();
+        if (signal?.aborted) throw signal.reason;
+        if (this.#closed) return;
+        if (!conn.opened) await this.#explainRefusal();
+        await sleep(
+          retryDelay(this.#attempt++, this.#client.retryDelayMs, this.#client.maxRetryDelayMs),
+          signal,
+        );
+      }
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+      this.close();
+    }
+  }
+
+  /** Take a frame. Returns the event to yield, or null; any progress resets the backoff. */
+  #advance(msg) {
+    if (msg.type === 'live' && Number.isInteger(msg.seq)) {
+      this.#resume = Math.max(this.#resume ?? 0, msg.seq);
+      this.#attempt = 0;
+      return null;
+    }
+    if (msg.type !== 'event' || !Number.isInteger(msg.event?.seq)) return null;
+    if (this.#resume !== undefined && msg.event.seq <= this.#resume) return null;
+    this.#resume = msg.event.seq;
+    this.#attempt = 0;
+    return msg.event;
+  }
+
+  #connect() {
+    const base = this.#client.baseUrl.replace(/^http/, 'ws');
+    const query = {
+      ...eventsQueryOf(
+        { afterSeq: this.#resume, types: this.#types },
+        { sandboxId: this.#sandboxId },
+      ),
+      token: this.#client.token || undefined,
+    };
+    const ws = new WebSocket(`${base}${this.#route}/ws${qs(query)}`);
+    let wake = null;
+    const poke = () => {
+      const fn = wake;
+      wake = null;
+      fn?.();
+    };
+    const conn = {
+      queue: [],
+      opened: false,
+      ended: false,
+      next: () =>
+        new Promise((resolve) => {
+          wake = resolve;
+        }),
+      close() {
+        conn.ended = true;
+        try {
+          ws.close(1000);
+        } catch {
+          // already closing
+        }
+        poke();
+      },
+    };
+    ws.addEventListener('open', () => {
+      conn.opened = true;
+    });
+    ws.addEventListener('message', (ev) => {
+      const msg = objectFrame(String(ev.data));
+      if (!msg) return;
+      conn.queue.push(msg);
+      poke();
+    });
+    const end = () => {
+      conn.ended = true;
+      poke();
+    };
+    ws.addEventListener('error', end);
+    ws.addEventListener('close', end);
+    this.#conn = conn;
+    return conn;
+  }
+
+  /** After a refused upgrade, ask the REST route why; throw what a retry would not fix. */
+  async #explainRefusal() {
+    try {
+      await this.#client.request('GET', this.#route, {
+        query: eventsQueryOf(
+          { afterSeq: this.#resume ?? 0, limit: 1, types: this.#types },
+          { sandboxId: this.#sandboxId },
+        ),
+        signal: this.#signal,
+      });
+    } catch (e) {
+      if (this.#signal?.aborted || !e?.retryable) throw e;
     }
   }
 }
@@ -580,6 +790,26 @@ function sleep(ms, signal) {
     }, ms);
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+/** A frame that is a JSON object, or null for anything else. */
+function objectFrame(text) {
+  try {
+    const msg = JSON.parse(text);
+    return msg && typeof msg === 'object' ? msg : null;
+  } catch {
+    return null;
+  }
+}
+
+function eventsQueryOf(opts, extra = {}) {
+  return {
+    afterSeq: opts.afterSeq,
+    limit: opts.limit,
+    types: opts.types?.length ? opts.types.join(',') : undefined,
+    waitMs: opts.waitMs,
+    ...extra,
+  };
 }
 
 function qs(obj = {}) {

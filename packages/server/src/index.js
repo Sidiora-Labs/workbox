@@ -15,6 +15,21 @@ export {
   MAX_KEY_TTL_SECONDS,
 } from './auth.js';
 export { sandboxVisible, isBound, requireUnbound, createLabels } from './access.js';
+export {
+  EventHub,
+  EventFeed,
+  ReplayMerge,
+  pollEvents,
+  streamEvents,
+  eventsQuery,
+  eventFilter,
+  parseTypes,
+  typeMatcher,
+  drained,
+  MAX_WAIT_MS,
+  REPLAY_PAGE,
+  MAX_TYPE_PATTERNS,
+} from './streams.js';
 export { WsSocket, WS_DEFAULTS, acceptKey, rejectUpgrade } from './ws.js';
 export { Metrics } from './metrics.js';
 export { AUTH_FAILURE_DEFAULTS, addressKey, createFailureLimiter } from './ratelimit.js';

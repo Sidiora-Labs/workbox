@@ -44,7 +44,10 @@ it is given a certificate. The routes, scopes and body schemas below are `SCOPE_
 | `GET /v1/sandboxes/:id/artifacts`              | `read`   | Artifacts; query `cursor`, `limit`.                                                                                                    |
 | `GET /v1/sandboxes/:id/checkpoints`            | `read`   | List checkpoints.                                                                                                                      |
 | `POST /v1/sandboxes/:id/checkpoints`           | `admin`  | Create a checkpoint (201).                                                                                                             |
-| `GET /v1/sandboxes/:id/events`                 | `read`   | Events after `afterSeq`, up to `limit`. Paged polling, not a stream.                                                                   |
+| `GET /v1/sandboxes/:id/events`                 | `read`   | This sandbox's events; query `afterSeq`, `limit`, `types`, `waitMs`. See [Events](#events).                                            |
+| `GET /v1/sandboxes/:id/events/ws`              | `read`   | WebSocket of this sandbox's events: stored ones after `afterSeq`, then live. Query `afterSeq`, `types`. A plain GET is 426.            |
+| `GET /v1/events`                               | `read`   | Events of every sandbox the key sees; query `afterSeq`, `limit`, `types`, `sandboxId`, `waitMs`.                                       |
+| `GET /v1/events/ws`                            | `read`   | WebSocket of the same events: stored ones after `afterSeq`, then live. Query `afterSeq`, `types`, `sandboxId`. A plain GET is 426.     |
 | `POST /v1/reconcile`                           | `admin`  | Reconcile against the host; lists `attached`, `absent`, `suspect`, `quarantined`.                                                      |
 | `GET /v1/asks`                                 | `read`   | Asks raised with `wb ask`; query `status` (default `all`), `sandboxId`, `limit`.                                                       |
 | `POST /v1/asks/:askId/answer`                  | `answer` | Answer an ask. Body: `answer`.                                                                                                         |
@@ -53,7 +56,58 @@ it is given a certificate. The routes, scopes and body schemas below are `SCOPE_
 | `GET /v1/keys`                                 | `admin`  | Stored keys with `lastUsedAt` and `revokedAt`; never a token or its digest.                                                            |
 | `DELETE /v1/keys/:keyId`                       | `admin`  | Revoke a stored key; it stops working on the next request. Answers the revoked key.                                                    |
 
-Every mutating route is written to the audit log.
+Every mutating route is written to the audit log, and so is every WebSocket that opens
+(`api.session.attach`, `api.events.stream`).
+
+## Events
+
+Every sandbox has one log of events, numbered by a `seq` shared across the fleet. An event is
+
+```json
+{
+  "seq": 42,
+  "sandboxId": "01...",
+  "type": "session.exited",
+  "source": "host",
+  "payload": { "sessionId": "...", "name": "build", "code": 0, "signal": null },
+  "causation": null,
+  "at": 1761700000000
+}
+```
+
+`source` is `host` for events the engine records (`sandbox.created`, `sandbox.state`,
+`sandbox.health`, `session.started`, `session.exited`, `exec.finished`, `ask.raised`,
+`ask.answered`, `checkpoint.created`, `artifact.added`) and `wb` for `wb event emit` inside the
+box.
+
+Both REST routes answer `{"events": [...], "nextSeq": N}` in `seq` order. Pass `nextSeq` back as
+`afterSeq` for the next page; it is the last returned `seq`, or `afterSeq` when nothing came back.
+
+| Query       | Meaning                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| `afterSeq`  | Events with a greater `seq` (default 0).                                                   |
+| `limit`     | At most this many (default 100, at most 1000).                                             |
+| `types`     | Comma-separated; each an exact type, or `prefix.*` for every type starting with `prefix.`. |
+| `sandboxId` | `GET /v1/events` only: one sandbox.                                                        |
+| `waitMs`    | Long-poll, 0 to 60000. With nothing after `afterSeq` yet, wait this long for a new match.  |
+
+With `waitMs`, the request answers as soon as a matching event is logged, or with an empty
+`events` when the time is up, the client goes away or the server shuts down. A script can loop on
+`GET /v1/events?afterSeq=N&types=session.exited&waitMs=30000` and learn of each exit within
+moments, without polling in a tight loop.
+
+The two WebSocket routes push the same events. With `afterSeq` they first replay the stored
+events after it, then send new ones as they are logged; without it they send only new ones. Each
+event arrives once, in `seq` order, with nothing lost at the switch. The frames are:
+
+- `{"type": "event", "event": {...}}`, one per event.
+- `{"type": "live", "seq": N}`, once, when the stream turns live: every matching event up to `N`
+  has been sent and later ones follow as they are logged.
+- `{"type": "error", "code", "message"}` before the server closes the stream with 1011.
+
+A client that reads too slowly is dropped once 1 MiB (the default) is waiting to be sent to it. Shutdown closes
+the streams with 1001. To resume after either, reconnect with `afterSeq` set to the last `seq`
+received, or to the `live` frame's `N` when that is greater. The SDK's `events()` does this.
 
 ## Scopes
 
@@ -78,6 +132,8 @@ from the serve config file and `WORKBOX_TOKEN` are never bound.
 For a bound key:
 
 - `GET /v1/sandboxes` and `GET /v1/asks` list only the sandboxes it sees and their asks.
+- `GET /v1/events` and `GET /v1/events/ws` carry only the events of the sandboxes it sees, both
+  stored and live; a long-poll is not woken by the others.
 - Every route with `:id`, including the session WebSocket, answers a sandbox it does not see
   exactly as one that does not exist: 404 `E_NOT_FOUND`. Answering an ask of such a sandbox is
   404 as well.

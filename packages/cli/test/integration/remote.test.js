@@ -245,6 +245,52 @@ test('remote mode: serve with a config file, then create, ls, inspect, exec and 
     assert.equal(failing.json.stderr, 'err\n');
     assert.equal(failing.json.exitCode, 7);
 
+    const follow = spawnCli(r.clientEnv, [
+      'events',
+      ...read,
+      '--sandbox',
+      id,
+      '--type',
+      'cli.*',
+      '--after',
+      '0',
+      '--follow',
+    ]);
+    live.add(follow);
+    const emitted = await cli(
+      'sandbox',
+      'exec',
+      id,
+      ...exec,
+      '--',
+      'wb',
+      'event',
+      'emit',
+      'cli.done',
+      '{"ok":true}',
+      '--json',
+    );
+    assert.equal(emitted.code, 0, emitted.stderr);
+    await until(() => follow.out().includes('"cli.done"'));
+    follow.child.kill('SIGINT');
+    const followed = await follow.done;
+    live.delete(follow);
+    assert.equal(followed.signal, null, 'SIGINT ends the follow cleanly');
+    assert.equal(followed.code, 0, followed.stderr);
+    const lines = followed.stdout.trim().split('\n');
+    assert.deepEqual(
+      lines.map((l) => JSON.parse(l)).map((e) => [e.sandboxId, e.type, e.source, e.payload]),
+      [[id, 'cli.done', 'wb', { ok: true }]],
+    );
+    const history = await cli('events', ...read, '--sandbox', id);
+    assert.equal(history.code, 0, history.stderr);
+    const types = history.stdout
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l).type);
+    for (const type of ['sandbox.created', 'exec.finished', 'cli.done'])
+      assert.ok(types.includes(type), `${type} in ${types.join(', ')}`);
+
     const wrong = await cli('sandbox', 'ls', ...remote(serve.origin, 'not-a-token'));
     assert.equal(wrong.code, 4);
     assert.equal(wrong.stdout, '');

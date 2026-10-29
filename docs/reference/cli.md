@@ -25,6 +25,7 @@ a report.
 | `workbox sandbox drain <id>`                                                                                                                         | Move the sandbox to DRAINING: stop new work; processes keep running until destroy.                                                                | no         |
 | `workbox sandbox rm <id>`                                                                                                                            | Destroy the sandbox (`destroy` also works).                                                                                                       | no         |
 | `workbox sandbox events <id>`                                                                                                                        | Events; locally also the state transitions.                                                                                                       | no         |
+| `workbox events [--sandbox id] [--type t]... [--after seq] [--follow]`                                                                               | Events of every sandbox, one JSON object per line. `--follow` prints new ones as they are logged until SIGINT or SIGTERM.                         | no         |
 | `workbox agent <claude\|codex> [<sandbox-id>] [-p TEXT] [--name n] [--network mode] [--allow h]... [--secret REF[=ENV]]... [--no-secret] [--detach]` | Run Claude Code or Codex in a sandbox of the `agents` rootfs: interactive, one task with `-p`, or detached. See [the guide](../guides/agents.md). | no         |
 | `workbox key create --name n --scope s [--scope s]... [--label k=v]... [--sandbox id]... [--ttl 30d\|12h\|3600s]`                                    | Mint a stored API key and print it with its token, which is shown only this once. `--label` and `--sandbox` bind it; `--ttl` makes it expire.     | no         |
 | `workbox key ls`                                                                                                                                     | List stored keys (`list` also works), without tokens.                                                                                             | no         |
@@ -37,6 +38,13 @@ config file, then `127.0.0.1:8790`; see [Configuration](configuration.md#serve-c
 `--tls-cert` and `--tls-key` (or `tls` in the config file) it serves HTTPS and WSS, and SIGHUP
 reloads the certificate. Listening on an address other than loopback without TLS prints a warning
 on stderr.
+
+`events` prints the stored events after `--after` (default 0) and exits. `--type` takes an exact
+type or `prefix.*` and repeats; `--sandbox` keeps one sandbox. With `--follow` it prints the
+stored events after `--after` when it is given, then each new event as it is logged. Locally it
+follows through the engine, so it needs the root to itself, like `sandbox exec`; with `--server`
+it streams over the events WebSocket and reconnects after a drop without losing or repeating an
+event.
 
 The `key` commands work on the local store, even while `workbox serve` runs on the same root, or
 through `--server` with an unbound `admin` key. A running server sees a key minted or revoked

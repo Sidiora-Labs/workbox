@@ -195,6 +195,14 @@ test('the scope matrix: read observes only, exec runs, answer answers, admin mut
   assert.equal(SCOPE_MATRIX['POST /v1/asks/:askId/answer'], 'answer');
   assert.equal(SCOPE_MATRIX['GET /v1/sandboxes/:id/sessions/:sessionId/ws'], 'exec');
   assert.equal(SCOPE_MATRIX['GET /v1/whoami'], ANY_KEY);
+  for (const route of [
+    'GET /v1/events',
+    'GET /v1/events/ws',
+    'GET /v1/sandboxes/:id/events',
+    'GET /v1/sandboxes/:id/events/ws',
+  ])
+    assert.equal(SCOPE_MATRIX[route], 'read', route);
+  assert.equal(FLEET_ROUTES.includes('GET /v1/events'), false, 'bound keys get their own events');
   for (const route of ['POST /v1/keys', 'GET /v1/keys', 'DELETE /v1/keys/:keyId'])
     assert.equal(SCOPE_MATRIX[route], 'admin', route);
   for (const route of FLEET_ROUTES) assert.ok(route in SCOPE_MATRIX, route);

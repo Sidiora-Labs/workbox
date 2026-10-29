@@ -1,8 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { SCOPE_MATRIX } from '@workbox/server';
-import { ROUTES, Sandbox, SessionStream, WorkboxClient, retryDelay } from '../../src/client.js';
+import { SCOPE_MATRIX, WsSocket, acceptKey } from '@workbox/server';
+import {
+  EventStream,
+  ROUTES,
+  Sandbox,
+  SessionStream,
+  WorkboxClient,
+  retryDelay,
+} from '../../src/client.js';
 import { WorkboxApiError } from '../../src/errors.js';
 
 const b64 = (s) => Buffer.from(s).toString('base64');
@@ -240,6 +247,177 @@ test('events() pages with afterSeq until a page comes back empty', async () => {
     );
   } finally {
     await srv.close();
+  }
+});
+
+test('listEvents: fleet and sandbox pages carry types, sandboxId and the long-poll wait', async () => {
+  const srv = await scripted([{ status: 200, body: { events: [], nextSeq: 4 } }]);
+  try {
+    const client = srv.client();
+    const fleet = await client.listEvents({
+      afterSeq: 4,
+      limit: 10,
+      types: ['build.*', 'session.exited'],
+      sandboxId: 'sb-1',
+      waitMs: 30_000,
+    });
+    assert.deepEqual(fleet, { events: [], nextSeq: 4 });
+    await client.listEvents();
+    await client.listEvents({ types: [] });
+    await client.sandbox('sb-1').listEvents({ afterSeq: 2, types: ['x.*'], waitMs: 5 });
+    assert.deepEqual(
+      srv.hits.map((h) => decodeURIComponent(h.url)),
+      [
+        '/v1/events?afterSeq=4&limit=10&types=build.*,session.exited&waitMs=30000&sandboxId=sb-1',
+        '/v1/events',
+        '/v1/events',
+        '/v1/sandboxes/sb-1/events?afterSeq=2&types=x.*&waitMs=5',
+      ],
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+/**
+ * Answer every events WebSocket upgrade on `srv` with the next entry of `script`: a function that
+ * gets the open server socket. Records each upgrade URL.
+ */
+function scriptedUpgrades(srv, script) {
+  const urls = [];
+  srv.server.on('upgrade', (req, socket, head) => {
+    urls.push(req.url);
+    const step = script[Math.min(urls.length, script.length) - 1];
+    if (step === 'refuse') {
+      socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
+    socket.write(
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(req.headers['sec-websocket-key'])}\r\n\r\n`,
+    );
+    step(new WsSocket(socket, head));
+  });
+  return urls;
+}
+
+const frame = (ws, msg) => ws.send(JSON.stringify(msg));
+const event = (seq) => ({ type: 'event', event: { seq, sandboxId: 'sb-1', type: 'build.done' } });
+
+test('events() resumes after a drop from where it got to and never repeats an event', async () => {
+  const srv = await scripted([page]);
+  const urls = scriptedUpgrades(srv, [
+    (ws) => {
+      frame(ws, event(6));
+      frame(ws, event(7));
+      frame(ws, { type: 'live', seq: 9 });
+      setTimeout(() => ws.terminate(), 20);
+    },
+    (ws) => {
+      frame(ws, event(7));
+      frame(ws, { type: 'unknown' });
+      frame(ws, null);
+      ws.socket.write(Buffer.from([0x81, 3, 0x6e, 0x6f, 0x21]));
+      frame(ws, event(10));
+      setTimeout(() => ws.close(1001), 20);
+    },
+    (ws) => frame(ws, event(11)),
+  ]);
+  try {
+    const ac = new AbortController();
+    const stream = srv.client().events({
+      afterSeq: 5,
+      types: ['build.*'],
+      sandboxId: 'sb-1',
+      signal: ac.signal,
+    });
+    assert.ok(stream instanceof EventStream);
+    const seen = [];
+    await assert.rejects(
+      async () => {
+        for await (const evt of stream) {
+          seen.push(evt.seq);
+          if (evt.seq === 11) ac.abort();
+        }
+      },
+      (e) => e.name === 'AbortError',
+    );
+    assert.deepEqual(seen, [6, 7, 10, 11]);
+    assert.equal(stream.lastSeq, 11);
+    assert.deepEqual(
+      urls.map((u) => decodeURIComponent(u)),
+      [
+        '/v1/events/ws?afterSeq=5&types=build.*&sandboxId=sb-1&token=tok',
+        '/v1/events/ws?afterSeq=9&types=build.*&sandboxId=sb-1&token=tok',
+        '/v1/events/ws?afterSeq=10&types=build.*&sandboxId=sb-1&token=tok',
+      ],
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+test('a sandbox follow streams from seq 0; without afterSeq the fleet stream is live only', async () => {
+  const srv = await scripted([page]);
+  const urls = scriptedUpgrades(srv, [
+    (ws) => {
+      frame(ws, event(1));
+    },
+    (ws) => {
+      frame(ws, { type: 'live', seq: 3 });
+      frame(ws, event(4));
+    },
+  ]);
+  try {
+    const client = srv.client({ token: '' });
+    const own = client.sandbox('sb 1').events({ follow: true })[Symbol.asyncIterator]();
+    assert.equal((await own.next()).value.seq, 1);
+    await own.return();
+    const live = client.events();
+    for await (const evt of live) {
+      assert.equal(evt.seq, 4);
+      live.close();
+    }
+    assert.deepEqual(urls, ['/v1/sandboxes/sb%201/events/ws?afterSeq=0', '/v1/events/ws']);
+    const closed = client.events();
+    closed.close();
+    for await (const _evt of closed) assert.fail('a closed stream yields nothing');
+    assert.equal(urls.length, 2, 'and never connects');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('a refused events upgrade: a 4xx from the REST route throws, anything else is retried', async () => {
+  const denied = await scripted([
+    {
+      status: 401,
+      body: { error: { code: 'E_DENIED', message: 'missing or invalid bearer token' } },
+    },
+  ]);
+  const flaky = await scripted([unavailable, unavailable, unavailable, page]);
+  try {
+    scriptedUpgrades(denied, ['refuse']);
+    await assert.rejects(
+      async () => {
+        for await (const _evt of denied.client().events({ types: ['a.*'] }))
+          assert.fail('no events expected');
+      },
+      (e) => e instanceof WorkboxApiError && e.status === 401 && e.code === 'E_DENIED',
+    );
+    assert.equal(denied.hits[0].url, '/v1/events?afterSeq=0&limit=1&types=a.*');
+
+    const urls = scriptedUpgrades(flaky, ['refuse', 'refuse', (ws) => frame(ws, event(2))]);
+    const follow = flaky.client({ retries: 0 }).sandbox('sb-1').events({ follow: true });
+    const it = follow[Symbol.asyncIterator]();
+    assert.equal((await it.next()).value.seq, 2);
+    await it.return();
+    assert.ok(urls.length >= 3, 'the upgrade was tried again after each refusal');
+    assert.ok(flaky.hits.length >= 2);
+    for (const hit of flaky.hits)
+      assert.match(hit.url, /^\/v1\/sandboxes\/sb-1\/events\?afterSeq=0&limit=1$/);
+  } finally {
+    await denied.close();
+    await flaky.close();
   }
 });
 

@@ -148,12 +148,14 @@ stored with a time and reason; an illegal transition is rejected with a code.
 - **REST and WebSocket** (`workbox serve`, default `127.0.0.1:8790`): sandboxes (create with
   idempotency key and optional `fromCheckpoint`, list with cursor and `complete`, inspect, delete,
   drain), exec, files (read, list, write), sessions (list, start, WebSocket attach with input,
-  resize and signal), evidence, artifacts, checkpoints (list, create), events (paged by
-  `afterSeq`), asks (list, answer), reconcile, `/metrics`, `/healthz`, `/readyz`. Errors are
+  resize and signal), evidence, artifacts, checkpoints (list, create), events (per sandbox and
+  across the fleet, paged by `afterSeq`, with a long-poll and WebSockets that replay and then
+  push), asks (list, answer), reconcile, `/metrics`, `/healthz`, `/readyz`. Errors are
   `{error: {code, message, details?, requestId}}`.
 - **SDK** (`@workbox/sdk`): `WorkboxClient` and `Sandbox` cover every route; GET, HEAD and DELETE
   are retried with jittered backoff on 5xx and network errors; `attach` returns a
-  `SessionStream`; `events()` pages the events route and can follow it by polling.
+  `SessionStream`; `events()` pages the events route or streams it over the events WebSocket,
+  reconnecting and resuming after a drop.
 - **MCP** (`workbox-mcp`, stdio): `sandbox_create`, `sandbox_list`, `sandbox_exec`,
   `sandbox_destroy`, `agent_run` and `agent_output`, over the SDK against `WORKBOX_SERVER`
   (default `http://127.0.0.1:8790`) with `WORKBOX_TOKEN`. Output is bounded to 64 KiB and waits to

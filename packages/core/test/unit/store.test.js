@@ -339,6 +339,35 @@ test('fleet event pages default to 100 and stop at 1000', () => {
   }
 });
 
+test('fleet events filtered by a binding in SQL keep full pages; lastEventSeq is the head', () => {
+  const store = Store.open(':memory:');
+  try {
+    assert.equal(store.lastEventSeq(), 0, 'an empty log');
+    const a = store.createSandbox({ ...base, labels: { team: 'a' } });
+    const b = store.createSandbox({ ...base, labels: { team: 'b' } });
+    const seqs = [a, b, b, a, b, a].map((s, i) => store.appendEvent(s.id, 'tick', { i }));
+    const ids = (rows) => rows.map((r) => r.sandboxId);
+    const teamA = { labels: { team: 'a' } };
+    assert.deepEqual(ids(store.listFleetEvents({ binding: teamA })), [a.id, a.id, a.id]);
+    assert.deepEqual(
+      store.listFleetEvents({ binding: teamA, afterSeq: seqs[0], limit: 1 }).map((r) => r.seq),
+      [seqs[3]],
+      'the page skips hidden rows instead of coming back short',
+    );
+    assert.deepEqual(ids(store.listFleetEvents({ binding: { sandboxIds: [b.id] } })), [
+      b.id,
+      b.id,
+      b.id,
+    ]);
+    assert.deepEqual(store.listFleetEvents({ binding: { labels: { team: 'c' } } }), []);
+    assert.deepEqual(store.listFleetEvents({ binding: {} }), [], 'an empty binding sees nothing');
+    assert.equal(store.listFleetEvents({ binding: null }).length, 6);
+    assert.equal(store.lastEventSeq(), seqs.at(-1));
+  } finally {
+    store.close();
+  }
+});
+
 test('pruneEvents deletes rows recorded before the cutoff and keeps sequence numbers', () => {
   const { store, clock, cleanup } = openTmp();
   try {

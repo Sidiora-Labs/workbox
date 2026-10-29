@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import { SCOPE_MATRIX } from '@workbox/server';
 import { bootServer, TOKENS } from '../../../server/test/helpers/real-server.js';
 import { WorkboxApiError, WorkboxClient } from '../../src/index.js';
@@ -63,6 +64,48 @@ async function droppingProxy(port) {
     base: `http://127.0.0.1:${server.address().port}`,
     close() {
       server.closeAllConnections();
+      return new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+/**
+ * A real TCP relay in front of the server. `cut()` destroys every connection it carries, as a
+ * network drop would; `accepted()` counts the connections it took.
+ */
+async function tcpRelay(port) {
+  const live = new Set();
+  let accepted = 0;
+  const server = net.createServer((down) => {
+    accepted++;
+    const up = net.connect(port, '127.0.0.1');
+    const pair = [down, up];
+    live.add(pair);
+    const end = () => {
+      down.destroy();
+      up.destroy();
+      live.delete(pair);
+    };
+    for (const sock of pair) {
+      sock.on('error', end);
+      sock.on('close', end);
+    }
+    down.pipe(up);
+    up.pipe(down);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const cut = () => {
+    for (const [down, up] of live) {
+      down.destroy();
+      up.destroy();
+    }
+  };
+  return {
+    base: `http://127.0.0.1:${server.address().port}`,
+    accepted: () => accepted,
+    cut,
+    close() {
+      cut();
       return new Promise((resolve) => server.close(resolve));
     },
   };
@@ -317,6 +360,67 @@ test('the sdk drives every route of a real server over a real engine', async (t)
       },
     );
 
+    await t.test(
+      'fleet events: a long-poll, and a stream that reconnects after a drop and resumes',
+      { timeout: 60_000 },
+      async () => {
+        const emit = async (type) => {
+          const out = await harness.sandbox(a.id).exec({
+            argv: ['wb', 'event', 'emit', type, '{}', '--json'],
+          });
+          assert.equal(out.exitCode, 0, out.stderr);
+          return lastJson(out.stdout).seq;
+        };
+        const from = srv.eng.store.lastEventSeq();
+        const waiting = reader.listEvents({ afterSeq: from, types: ['fleet.*'], waitMs: 30_000 });
+        const first = await emit('fleet.one');
+        const polled = await waiting;
+        assert.deepEqual(
+          polled.events.map((e) => [e.seq, e.sandboxId, e.type]),
+          [[first, a.id, 'fleet.one']],
+        );
+        assert.equal(polled.nextSeq, first);
+        assert.deepEqual(await reader.listEvents({ afterSeq: first, types: ['fleet.*'] }), {
+          events: [],
+          nextSeq: first,
+        });
+
+        const relay = await tcpRelay(srv.port);
+        try {
+          const viaRelay = new WorkboxClient({
+            baseUrl: relay.base,
+            token: TOKENS.read,
+            retryDelayMs: 20,
+          });
+          const ac = new AbortController();
+          const stream = viaRelay.events({ afterSeq: from, types: ['fleet.*'], signal: ac.signal });
+          const it = stream[Symbol.asyncIterator]();
+          assert.equal((await it.next()).value.seq, first);
+          relay.cut();
+          const second = await emit('fleet.two');
+          assert.equal((await it.next()).value.seq, second, 'replayed after the reconnect');
+          const third = await emit('fleet.three');
+          assert.equal((await it.next()).value.seq, third, 'and live again');
+          assert.ok(relay.accepted() >= 2, 'the stream reconnected');
+          assert.equal(stream.lastSeq, third);
+          ac.abort();
+          await assert.rejects(it.next(), (e) => e.name === 'AbortError');
+
+          const own = reader
+            .sandbox(a.id)
+            .events({ afterSeq: from, types: ['fleet.*'], follow: true });
+          const seqs = [];
+          for await (const evt of own) {
+            seqs.push(evt.seq);
+            if (seqs.length === 3) break;
+          }
+          assert.deepEqual(seqs, [first, second, third]);
+        } finally {
+          await relay.close();
+        }
+      },
+    );
+
     await t.test('checkpoints create and list', async () => {
       const cp = await admin.sandbox(a.id).createCheckpoint({ name: 'sdk-cp' });
       assert.ok(cp.id);
@@ -389,15 +493,17 @@ test('the sdk drives every route of a real server over a real engine', async (t)
       const metrics = await reader.metrics();
       const ok = okRoutes(metrics);
       const httpRoutes = Object.keys(SCOPE_MATRIX).filter((k) => !k.endsWith('/ws'));
-      assert.equal(httpRoutes.length, 23);
+      assert.equal(httpRoutes.length, 24);
       assert.deepEqual(
         httpRoutes.filter((k) => !ok.has(k)),
         [],
       );
       const ws = Number(/^workbox_ws_connections_total (\d+)$/m.exec(metrics)?.[1]);
-      assert.equal(ws, 3);
       const attaches = srv.auditEntries().filter((e) => e.action === 'api.session.attach');
       assert.equal(attaches.length, 3);
+      const streams = srv.auditEntries().filter((e) => e.action === 'api.events.stream');
+      assert.ok(streams.length >= 4, String(streams.length));
+      assert.equal(ws, attaches.length + streams.length);
     });
   } finally {
     await srv.stop();

@@ -6,6 +6,7 @@ import { openLocalEngine } from './local.js';
 import { serveCommand } from './serve.js';
 import { agentCommand } from './agent.js';
 import { keyCommand } from './keys.js';
+import { eventsCommand } from './events.js';
 import {
   connectionOpts,
   withoutConnection,
@@ -29,6 +30,7 @@ Usage:
   workbox runtime install|list [--node-version v]
   workbox sandbox create|ls|inspect|rm|exec|shell|drain|events [--server URL --token T]
   workbox sandbox attach <id> <sessionId> [--server URL --token T]
+  workbox events [--sandbox id] [--type t]... [--after seq] [--follow] [--server URL --token T]
   workbox shell <id>
   workbox agent <claude|codex> [<sandbox-id>] [-p|--prompt TEXT] [--name N]
         [--network allowlist|egress|none] [--allow HOST|@set]... [--secret REF[=ENV]]...
@@ -47,6 +49,9 @@ given): interactive on this terminal, headless with -p, or detached with --detac
 --network none). It grants the agent's API key host secret (claude ANTHROPIC_API_KEY, codex
 OPENAI_API_KEY as CODEX_API_KEY); --secret replaces it, --no-secret grants none so you can sign in
 inside the box. \`sandbox attach\` replays a session from its start and follows it to its exit.
+\`events\` prints sandbox events as one JSON object per line: those after --after (default 0), or
+with --follow the ones after --after when given, then new ones as they are logged, until SIGINT
+or SIGTERM. --type takes an exact type or prefix.* and repeats.
 \`key create\` mints a stored API key and prints its token once; --label and --sandbox bind it to
 the sandboxes it may see, --ttl makes it expire, and \`key rm\` revokes it at once.
 The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames",
@@ -73,6 +78,7 @@ const COMMANDS = {
   doctor: doctorCommand,
   agent: agentCommand,
   key: keyCommand,
+  events: eventsCommand,
   sandbox: sandboxCommand,
   shell: shellCommand,
   rootfs: rootfsCommand,
@@ -95,6 +101,10 @@ function resultExit(result) {
 /** Commands that talk to running sandboxes rediscover them from store and cgroup first. */
 const RECONCILING = new Set(['serve', 'sandbox', 'shell', 'agent']);
 
+/** A local `events --follow` must drive the sandboxes to see what they log. */
+const reconciling = (cmd, rest) =>
+  RECONCILING.has(cmd) || (cmd === 'events' && (rest.includes('--follow') || rest.includes('-f')));
+
 async function buildContext(deps, cmd, rest, io) {
   const conn = connectionOpts(rest);
   let client = deps.client ?? null;
@@ -108,8 +118,8 @@ async function buildContext(deps, cmd, rest, io) {
   const needsEngine = !client && (cmd in COMMANDS || cmd === 'serve');
   if (needsEngine && !engine) {
     engine = await openLocalEngine({
-      reconcile: RECONCILING.has(cmd),
-      exclusive: RECONCILING.has(cmd),
+      reconcile: reconciling(cmd, rest),
+      exclusive: reconciling(cmd, rest),
     });
     ownEngine = true;
   }

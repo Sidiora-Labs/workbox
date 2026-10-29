@@ -58,9 +58,18 @@ session keeps running. The WebSocket carries the token as a `?token=` query para
 
 ## Events, evidence, artifacts and checkpoints
 
-- `box.events({ afterSeq, follow: true, signal })` is an async iterator over the events route. The
-  route is paged polling, not a push stream: the iterator pages until a page is empty, or with
-  `follow` keeps polling every `intervalMs` (default 1000 ms) until the signal aborts.
+- `box.listEvents({ afterSeq, limit, types, waitMs })` reads one page of the sandbox's events and
+  `nextSeq`. `box.events({ afterSeq, types })` iterates them until a page is empty; with
+  `follow: true` it streams over the events WebSocket instead: the stored events after `afterSeq`
+  (default 0), then new ones as they are logged, until the signal aborts.
+- `client.listEvents({ afterSeq, limit, types, sandboxId, waitMs })` and
+  `client.events({ afterSeq, types, sandboxId, signal })` do the same across every sandbox the key
+  sees. `waitMs` (at most 60000) holds the request until a matching event is logged. `events()`
+  is live only without `afterSeq`. `types` are exact types or `prefix.*` patterns.
+- An event stream reconnects with backoff after a dropped connection and resumes after the last
+  event it yielded, so none is missed or repeated; `stream.lastSeq` is that point and
+  `stream.close()` ends it. A refused connection whose REST route answers 4xx (a bad key, a
+  missing sandbox) throws that `WorkboxApiError`.
 - `listEvidence`, `listArtifacts` take `cursor` and `limit`; `listCheckpoints` and
   `createCheckpoint({ name, summary, paths })` manage checkpoints. A new sandbox can start from
   one with `createSandbox({ fromCheckpoint })`.

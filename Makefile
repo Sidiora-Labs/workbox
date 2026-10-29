@@ -10,6 +10,7 @@ NODE ?= node
 # hosted CI runner, which is not root, can run the rest.
 PRIVILEGED_UNIT := \
 	packages/cli/test/unit/agent.test.js \
+	packages/cli/test/unit/events.test.js \
 	packages/cli/test/unit/keys.test.js \
 	packages/cli/test/unit/local.test.js \
 	packages/cli/test/unit/main.test.js \
