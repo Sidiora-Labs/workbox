@@ -70,6 +70,13 @@ workbox agent codex -p "Add a test for parse()" $S
 The agent gets its API key from the host's secrets file and, by default, can reach only its API,
 GitHub and the package registries. See [Run coding agents in a sandbox](docs/guides/agents.md).
 
+## Remote agents
+
+An agent on another machine needs only the server's URL and one API key bound to its own
+sandboxes, with no SSH and no host credentials. It creates sandboxes, runs builds, moves files
+and is told when a build ends, over REST, a WebSocket or a signed webhook. See
+[Give an agent API access](docs/guides/remote-agents.md).
+
 ## Documentation
 
 Start at the [documentation index](docs/README.md).

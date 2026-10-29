@@ -17,6 +17,7 @@
   - [Run coding agents in a sandbox](guides/agents.md): Claude Code and Codex in the `agents` rootfs.
   - [Use the MCP server](guides/mcp.md): give an MCP client the sandbox and agent tools.
   - [Deploy the server](guides/deploy.md): systemd unit and container image.
+  - [Give an agent API access](guides/remote-agents.md): a URL and one bound key for an agent on another machine.
 - [Architecture](architecture.md): packages, host layout, launch chain, runner protocol, state machine.
 - [Operations](operations.md): install, run, configure, observe, reconcile, recover, back up.
 - [Testing](verification.md): the test suites and checks, and what they need from the host.
