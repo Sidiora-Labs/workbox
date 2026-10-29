@@ -146,6 +146,68 @@ test('start, output ordering across streams, exit, list, remove', async () => {
   assert.equal(DEFAULT_STOP_GRACE_MS, 5000);
 });
 
+test('read returns retained output in pages without subscribing, then the exit', async () => {
+  const sm = new SessionManager();
+  const info = await sm.start({
+    argv: ['sh', '-c', 'printf aaaa; sleep 0.05; printf bb >&2; sleep 0.05; printf cccccc; exit 4'],
+  });
+  await until(() => sm.get(info.sessionId).exited !== null);
+  const text = (r) =>
+    r.chunks.map((c) => [c.seq, c.stream, Buffer.from(c.data, 'base64').toString()]);
+  const all = sm.read(info.sessionId);
+  assert.deepEqual(text(all), [
+    [0, 'stdout', 'aaaa'],
+    [1, 'stderr', 'bb'],
+    [2, 'stdout', 'cccccc'],
+  ]);
+  assert.equal(all.sessionId, info.sessionId);
+  assert.equal(all.nextSeq, 3);
+  assert.equal(all.gap, null);
+  assert.equal(all.truncated, false);
+  assert.equal(all.exited.code, 4);
+  assert.equal(sm.get(info.sessionId).subscribers.size, 0, 'a read subscribes nobody');
+  const first = sm.read(info.sessionId, { maxBytes: 6 });
+  assert.deepEqual(text(first), [
+    [0, 'stdout', 'aaaa'],
+    [1, 'stderr', 'bb'],
+  ]);
+  assert.equal(first.truncated, true);
+  assert.equal(first.nextSeq, 2);
+  const one = sm.read(info.sessionId, { fromSeq: 2, maxBytes: 1 });
+  assert.deepEqual(text(one), [[2, 'stdout', 'cccccc']], 'a chunk over the budget still comes');
+  assert.equal(one.truncated, false);
+  const end = sm.read(info.sessionId, { fromSeq: 3 });
+  assert.deepEqual(end.chunks, []);
+  assert.equal(end.nextSeq, 3);
+  assert.equal(sm.read(info.sessionId, { fromSeq: 99 }).nextSeq, 3);
+  assert.throws(
+    () => sm.read('missing'),
+    (e) => e.code === 'E_NOT_FOUND',
+  );
+});
+
+test('read reports the gap left by spool overflow and a chunk cut to the spool limit', async () => {
+  const sm = new SessionManager({ defaultSpoolBytes: 16 });
+  const info = await sm.start({
+    argv: ['sh', '-c', 'printf 0123456789; sleep 0.1; printf abcdefghij'],
+  });
+  await until(() => sm.get(info.sessionId).exited !== null);
+  const r = sm.read(info.sessionId);
+  assert.deepEqual(r.gap, { requested: 0, available: 1 });
+  assert.deepEqual(
+    r.chunks.map((c) => [c.seq, Buffer.from(c.data, 'base64').toString()]),
+    [[1, 'abcdefghij']],
+  );
+  assert.equal(r.nextSeq, 2);
+  assert.equal(r.truncated, false);
+  const small = new SessionManager({ defaultSpoolBytes: 8 });
+  const big = await small.start({ argv: ['sh', '-c', 'printf 0123456789abcdef'] });
+  await until(() => small.get(big.sessionId).exited !== null);
+  const cut = small.read(big.sessionId);
+  assert.equal(Buffer.from(cut.chunks[0].data, 'base64').toString(), '89abcdef');
+  assert.equal(cut.truncated, true, 'a chunk that lost its start to the spool limit');
+});
+
 test('attach replays, streams live, reports gaps after overflow and exit to late attachers', async () => {
   const sm = new SessionManager({ defaultSpoolBytes: 64 });
   const info = await sm.start({

@@ -564,6 +564,17 @@ export class Store {
   }
 
   /**
+   * Drop a session from the record. @param {string} sandboxId @param {string} sessionId
+   * @returns {boolean} whether there was one
+   */
+  removeSession(sandboxId, sessionId) {
+    const r = this.db
+      .prepare(`DELETE FROM sessions WHERE sandbox_id = ? AND session_id = ?`)
+      .run(sandboxId, sessionId);
+    return r.changes > 0;
+  }
+
+  /**
    * At most `limit` sessions (default and cap 1000) in start order, after session `after`.
    * @param {string} sandboxId @param {{after?: string, limit?: number}} [opts]
    */

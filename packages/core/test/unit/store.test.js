@@ -222,6 +222,12 @@ test('sessions and events', () => {
     assert.deepEqual(list[0].argv, ['make', 'all']);
     assert.equal(list[0].exitCode, 0);
     assert.equal(list[1].exitedAt, null);
+    assert.equal(store.removeSession(s.id, 's2'), true);
+    assert.equal(store.removeSession(s.id, 's2'), false);
+    assert.deepEqual(
+      store.listSessions(s.id).map((x) => x.sessionId),
+      ['s1'],
+    );
     const seq1 = store.appendEvent(s.id, 'sandbox.created', { by: 'test' });
     const seq2 = store.appendEvent(s.id, 'note', undefined, { causation: 'x', source: 'wb' });
     assert.equal(seq2, seq1 + 1);

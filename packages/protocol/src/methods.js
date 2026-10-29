@@ -3,6 +3,11 @@ import { ProtocolError, Codes } from './errors.js';
 
 export const PROTOCOL_VERSION = 1;
 
+/** Output bytes one `session.read` returns by default. */
+export const SESSION_READ_DEFAULT_BYTES = 1024 * 1024;
+/** Most output bytes one `session.read` may ask for. */
+export const SESSION_READ_MAX_BYTES = 4 * 1024 * 1024;
+
 const base64 = v.string({ pattern: /^[A-Za-z0-9+/]*={0,2}$/, max: 6 * 1024 * 1024 });
 const path = v.string({ min: 1, max: 4096 });
 const sessionId = v.string({ min: 1, max: 64 });
@@ -119,6 +124,17 @@ export const Methods = Object.freeze({
   'session.remove': {
     doc: 'Forget an exited session and free its spool.',
     params: v.object({ sessionId }, { required: ['sessionId'] }),
+  },
+  'session.read': {
+    doc: 'Read retained output from a sequence number without subscribing, up to maxBytes.',
+    params: v.object(
+      {
+        sessionId,
+        fromSeq: v.optional(v.integer({ min: 0 })),
+        maxBytes: v.optional(v.integer({ min: 1, max: SESSION_READ_MAX_BYTES })),
+      },
+      { required: ['sessionId'] },
+    ),
   },
 
   'fs.read': {

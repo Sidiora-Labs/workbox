@@ -1,7 +1,14 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createServer, matchRoute, MAX_BODY_BYTES, BODY_SCHEMAS } from '../../src/server.js';
+import {
+  createServer,
+  matchRoute,
+  MAX_BODY_BYTES,
+  BODY_SCHEMAS,
+  storedSession,
+  textChunks,
+} from '../../src/server.js';
 import { SCOPE_MATRIX } from '../../src/auth.js';
 import { bootServer, call, rawUpgrade, TOKENS } from '../helpers/real-server.js';
 
@@ -22,6 +29,64 @@ test('matchRoute resolves templates, parameters, 405 paths and unknown paths', (
   assert.equal(matchRoute('GET', '/v1/nope'), null);
   assert.equal(matchRoute('GET', '/v1/sandboxes/%E0%A4%A'), null);
   for (const key of Object.keys(BODY_SCHEMAS)) assert.ok(key in SCOPE_MATRIX, key);
+  assert.deepEqual(matchRoute('DELETE', '/v1/sandboxes/sb/sessions/se'), {
+    key: 'DELETE /v1/sandboxes/:id/sessions/:sessionId',
+    params: { id: 'sb', sessionId: 'se' },
+  });
+  for (const [method, p, key] of [
+    [
+      'GET',
+      '/v1/sandboxes/sb/sessions/se/output',
+      'GET /v1/sandboxes/:id/sessions/:sessionId/output',
+    ],
+    [
+      'POST',
+      '/v1/sandboxes/sb/sessions/se/wait',
+      'POST /v1/sandboxes/:id/sessions/:sessionId/wait',
+    ],
+    ['GET', '/v1/sandboxes/sb/files/raw', 'GET /v1/sandboxes/:id/files/raw'],
+    ['PUT', '/v1/sandboxes/sb/files/raw', 'PUT /v1/sandboxes/:id/files/raw'],
+    ['POST', '/v1/sandboxes/sb/files/mkdir', 'POST /v1/sandboxes/:id/files/mkdir'],
+    [
+      'GET',
+      `/v1/sandboxes/sb/artifacts/${'a'.repeat(64)}`,
+      'GET /v1/sandboxes/:id/artifacts/:sha256',
+    ],
+  ])
+    assert.equal(matchRoute(method, p).key, key, p);
+  assert.deepEqual(matchRoute('GET', '/v1/sandboxes/sb/sessions/se/wait'), {
+    key: null,
+    params: {},
+  });
+});
+
+test('a stored session takes the runner shape; text chunks decode in order per stream', () => {
+  assert.deepEqual(
+    storedSession({ sessionId: 's', name: null, exitedAt: 5, exitCode: 2, exitSignal: null }),
+    { sessionId: 's', name: null, exited: { code: 2, signal: null, at: 5 } },
+  );
+  assert.deepEqual(
+    storedSession({ sessionId: 's', exitedAt: null, exitCode: null, exitSignal: null }),
+    { sessionId: 's', exited: null },
+  );
+  const e = Buffer.from('é');
+  const b64 = (buf) => Buffer.from(buf).toString('base64');
+  const chunks = [
+    { seq: 0, stream: 'stdout', data: b64(e.subarray(0, 1)) },
+    { seq: 1, stream: 'stderr', data: b64('err') },
+    { seq: 2, stream: 'stdout', data: b64(Buffer.concat([e.subarray(1), Buffer.from('!')])) },
+    { seq: 3, stream: 'stderr', data: b64([0xe2, 0x82]) },
+  ];
+  assert.deepEqual(
+    textChunks(chunks).map((c) => [c.seq, c.stream, c.data]),
+    [
+      [0, 'stdout', ''],
+      [1, 'stderr', 'err'],
+      [2, 'stdout', 'é!'],
+      [3, 'stderr', '\ufffd'],
+    ],
+  );
+  assert.deepEqual(textChunks([]), []);
 });
 
 test('H15: Origin, Sec-Fetch-Site and foreign Host are refused with 403 before auth', async () => {
@@ -191,7 +256,16 @@ test('routing errors: 404 route, 405 method, 404 sandbox, 426 without upgrade', 
   const missing = await call(srv.port, { path: '/v1/sandboxes/sb-none', token: TOKENS.read });
   assert.equal(missing.status, 404);
   assert.equal(missing.json.error.code, 'E_NOT_FOUND');
-  for (const tail of ['evidence', 'artifacts', 'checkpoints', 'events'])
+  for (const tail of [
+    'evidence',
+    'artifacts',
+    'checkpoints',
+    'events',
+    'sessions/s',
+    'sessions/s/output',
+    'files/raw?path=/x',
+    `artifacts/${'a'.repeat(64)}`,
+  ])
     assert.equal(
       (await call(srv.port, { path: `/v1/sandboxes/sb-none/${tail}`, token: TOKENS.read })).status,
       404,

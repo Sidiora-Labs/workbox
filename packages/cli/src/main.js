@@ -28,6 +28,11 @@ Usage:
   workbox runtime install|list [--node-version v]
   workbox sandbox create|ls|inspect|rm|exec|shell|drain|events [--server URL --token T]
   workbox sandbox attach <id> <sessionId> [--server URL --token T]
+  workbox sandbox run <id> [--name n] [--wait] -- <cmd...>
+  workbox sandbox logs <id> <sessionId>
+  workbox sandbox wait <id> <sessionId> [--timeout ms]
+  workbox sandbox kill <id> <sessionId> [--signal NAME]
+  workbox sandbox cp <src> <dest>
   workbox shell <id>
   workbox agent <claude|codex> [<sandbox-id>] [-p|--prompt TEXT] [--name N]
         [--network allowlist|egress|none] [--allow HOST|@set]... [--secret REF[=ENV]]...
@@ -42,6 +47,10 @@ given): interactive on this terminal, headless with -p, or detached with --detac
 --network none). It grants the agent's API key host secret (claude ANTHROPIC_API_KEY, codex
 OPENAI_API_KEY as CODEX_API_KEY); --secret replaces it, --no-secret grants none so you can sign in
 inside the box. \`sandbox attach\` replays a session from its start and follows it to its exit.
+\`sandbox run\` starts a background session and prints {sessionId}; with --wait it waits, prints
+the output and exits with the command's code. \`logs\` prints a session's retained output, \`wait\`
+waits for its exit, \`kill\` signals it (default SIGTERM). \`cp\` copies a file into or out of a
+sandbox; one side is <id>:<path>.
 The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames"}.
 Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable/busy (and doctor on a
 host that is not ready), 5 timeout. Local sandbox commands refuse a root another engine drives.`;

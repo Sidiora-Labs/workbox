@@ -1,7 +1,23 @@
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_MAX_LINE_BYTES, Methods, v, validate } from '@workbox/protocol';
-import { checkpointCreate, createLogger, httpStatusFor, publicAsk } from '@workbox/core';
+import { pipeline } from 'node:stream/promises';
+import { StringDecoder } from 'node:string_decoder';
+import {
+  DEFAULT_MAX_LINE_BYTES,
+  Methods,
+  SESSION_READ_MAX_BYTES,
+  v,
+  validate,
+} from '@workbox/protocol';
+import {
+  artifactPath,
+  checkpointCreate,
+  createLogger,
+  httpStatusFor,
+  publicAsk,
+} from '@workbox/core';
 import { createAuth, browserGuard, SCOPE_MATRIX } from './auth.js';
 import { Metrics } from './metrics.js';
 import { WsSocket, acceptKey, rejectUpgrade } from './ws.js';
@@ -17,6 +33,20 @@ import { WsSocket, acceptKey, rejectUpgrade } from './ws.js';
 
 /** Maximum accepted request body: the protocol's frame cap. */
 export const MAX_BODY_BYTES = DEFAULT_MAX_LINE_BYTES;
+
+/** Bytes moved per runner call when a file streams in or out: the runner's `fs.read` cap. */
+export const FILE_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/** Default cap of one raw file upload (1 GiB). */
+export const DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+
+/** How long a session wait blocks by default. */
+export const DEFAULT_WAIT_MS = 30_000;
+
+/** The longest one session wait may block. */
+export const MAX_WAIT_MS = 300_000;
+
+const RAW_UPLOAD = 'PUT /v1/sandboxes/:id/files/raw';
 
 const str = (o = {}) => v.optional(v.string(o));
 const int = (o = {}) => v.optional(v.integer(o));
@@ -50,7 +80,37 @@ export const BODY_SCHEMAS = Object.freeze({
     { required: ['argv'] },
   ),
   'PUT /v1/sandboxes/:id/files': Methods['fs.write'].params,
+  'POST /v1/sandboxes/:id/files/mkdir': v.object(
+    {
+      path: v.string({ min: 1, max: 4096 }),
+      parents: v.optional(v.boolean()),
+      mode: int({ min: 0, max: 0o7777 }),
+    },
+    { required: ['path'] },
+  ),
   'POST /v1/sandboxes/:id/sessions': Methods['session.start'].params,
+  'POST /v1/sandboxes/:id/sessions/:sessionId/wait': v.object({
+    timeoutMs: int({ min: 0, max: MAX_WAIT_MS }),
+  }),
+  'POST /v1/sandboxes/:id/sessions/:sessionId/input': v.object({
+    data: Methods['session.input'].params.props.data,
+    text: str({ max: 4 * 1024 * 1024 }),
+    eof: v.optional(v.boolean()),
+  }),
+  'POST /v1/sandboxes/:id/sessions/:sessionId/signal': v.object(
+    { signal: Methods['session.signal'].params.props.signal },
+    { required: ['signal'] },
+  ),
+  'POST /v1/sandboxes/:id/sessions/:sessionId/stop': v.object({
+    graceMs: int({ min: 0, max: 600_000 }),
+  }),
+  'POST /v1/sandboxes/:id/sessions/:sessionId/resize': v.object(
+    {
+      rows: Methods['session.resize'].params.props.rows,
+      cols: Methods['session.resize'].params.props.cols,
+    },
+    { required: ['rows', 'cols'] },
+  ),
   'POST /v1/sandboxes/:id/checkpoints': Methods['broker.checkpoint.create'].params,
   'POST /v1/asks/:askId/answer': v.object({ answer: v.any() }, { required: ['answer'] }),
 });
@@ -62,7 +122,16 @@ const MUTATIONS = Object.freeze({
   'POST /v1/sandboxes/:id/drain': 'sandbox.drain',
   'POST /v1/sandboxes/:id/exec': 'sandbox.exec',
   'PUT /v1/sandboxes/:id/files': 'file.write',
+  'DELETE /v1/sandboxes/:id/files': 'file.remove',
+  'POST /v1/sandboxes/:id/files/mkdir': 'file.mkdir',
+  [RAW_UPLOAD]: 'file.upload',
   'POST /v1/sandboxes/:id/sessions': 'session.start',
+  'DELETE /v1/sandboxes/:id/sessions/:sessionId': 'session.remove',
+  'POST /v1/sandboxes/:id/sessions/:sessionId/wait': 'session.wait',
+  'POST /v1/sandboxes/:id/sessions/:sessionId/input': 'session.input',
+  'POST /v1/sandboxes/:id/sessions/:sessionId/signal': 'session.signal',
+  'POST /v1/sandboxes/:id/sessions/:sessionId/stop': 'session.stop',
+  'POST /v1/sandboxes/:id/sessions/:sessionId/resize': 'session.resize',
   'POST /v1/sandboxes/:id/checkpoints': 'checkpoint.create',
   'POST /v1/reconcile': 'reconcile',
   'POST /v1/asks/:askId/answer': 'ask.answer',
@@ -121,6 +190,7 @@ function matchParts(template, parts) {
  * @param {() => boolean} [deps.ready] readiness probe
  * @param {{heartbeatMs?: number, maxBufferedBytes?: number, maxFrameBytes?: number}} [deps.ws]
  * @param {number} [deps.maxBodyBytes]
+ * @param {number} [deps.maxUploadBytes] cap of one raw file upload (default 1 GiB)
  */
 export function createServer(deps) {
   const manager = deps.manager;
@@ -138,10 +208,14 @@ export function createServer(deps) {
   const sockets = new Set();
   let shuttingDown = false;
 
-  const handlers = routeHandlers(manager, () => {
-    refreshGauges();
-    return metrics.render();
-  });
+  const handlers = routeHandlers(
+    manager,
+    () => {
+      refreshGauges();
+      return metrics.render();
+    },
+    { maxUploadBytes: deps.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES },
+  );
 
   const server = http.createServer((req, res) => {
     handle(req, res).catch(() => res.destroy());
@@ -153,6 +227,7 @@ export function createServer(deps) {
   async function handle(req, res) {
     const ctx = {
       req,
+      res,
       started: Date.now(),
       requestId: requestIdOf(req),
       key: null,
@@ -165,20 +240,36 @@ export function createServer(deps) {
       const out = await dispatch(ctx);
       status = out.status ?? 200;
       ctx.extra = out.audit;
-      if (out.text !== undefined) {
+      if (out.stream) await sendStream(ctx, status, out);
+      else if (out.text !== undefined) {
         res.writeHead(status, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
         res.end(out.text);
       } else sendJson(res, status, out.body);
     } catch (e) {
       status = errorStatus(e);
       ctx.error = e;
-      if (status === 413) {
+      if (status === 413 || (ctx.key === RAW_UPLOAD && !req.complete)) {
         res.setHeader('connection', 'close');
         req.resume();
       }
       sendError(res, status, e, ctx.requestId);
     } finally {
       finish(ctx, status);
+    }
+  }
+
+  /**
+   * Send a streamed body after its head. A failure once the head is out cuts the connection, so
+   * the client sees a body shorter than its content-length; the request is logged as an error.
+   */
+  async function sendStream(ctx, status, out) {
+    ctx.res.writeHead(status, out.headers);
+    try {
+      await out.stream(ctx.res);
+    } catch (e) {
+      ctx.error = e;
+      ctx.cut = true;
+      ctx.res.destroy();
     }
   }
 
@@ -199,7 +290,14 @@ export function createServer(deps) {
     requireScope(ctx.principal, SCOPE_MATRIX[match.key]);
     const schema = BODY_SCHEMAS[match.key];
     const body = schema ? checked(schema, await readJson(req, maxBody)) : undefined;
-    return handlers[match.key]({ url, params: match.params, body, principal: ctx.principal });
+    return handlers[match.key]({
+      url,
+      params: match.params,
+      body,
+      principal: ctx.principal,
+      req,
+      res: ctx.res,
+    });
   }
 
   function readiness() {
@@ -231,7 +329,7 @@ export function createServer(deps) {
       ms: Date.now() - ctx.started,
       principal: ctx.principal?.id ?? null,
     };
-    if (status >= 500) logger.error('request', { ...record, err: ctx.error });
+    if (status >= 500 || ctx.cut) logger.error('request', { ...record, err: ctx.error });
     else logger.info('request', record);
     if (req.method !== 'GET' && req.method !== 'HEAD') auditRequest(ctx, status);
   }
@@ -333,7 +431,7 @@ export function createServer(deps) {
   };
 }
 
-function routeHandlers(manager, renderMetrics) {
+function routeHandlers(manager, renderMetrics, opts) {
   const page = (url) => ({ limit: num(url, 'limit'), cursor: query(url, 'cursor') });
   const known = (id) => {
     manager.get(id);
@@ -361,6 +459,8 @@ function routeHandlers(manager, renderMetrics) {
       const filePath = needQuery(url, 'path');
       if (query(url, 'list') === '1')
         return { body: await manager.request(params.id, 'fs.list', { path: filePath }) };
+      if (query(url, 'stat') === '1')
+        return { body: await manager.request(params.id, 'fs.stat', { path: filePath }) };
       return {
         body: await manager.request(params.id, 'fs.read', {
           path: filePath,
@@ -373,6 +473,36 @@ function routeHandlers(manager, renderMetrics) {
       body: await manager.request(params.id, 'fs.write', body),
       audit: { path: body.path },
     }),
+    'DELETE /v1/sandboxes/:id/files': async ({ params, url }) => {
+      const filePath = needQuery(url, 'path');
+      const recursive = query(url, 'recursive') === '1';
+      return {
+        body: await manager.request(params.id, 'fs.remove', { path: filePath, recursive }),
+        audit: { path: filePath },
+      };
+    },
+    'POST /v1/sandboxes/:id/files/mkdir': async ({ params, body }) => ({
+      body: await makeDirectory(manager, params.id, body),
+      audit: { path: body.path },
+    }),
+    'GET /v1/sandboxes/:id/files/raw': async ({ params, url }) => {
+      const file = await openSandboxFile(manager, params.id, needQuery(url, 'path'));
+      return {
+        headers: { 'content-type': 'application/octet-stream', 'content-length': file.size },
+        stream: (res) => pipeline(file.chunks, res),
+      };
+    },
+    [RAW_UPLOAD]: async ({ params, url, req }) => {
+      const filePath = needQuery(url, 'path');
+      const max = opts.maxUploadBytes;
+      if (Number(req.headers['content-length'] ?? 0) > max) throw uploadTooLarge(max);
+      const out = await writeSandboxFile(manager, params.id, filePath, requestBody(req), {
+        mode: octalQuery(url, 'mode'),
+        mkdirs: query(url, 'mkdirs') === '1',
+        maxBytes: max,
+      });
+      return { body: out, audit: { path: filePath, bytes: out.bytes } };
+    },
     'GET /v1/sandboxes/:id/sessions': async ({ params }) => ({
       body: await manager.sessions(params.id),
     }),
@@ -380,6 +510,76 @@ function routeHandlers(manager, renderMetrics) {
       const started = await manager.request(params.id, 'session.start', body);
       return { status: 201, body: started, audit: { sessionId: started.sessionId } };
     },
+    'GET /v1/sandboxes/:id/sessions/:sessionId': async ({ params }) => ({
+      body: await getSession(manager, params.id, params.sessionId),
+    }),
+    'DELETE /v1/sandboxes/:id/sessions/:sessionId': async ({ params }) => ({
+      body: await removeSession(manager, params.id, params.sessionId),
+    }),
+    'GET /v1/sandboxes/:id/sessions/:sessionId/output': async ({ params, url }) => {
+      const encoding = query(url, 'encoding') ?? 'base64';
+      if (encoding !== 'base64' && encoding !== 'text')
+        throw invalid([{ path: 'query.encoding', message: 'must be text or base64' }]);
+      const maxBytes = num(url, 'maxBytes');
+      if (maxBytes !== undefined && (maxBytes < 1 || maxBytes > SESSION_READ_MAX_BYTES))
+        throw invalid([
+          { path: 'query.maxBytes', message: `must be from 1 to ${SESSION_READ_MAX_BYTES}` },
+        ]);
+      const out = await readSessionOutput(manager, params.id, {
+        sessionId: params.sessionId,
+        fromSeq: num(url, 'fromSeq'),
+        maxBytes,
+      });
+      return { body: encoding === 'text' ? { ...out, chunks: textChunks(out.chunks) } : out };
+    },
+    'POST /v1/sandboxes/:id/sessions/:sessionId/wait': async ({ params, body, res }) => {
+      const gone = new AbortController();
+      const onClose = () => gone.abort();
+      res.once('close', onClose);
+      try {
+        const exited = await waitForSessionExit(manager, params.id, params.sessionId, {
+          timeoutMs: body.timeoutMs,
+          signal: gone.signal,
+        });
+        return { body: { sessionId: params.sessionId, exited } };
+      } finally {
+        res.off('close', onClose);
+      }
+    },
+    'POST /v1/sandboxes/:id/sessions/:sessionId/input': async ({ params, body }) => {
+      if (body.data !== undefined && body.text !== undefined)
+        throw invalid([{ path: '$.text', message: 'give data or text, not both' }]);
+      const data = body.text === undefined ? body.data : Buffer.from(body.text).toString('base64');
+      return {
+        body: await manager.request(params.id, 'session.input', {
+          sessionId: params.sessionId,
+          data,
+          eof: body.eof,
+        }),
+      };
+    },
+    'POST /v1/sandboxes/:id/sessions/:sessionId/signal': async ({ params, body }) => ({
+      body: await manager.request(params.id, 'session.signal', {
+        sessionId: params.sessionId,
+        signal: body.signal,
+      }),
+      audit: { signal: body.signal },
+    }),
+    'POST /v1/sandboxes/:id/sessions/:sessionId/stop': async ({ params, body }) => ({
+      body: await manager.request(
+        params.id,
+        'session.stop',
+        { sessionId: params.sessionId, graceMs: body.graceMs },
+        { timeoutMs: (body.graceMs ?? 0) + 30_000 },
+      ),
+    }),
+    'POST /v1/sandboxes/:id/sessions/:sessionId/resize': async ({ params, body }) => ({
+      body: await manager.request(params.id, 'session.resize', {
+        sessionId: params.sessionId,
+        rows: body.rows,
+        cols: body.cols,
+      }),
+    }),
     'GET /v1/sandboxes/:id/sessions/:sessionId/ws': () => {
       throw httpError(426, 'E_INVALID_PARAMS', 'this route requires a WebSocket upgrade');
     },
@@ -389,6 +589,13 @@ function routeHandlers(manager, renderMetrics) {
     'GET /v1/sandboxes/:id/artifacts': ({ params, url }) => ({
       body: manager.store.listArtifacts(known(params.id), page(url)),
     }),
+    'GET /v1/sandboxes/:id/artifacts/:sha256': async ({ params }) => {
+      const file = await artifactFile(manager, known(params.id), params.sha256);
+      return {
+        headers: { 'content-type': 'application/octet-stream', 'content-length': file.size },
+        stream: (res) => pipeline(fs.createReadStream(file.path), res),
+      };
+    },
     'GET /v1/sandboxes/:id/checkpoints': ({ params }) => ({
       body: { checkpoints: manager.store.listCheckpoints(known(params.id)) },
     }),
@@ -462,6 +669,244 @@ function wsCall(text, sessionId) {
   return null;
 }
 
+/**
+ * One session of a sandbox with its exit status: the runner's record while the control channel
+ * is up, the store's otherwise. `exited` is `{code, signal, at}` or null either way.
+ * @param {object} manager the core Manager @param {string} id @param {string} sessionId
+ * @returns {Promise<{sessionId: string, exited: {code: number|null, signal: string|null, at: number}|null, source: 'runner'|'store', [k: string]: unknown}>}
+ */
+export async function getSession(manager, id, sessionId) {
+  const { source, sessions } = await manager.sessions(id);
+  const row = sessions.find((s) => s.sessionId === sessionId);
+  if (!row) throw httpError(404, 'E_NOT_FOUND', `session ${sessionId} not found`, { sessionId });
+  return source === 'runner' ? { ...row, source } : { ...storedSession(row), source };
+}
+
+/**
+ * A store session row in the runner's shape: the exit columns become `exited`.
+ * @param {{exitedAt?: number|null, exitCode?: number|null, exitSignal?: string|null, [k: string]: unknown}} row
+ */
+export function storedSession(row) {
+  const { exitedAt, exitCode, exitSignal, ...rest } = row;
+  const exited =
+    exitedAt === null || exitedAt === undefined
+      ? null
+      : { code: exitCode ?? null, signal: exitSignal ?? null, at: exitedAt };
+  return { ...rest, exited };
+}
+
+/**
+ * Resolve once the session exits (with `{code, signal, at}`), or with null when `timeoutMs`
+ * passes or `signal` aborts first. The current status is read after subscribing, so an exit
+ * that already happened, or happens meanwhile, is never missed; the timeout runs from then.
+ * Every listener and timer is gone once it settles.
+ * @param {object} manager the core Manager @param {string} id @param {string} sessionId
+ * @param {{timeoutMs?: number, signal?: AbortSignal}} [opts]
+ * @returns {Promise<{code: number|null, signal: string|null, at: number}|null>}
+ */
+export function waitForSessionExit(manager, id, sessionId, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_WAIT_MS;
+  return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    let timer = null;
+    const onEvent = (evt) => {
+      if (evt.sandboxId !== id || evt.method !== 'session.exit') return;
+      if (evt.params?.sessionId !== sessionId) return;
+      const { code, signal, at } = evt.params;
+      settle(resolve, { code, signal, at });
+    };
+    const onAbort = () => settle(resolve, null);
+    function settle(fn, value) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      manager.off('event', onEvent);
+      opts.signal?.removeEventListener('abort', onAbort);
+      fn(value);
+    }
+    manager.on('event', onEvent);
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    getSession(manager, id, sessionId).then(
+      (s) => {
+        if (s.exited) settle(resolve, s.exited);
+        else if (!settled) timer = setTimeout(() => settle(resolve, null), timeoutMs);
+      },
+      (e) => settle(reject, e),
+    );
+  });
+}
+
+/**
+ * `session.read` on the sandbox's runner. A runner that predates the method answers 501
+ * E_UNSUPPORTED: the sandbox has to be recreated to read output this way.
+ * @param {object} manager @param {string} id
+ * @param {{sessionId: string, fromSeq?: number, maxBytes?: number}} params
+ * @returns {Promise<{sessionId: string, chunks: {seq: number, stream: string, data: string}[], nextSeq: number, gap: object|null, truncated: boolean, exited: object|null}>}
+ */
+export async function readSessionOutput(manager, id, params) {
+  try {
+    return await manager.request(id, 'session.read', params);
+  } catch (e) {
+    if (e?.code !== 'E_UNKNOWN_METHOD') throw e;
+    throw httpError(
+      501,
+      'E_UNSUPPORTED',
+      `sandbox ${id} runs a runner without session.read; recreate the sandbox to read session output`,
+      { method: 'session.read' },
+    );
+  }
+}
+
+/**
+ * Chunks with base64 `data` turned into UTF-8 text. Each stream decodes in order, so a character
+ * split between two of its chunks is whole in the later one; a cut-off character at the very end
+ * becomes U+FFFD.
+ * @param {{seq: number, stream: string, data: string}[]} chunks
+ */
+export function textChunks(chunks) {
+  const decoders = new Map();
+  const out = chunks.map((c) => {
+    if (!decoders.has(c.stream)) decoders.set(c.stream, new StringDecoder('utf8'));
+    return { ...c, data: decoders.get(c.stream).write(Buffer.from(c.data, 'base64')) };
+  });
+  for (const [stream, decoder] of decoders) {
+    const tail = decoder.end();
+    if (tail) out.findLast((c) => c.stream === stream).data += tail;
+  }
+  return out;
+}
+
+/**
+ * Forget an exited session in the runner and in the store. A session the runner no longer knows
+ * (it was rebooted) but the store still lists is dropped from the store.
+ * @param {object} manager @param {string} id @param {string} sessionId
+ */
+export async function removeSession(manager, id, sessionId) {
+  try {
+    await manager.request(id, 'session.remove', { sessionId });
+  } catch (e) {
+    if (e?.code !== 'E_NOT_FOUND' || !manager.store.removeSession(id, sessionId)) throw e;
+    return { sessionId, removed: true };
+  }
+  manager.store.removeSession(id, sessionId);
+  return { sessionId, removed: true };
+}
+
+/**
+ * Stat a sandbox file and read it lazily in FILE_CHUNK_BYTES pieces. `chunks` yields exactly
+ * `size` bytes, or throws once the file turns out shorter than its stat said.
+ * @param {object} manager @param {string} id @param {string} filePath
+ * @returns {Promise<{size: number, chunks: AsyncGenerator<Buffer>}>}
+ */
+export async function openSandboxFile(manager, id, filePath) {
+  const st = await manager.request(id, 'fs.stat', { path: filePath });
+  if (!st.isFile) throw invalid([{ path: 'query.path', message: `${filePath} is not a file` }]);
+  const size = st.size;
+  async function* chunks() {
+    let offset = 0;
+    while (offset < size) {
+      const length = Math.min(FILE_CHUNK_BYTES, size - offset);
+      const r = await manager.request(id, 'fs.read', { path: filePath, offset, length });
+      const buf = Buffer.from(r.data, 'base64');
+      if (buf.length === 0) break;
+      offset += buf.length;
+      yield buf;
+    }
+    if (offset < size)
+      throw httpError(409, 'E_STATE', `${filePath} shrank to ${offset} bytes while it was read`);
+  }
+  return { size, chunks: chunks() };
+}
+
+/**
+ * Write a byte source into a sandbox file through `fs.write` calls of at most FILE_CHUNK_BYTES:
+ * the first replaces the file (with `mode` and `mkdirs`), the rest append. More than `maxBytes`
+ * is a 413 E_LIMIT. On any failure the partly written file is removed.
+ * @param {object} manager @param {string} id @param {string} filePath
+ * @param {AsyncIterable<Uint8Array|string>} source
+ * @param {{mode?: number, mkdirs?: boolean, maxBytes?: number}} [opts]
+ * @returns {Promise<{path: string, bytes: number}>}
+ */
+export async function writeSandboxFile(manager, id, filePath, source, opts = {}) {
+  const max = opts.maxBytes ?? Infinity;
+  let pending = [];
+  let pendingBytes = 0;
+  let total = 0;
+  let written = false;
+  const put = async (buf) => {
+    const first = written ? {} : { mode: opts.mode, mkdirs: opts.mkdirs };
+    await manager.request(id, 'fs.write', {
+      path: filePath,
+      data: buf.toString('base64'),
+      append: written,
+      ...first,
+    });
+    written = true;
+  };
+  try {
+    for await (const piece of source) {
+      const chunk = Buffer.isBuffer(piece) ? piece : Buffer.from(piece);
+      total += chunk.length;
+      if (total > max) throw uploadTooLarge(max);
+      pending.push(chunk);
+      pendingBytes += chunk.length;
+      while (pendingBytes >= FILE_CHUNK_BYTES) {
+        const all = Buffer.concat(pending);
+        await put(all.subarray(0, FILE_CHUNK_BYTES));
+        const rest = all.subarray(FILE_CHUNK_BYTES);
+        pending = rest.length ? [rest] : [];
+        pendingBytes = rest.length;
+      }
+    }
+    if (pendingBytes > 0 || !written) await put(Buffer.concat(pending));
+  } catch (e) {
+    if (written) await manager.request(id, 'fs.remove', { path: filePath }).catch(() => undefined);
+    throw e;
+  }
+  return { path: filePath, bytes: total };
+}
+
+async function makeDirectory(manager, id, body) {
+  if (body.parents === false) {
+    const parent = path.posix.dirname(body.path);
+    const st = await manager.request(id, 'fs.stat', { path: parent }).catch((e) => {
+      if (e?.code !== 'E_NOT_FOUND') throw e;
+      throw httpError(404, 'E_NOT_FOUND', `parent directory ${parent} does not exist`, { parent });
+    });
+    if (!st.isDir) throw invalid([{ path: '$.path', message: `${parent} is not a directory` }]);
+  }
+  return manager.request(id, 'fs.mkdir', { path: body.path, mode: body.mode });
+}
+
+async function artifactFile(manager, id, sha256) {
+  if (!/^[a-f0-9]{64}$/.test(sha256))
+    throw invalid([{ path: 'params.sha256', message: 'must be 64 lowercase hex characters' }]);
+  const missing = () => httpError(404, 'E_NOT_FOUND', `artifact ${sha256} not found`, { sha256 });
+  if (!manager.store.hasArtifactRef(id, sha256)) throw missing();
+  const file = artifactPath(manager.config.paths.artifacts, sha256);
+  const st = await fs.promises.stat(file).catch(() => {
+    throw missing();
+  });
+  return { path: file, size: st.size };
+}
+
+/** The request body as chunks, without destroying the request when reading stops early. */
+async function* requestBody(req) {
+  try {
+    yield* req.iterator({ destroyOnReturn: false });
+  } catch (e) {
+    throw httpError(499, 'E_CANCELLED', `the upload was cut off: ${e.message}`);
+  }
+}
+
+function uploadTooLarge(max) {
+  return httpError(413, 'E_LIMIT', `upload exceeds ${max} bytes`, { maxBytes: max });
+}
+
 function requestIdOf(req) {
   const given = req.headers['x-request-id'];
   return typeof given === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(given) ? given : randomUUID();
@@ -503,6 +948,14 @@ function num(url, name) {
   if (!Number.isInteger(n) || n < 0)
     throw invalid([{ path: `query.${name}`, message: 'must be a non-negative integer' }]);
   return n;
+}
+
+function octalQuery(url, name) {
+  const value = url.searchParams.get(name);
+  if (value === null) return undefined;
+  if (!/^0?[0-7]{1,4}$/.test(value))
+    throw invalid([{ path: `query.${name}`, message: 'must be an octal mode such as 644' }]);
+  return Number.parseInt(value, 8);
 }
 
 function readJson(req, limit) {

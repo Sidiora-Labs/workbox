@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
-import { ProtocolError, Codes, newId, Redactor } from '@workbox/protocol';
+import {
+  ProtocolError,
+  Codes,
+  newId,
+  Redactor,
+  SESSION_READ_DEFAULT_BYTES,
+} from '@workbox/protocol';
 import { RingSpool, DEFAULT_SPOOL_BYTES } from './spool.js';
 import { spawnPty, resizePty, signalPtyGroup } from './pty.js';
 
@@ -263,6 +269,47 @@ export class SessionManager extends EventEmitter {
       replayed: replay.length,
       gap,
       truncated: replay.some((c) => c.truncated === true),
+      exited: s.exited,
+    };
+  }
+
+  /**
+   * Retained output from `fromSeq` without subscribing. Whole chunks are returned until the next
+   * one would pass `maxBytes`, and at least one when any is retained. `nextSeq` is where the next
+   * read starts; `truncated` is true when the reply stopped at `maxBytes` with more output
+   * retained, or a returned chunk lost its start to the spool limit. `gap` reports output the
+   * spool already dropped. `exited` is set only once every byte of output is in the spool.
+   * @param {string} sessionId
+   * @param {{fromSeq?: number, maxBytes?: number}} [opts]
+   */
+  read(sessionId, opts = {}) {
+    const s = this.get(sessionId);
+    const fromSeq = opts.fromSeq ?? 0;
+    const maxBytes = opts.maxBytes ?? SESSION_READ_DEFAULT_BYTES;
+    const { chunks, gap } = s.spool.replayFrom(fromSeq);
+    const picked = [];
+    let bytes = 0;
+    let more = false;
+    for (const c of chunks) {
+      if (picked.length && bytes + c.data.length > maxBytes) {
+        more = true;
+        break;
+      }
+      picked.push(c);
+      bytes += c.data.length;
+    }
+    const last = picked.at(-1);
+    const start = gap ? gap.available : fromSeq;
+    return {
+      sessionId,
+      chunks: picked.map((c) => ({
+        seq: c.seq,
+        stream: c.stream,
+        data: c.data.toString('base64'),
+      })),
+      nextSeq: last ? last.seq + 1 : Math.min(start, s.spool.nextSeq),
+      gap,
+      truncated: more || picked.some((c) => c.truncated === true),
       exited: s.exited,
     };
   }

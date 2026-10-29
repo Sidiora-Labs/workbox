@@ -212,6 +212,10 @@ export class Runner extends EventEmitter {
       ready((p) => this.sessions.remove(p.sessionId)),
     );
     guarded(
+      'session.read',
+      ready((p) => this.sessions.read(p.sessionId, p)),
+    );
+    guarded(
       'fs.read',
       ready((p) => this.fs.read(p)),
     );
