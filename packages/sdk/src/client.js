@@ -56,6 +56,10 @@ export const ROUTES = Object.freeze({
   'POST /v1/reconcile': ['WorkboxClient#reconcile'],
   'GET /v1/asks': ['WorkboxClient#listAsks'],
   'POST /v1/asks/:askId/answer': ['WorkboxClient#answerAsk'],
+  'GET /v1/whoami': ['WorkboxClient#whoami'],
+  'POST /v1/keys': ['WorkboxClient#createKey'],
+  'GET /v1/keys': ['WorkboxClient#listKeys'],
+  'DELETE /v1/keys/:keyId': ['WorkboxClient#revokeKey'],
 });
 
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'DELETE']);
@@ -193,6 +197,44 @@ export class WorkboxClient {
       body: { answer },
       signal: opts.signal,
     });
+  }
+
+  /**
+   * The key this client authenticates with: its id, scopes, binding, source and expiry.
+   * @param {CallOptions} [opts]
+   * @returns {Promise<{id: string, scopes: string[], binding: {labels?: Record<string, string>, sandboxIds?: string[]}|null, source: 'config'|'store', expiresAt: number|null}>}
+   */
+  whoami(opts = {}) {
+    return this.request('GET', '/v1/whoami', opts);
+  }
+
+  /**
+   * Mint a stored key (sent once, never retried). `labels` and `sandboxIds` bind it to the
+   * sandboxes it may see; the returned `token` is shown only in this response.
+   * @param {{name: string, scopes: string[], labels?: Record<string, string>, sandboxIds?: string[], ttlSeconds?: number}} input
+   * @param {CallOptions} [opts]
+   * @returns {Promise<{id: string, name: string, token: string, scopes: string[], binding: object|null, createdAt: number, expiresAt: number|null}>}
+   */
+  createKey(input, opts = {}) {
+    return this.request('POST', '/v1/keys', { body: input, signal: opts.signal });
+  }
+
+  /**
+   * Stored keys, without tokens or digests.
+   * @param {CallOptions} [opts]
+   * @returns {Promise<{keys: object[]}>}
+   */
+  listKeys(opts = {}) {
+    return this.request('GET', '/v1/keys', opts);
+  }
+
+  /**
+   * Revoke a stored key; it stops working at once. Revoking twice returns the same row.
+   * @param {string} keyId @param {CallOptions} [opts]
+   * @returns {Promise<object>} the revoked key
+   */
+  revokeKey(keyId, opts = {}) {
+    return this.request('DELETE', `/v1/keys/${enc(keyId)}`, opts);
   }
 }
 

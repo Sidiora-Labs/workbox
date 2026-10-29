@@ -653,7 +653,7 @@ test('a v1 database with a plaintext lease token migrates to v2 and the plaintex
     assert.ok(fs.readFileSync(file).includes(plaintext), 'v1 keeps the token in plaintext');
 
     const store = Store.open(file, { clock });
-    assert.equal(store.schemaVersion, 2);
+    assert.equal(store.schemaVersion, SCHEMA_VERSION);
     const digest = `sha256:${createHash('sha256').update(plaintext).digest('hex')}`;
     assert.equal(store.getLease(a.id).token, digest);
     assert.equal(store.getLease(b.id).token, brokerDigest);
@@ -669,7 +669,7 @@ test('a v1 database with a plaintext lease token migrates to v2 and the plaintex
         `${f} holds no plaintext`,
       );
     const again = Store.open(file, { clock });
-    assert.equal(again.schemaVersion, 2);
+    assert.equal(again.schemaVersion, SCHEMA_VERSION);
     assert.equal(again.getLease(a.id).token, digest);
     again.close();
   } finally {

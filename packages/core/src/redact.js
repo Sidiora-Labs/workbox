@@ -27,10 +27,30 @@ export const MAX_DEPTH = 64;
 /** Keys applyDeep drops rather than copies, so a redacted copy can never reach a prototype. */
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
+/**
+ * Shapes redacted in text without being registered: Workbox API key tokens (`wbk_` and 43
+ * base64url characters), so a token never reaches a log line or an audit entry.
+ */
+export const TOKEN_SHAPES = Object.freeze([{ re: /wbk_[A-Za-z0-9_-]{43}/g, label: 'api-key' }]);
+
 export { RedactStream };
 
-/** The protocol Redactor plus applyDeep, for audit entries and other JSON-like values. */
+/**
+ * The protocol Redactor plus applyDeep, for audit entries and other JSON-like values. `apply`
+ * also redacts every TOKEN_SHAPES match.
+ */
 export class Redactor extends StreamingRedactor {
+  /**
+   * @param {string} text
+   * @returns {string}
+   */
+  apply(text) {
+    if (typeof text !== 'string') return text;
+    let out = super.apply(text);
+    for (const { re, label } of TOKEN_SHAPES) out = out.replace(re, `[REDACTED:${label}]`);
+    return out;
+  }
+
   /**
    * Redact every string inside a JSON-like value, returning a new value. `__proto__`,
    * `constructor` and `prototype` keys are dropped; nesting deeper than MAX_DEPTH (including a

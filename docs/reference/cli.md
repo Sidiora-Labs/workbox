@@ -26,6 +26,9 @@ a report.
 | `workbox sandbox rm <id>`                                                                                                                            | Destroy the sandbox (`destroy` also works).                                                                                                       | no         |
 | `workbox sandbox events <id>`                                                                                                                        | Events; locally also the state transitions.                                                                                                       | no         |
 | `workbox agent <claude\|codex> [<sandbox-id>] [-p TEXT] [--name n] [--network mode] [--allow h]... [--secret REF[=ENV]]... [--no-secret] [--detach]` | Run Claude Code or Codex in a sandbox of the `agents` rootfs: interactive, one task with `-p`, or detached. See [the guide](../guides/agents.md). | no         |
+| `workbox key create --name n --scope s [--scope s]... [--label k=v]... [--sandbox id]... [--ttl 30d\|12h\|3600s]`                                    | Mint a stored API key and print it with its token, which is shown only this once. `--label` and `--sandbox` bind it; `--ttl` makes it expire.     | no         |
+| `workbox key ls`                                                                                                                                     | List stored keys (`list` also works), without tokens.                                                                                             | no         |
+| `workbox key rm <keyId>`                                                                                                                             | Revoke a stored key (`revoke` also works); it stops working on the next request.                                                                  | no         |
 | `workbox serve [--config file] [--port n] [--host h] [--tls-cert f --tls-key f]`                                                                     | Serve the REST and WebSocket API on the local engine until SIGTERM or SIGINT; HTTPS and WSS with a certificate.                                   | yes        |
 | `workbox audit verify`                                                                                                                               | Verify the audit hash chain; prints `{ok, entries, brokenAt}`.                                                                                    | yes        |
 
@@ -34,6 +37,11 @@ config file, then `127.0.0.1:8790`; see [Configuration](configuration.md#serve-c
 `--tls-cert` and `--tls-key` (or `tls` in the config file) it serves HTTPS and WSS, and SIGHUP
 reloads the certificate. Listening on an address other than loopback without TLS prints a warning
 on stderr.
+
+The `key` commands work on the local store, even while `workbox serve` runs on the same root, or
+through `--server` with an unbound `admin` key. A running server sees a key minted or revoked
+locally on its next request. What a bound key may see is described in
+[the REST reference](rest-api.md#stored-keys-and-bound-access).
 
 ## One engine per root
 

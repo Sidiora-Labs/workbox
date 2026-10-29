@@ -119,10 +119,10 @@ function envKeys(env) {
  * WebSocket server over the local engine until SIGTERM, SIGINT or `opts.signal` aborts, then a
  * graceful close. Sandboxes are detached from this process and keep running. The listen address
  * comes from the flags, then WORKBOX_PORT, then the config file, then 127.0.0.1:8790; the keys
- * are the config file's plus those from the environment. With a certificate and key (flags first,
- * then the config file's `tls`) it serves HTTPS and WSS, and SIGHUP re-reads both files; a
- * reload that fails keeps the old certificate. Listening beyond loopback without TLS warns on
- * stderr.
+ * are the config file's plus those from the environment, and the stored keys of the engine's
+ * store (`workbox key`). With a certificate and key (flags first, then the config file's `tls`)
+ * it serves HTTPS and WSS, and SIGHUP re-reads both files; a reload that fails keeps the old
+ * certificate. Listening beyond loopback without TLS warns on stderr.
  * @param {{engine: object, out: NodeJS.WritableStream, err?: NodeJS.WritableStream}} ctx
  * @param {string[]} argv
  * @param {{env?: NodeJS.ProcessEnv, signal?: AbortSignal}} [opts]
@@ -138,7 +138,7 @@ export async function serveCommand(ctx, argv, opts = {}) {
   const tlsFiles = tlsFilesOf(flags, file);
   const app = createServer({
     manager: ctx.engine.manager,
-    keys: [...file.keys, ...envKeys(env)],
+    auth: createAuth({ keys: [...file.keys, ...envKeys(env)], store: ctx.engine.store }),
     audit: ctx.engine.audit,
     serverNames: file.serverNames,
     ...(tlsFiles ? { tls: readTlsFiles(tlsFiles) } : {}),

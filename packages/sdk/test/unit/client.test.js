@@ -118,6 +118,30 @@ test('non-idempotent calls are sent once on a 503 and on a dropped connection', 
   }
 });
 
+test('key calls: create is sent once, revoke, list and whoami retry', async () => {
+  const down = await scripted([unavailable]);
+  const flaky = await scripted([unavailable, { status: 200, body: { id: 'key_1' } }]);
+  try {
+    const input = { name: 'agent', scopes: ['read'], labels: { team: 'a' }, ttlSeconds: 60 };
+    await assert.rejects(down.client({ retries: 3 }).createKey(input), (e) => e.status === 503);
+    assert.equal(down.hits.length, 1);
+    assert.equal(down.hits[0].method, 'POST');
+    assert.equal(down.hits[0].url, '/v1/keys');
+    assert.deepEqual(down.hits[0].body, input);
+    const client = flaky.client();
+    assert.deepEqual(await client.revokeKey('key/1'), { id: 'key_1' });
+    assert.deepEqual(await client.listKeys(), { id: 'key_1' });
+    assert.deepEqual(await client.whoami(), { id: 'key_1' });
+    assert.deepEqual(
+      flaky.hits.map((h) => `${h.method} ${h.url}`),
+      ['DELETE /v1/keys/key%2F1', 'DELETE /v1/keys/key%2F1', 'GET /v1/keys', 'GET /v1/whoami'],
+    );
+  } finally {
+    await down.close();
+    await flaky.close();
+  }
+});
+
 test('create carries one idempotency key and resends that same key on every retry', async () => {
   const flaky = await scripted(['drop', unavailable, { status: 201, body: { id: 'sb-1' } }]);
   const once = await scripted([{ status: 201, body: { id: 'sb-2', state: 'READY' } }]);
