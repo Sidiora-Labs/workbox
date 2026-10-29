@@ -33,6 +33,7 @@ import {
 import { createLabels, isBound, requireUnbound, sandboxVisible } from './access.js';
 import { WEBHOOK_CREATE_SCHEMA, WEBHOOK_UPDATE_SCHEMA, webhookHandlers } from './webhooks.js';
 import { Metrics } from './metrics.js';
+import { OPENAPI_PATH, SERVER_VERSION, buildOpenApi } from './openapi.js';
 import { addressKey, createFailureLimiter } from './ratelimit.js';
 import { EventHub, eventsQuery, pollEvents, streamEvents } from './streams.js';
 import { WsSocket, acceptKey, rejectUpgrade } from './ws.js';
@@ -250,6 +251,7 @@ export function createServer(deps) {
   let shuttingDown = false;
   const stopping = new AbortController();
   const hub = new EventHub(manager);
+  const openapi = buildOpenApi({ version: SERVER_VERSION });
 
   const handlers = routeHandlers(
     manager,
@@ -336,6 +338,7 @@ export function createServer(deps) {
     if (refusal) throw httpError(403, 'E_DENIED', refusal);
     const url = new URL(req.url ?? '/', 'http://workbox');
     if (url.pathname === '/healthz') return { body: { ok: true } };
+    if (url.pathname === OPENAPI_PATH) return { body: openapi };
     if (url.pathname === '/readyz') return readiness();
     const match = matchRoute(req.method ?? 'GET', url.pathname);
     if (!match) throw httpError(404, 'E_NOT_FOUND', `no route ${req.method} ${url.pathname}`);

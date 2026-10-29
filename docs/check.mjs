@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 /**
  * Documentation gate (spec task 4.2): every required page exists, docs/wb.md equals what
- * docs/gen-wb.mjs renders from `wb tools --json`, and every relative link and anchor in README.md
- * and docs/ resolves, and every page under docs/ is reachable from docs/README.md. Before trusting the staleness check it proves, on a temporary copy, that a
- * deliberately staled wb.md is caught and the current one is not.
+ * docs/gen-wb.mjs renders from `wb tools --json`, docs/reference/openapi.json equals what
+ * docs/gen-openapi.mjs renders from the server's route table, and every relative link and anchor
+ * in README.md and docs/ resolves, and every page under docs/ is reachable from docs/README.md.
+ * Before trusting the staleness checks it proves, on a temporary copy, that a deliberately staled
+ * file is caught and the current one is not.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WB_DOC, renderWbDoc } from './gen-wb.mjs';
+import { OPENAPI_DOC, renderOpenApiDoc } from './gen-openapi.mjs';
 
 const docs = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(docs, '..');
@@ -25,41 +28,86 @@ export const REQUIRED = Object.freeze([
 ]);
 
 /**
+ * @param {string} file a generated file candidate
+ * @param {string} expected the rendered content
+ * @param {string} generator the script that writes it, e.g. `docs/gen-wb.mjs`
+ * @returns {string|null} the problem, or null when the file is current
+ */
+export function staleness(file, expected, generator) {
+  const actual = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  if (actual === expected) return null;
+  const name = path.relative(root, file);
+  return `${name} is stale or missing; run: node ${generator}`;
+}
+
+/**
  * @param {string} file a wb.md candidate
  * @param {string} expected the rendered reference
  * @returns {string|null} the problem, or null when the file is current
  */
 export function wbStaleness(file, expected) {
-  const actual = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
-  if (actual === expected) return null;
-  const name = path.relative(root, file);
-  return `${name} is stale or missing; run: node docs/gen-wb.mjs`;
+  return staleness(file, expected, 'docs/gen-wb.mjs');
 }
 
 /**
- * Self-test of the staleness check on a temporary copy: a wb.md with one command row removed must
- * be flagged, an exact copy must pass.
- * @param {string} expected
+ * @param {string} file an openapi.json candidate
+ * @param {string} expected the rendered document
+ * @returns {string|null} the problem, or null when the file is current
+ */
+export function openApiStaleness(file, expected) {
+  return staleness(file, expected, 'docs/gen-openapi.mjs');
+}
+
+/**
+ * The first line of `text` that starts with `prefix` removed.
+ * @param {string} text @param {string} prefix
+ * @returns {string|null} null when no line starts with it
+ */
+function withoutLine(text, prefix) {
+  const lines = text.split('\n');
+  const at = lines.findIndex((l) => l.trimStart().startsWith(prefix));
+  return at === -1 ? null : lines.filter((_, i) => i !== at).join('\n');
+}
+
+/**
+ * Self-test of one staleness check on a temporary copy: a copy with one line removed must be
+ * flagged, an exact copy must pass.
+ * @param {string} name the file's base name
+ * @param {string} expected the rendered content
+ * @param {(file: string, expected: string) => string|null} staleCheck
+ * @param {string} prefix start of the line the staled copy loses
  * @returns {string[]} problems with the checker itself
  */
-export function selfTest(expected) {
+export function selfTestOne(name, expected, staleCheck, prefix) {
   const problems = [];
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbox-docs-check-'));
-  const copy = path.join(dir, 'wb.md');
+  const copy = path.join(dir, name);
   try {
-    const rows = expected.split('\n');
-    const row = rows.findIndex((l) => l.startsWith('| `'));
-    if (row === -1) problems.push('self-test: the rendered wb.md has no command rows');
-    fs.writeFileSync(copy, rows.filter((_, i) => i !== row).join('\n'));
-    if (wbStaleness(copy, expected) === null)
-      problems.push('self-test: a staled wb.md copy was not detected');
+    const staled = withoutLine(expected, prefix);
+    if (staled === null) problems.push(`self-test: the rendered ${name} has no ${prefix} line`);
+    fs.writeFileSync(copy, staled ?? '');
+    if (staleCheck(copy, expected) === null)
+      problems.push(`self-test: a staled ${name} copy was not detected`);
     fs.writeFileSync(copy, expected);
-    if (wbStaleness(copy, expected) !== null)
-      problems.push('self-test: a current wb.md copy was reported stale');
+    if (staleCheck(copy, expected) !== null)
+      problems.push(`self-test: a current ${name} copy was reported stale`);
   } finally {
     if (fs.existsSync(copy)) fs.unlinkSync(copy);
     fs.rmdirSync(dir);
   }
+  return problems;
+}
+
+/**
+ * Self-test of both staleness checks: wb.md loses a command row, openapi.json an operationId.
+ * @param {string} expected the rendered wb.md
+ * @param {string} [openapi] the rendered openapi.json
+ * @returns {string[]} problems with the checker itself
+ */
+export function selfTest(expected, openapi) {
+  const problems = selfTestOne('wb.md', expected, wbStaleness, '| `');
+  if (openapi !== undefined)
+    problems.push(...selfTestOne('openapi.json', openapi, openApiStaleness, '"operationId"'));
   return problems;
 }
 
@@ -189,9 +237,10 @@ export async function check() {
   for (const name of REQUIRED)
     if (!fs.existsSync(path.join(docs, name))) problems.push(`missing docs/${name}`);
   const expected = await renderWbDoc();
-  problems.push(...selfTest(expected));
-  const stale = wbStaleness(WB_DOC, expected);
-  if (stale) problems.push(stale);
+  const openapi = await renderOpenApiDoc();
+  problems.push(...selfTest(expected, openapi));
+  for (const stale of [wbStaleness(WB_DOC, expected), openApiStaleness(OPENAPI_DOC, openapi)])
+    if (stale) problems.push(stale);
   const files = collectMd();
   problems.push(...unreachablePages(files));
   for (const file of files) {

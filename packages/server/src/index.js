@@ -64,6 +64,19 @@ export {
   WEBHOOK_TYPE_PATTERN,
   DELIVERY_STATUSES,
 } from './webhooks.js';
+export {
+  buildOpenApi,
+  routeDocProblems,
+  allRoutes,
+  openApiPath,
+  patternOf,
+  toJsonSchema,
+  ROUTE_DOCS,
+  PUBLIC_ROUTES,
+  OPENAPI_PATH,
+  SERVER_VERSION,
+  BASE64_PATTERN,
+} from './openapi.js';
 export { WsSocket, WS_DEFAULTS, acceptKey, rejectUpgrade } from './ws.js';
 export { Metrics } from './metrics.js';
 export { AUTH_FAILURE_DEFAULTS, addressKey, createFailureLimiter } from './ratelimit.js';
