@@ -6,6 +6,7 @@ import { openLocalEngine } from './local.js';
 import { serveCommand } from './serve.js';
 import { agentCommand } from './agent.js';
 import { keyCommand } from './keys.js';
+import { webhookCommand } from './webhooks.js';
 import {
   connectionOpts,
   withoutConnection,
@@ -36,6 +37,9 @@ Usage:
   workbox key create --name N --scope S [--scope S]... [--label k=v]... [--sandbox ID]...
         [--ttl 30d|12h|3600s] [--server URL --token T]
   workbox key ls|rm <keyId> [--server URL --token T]
+  workbox webhook add <url> [--type T]... [--sandbox ID] [--label k=v]... [--description D]
+        [--server URL --token T]
+  workbox webhook ls|rm|test|rotate|deliveries <webhookId> [--server URL --token T]
   workbox serve [--config server.json] [--port 8790] [--host 127.0.0.1]
         [--tls-cert cert.pem --tls-key key.pem]
   workbox audit verify
@@ -49,6 +53,9 @@ OPENAI_API_KEY as CODEX_API_KEY); --secret replaces it, --no-secret grants none 
 inside the box. \`sandbox attach\` replays a session from its start and follows it to its exit.
 \`key create\` mints a stored API key and prints its token once; --label and --sandbox bind it to
 the sandboxes it may see, --ttl makes it expire, and \`key rm\` revokes it at once.
+\`webhook add\` registers an HTTPS endpoint that gets a signed POST for every matching event
+(--type session.exited or session.*; none means every type) and prints its signing secret once;
+\`webhook test\` queues a webhook.test delivery and \`webhook deliveries\` lists the attempts.
 The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames",
 "tls": {"certFile", "keyFile"}}. With TLS, serve answers HTTPS and WSS and SIGHUP reloads the certificate.
 Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable/busy (and doctor on a
@@ -73,6 +80,7 @@ const COMMANDS = {
   doctor: doctorCommand,
   agent: agentCommand,
   key: keyCommand,
+  webhook: webhookCommand,
   sandbox: sandboxCommand,
   shell: shellCommand,
   rootfs: rootfsCommand,

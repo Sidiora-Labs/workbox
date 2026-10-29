@@ -6,7 +6,7 @@ import { newId } from '@workbox/protocol';
 import { E, WorkboxError } from './errors.js';
 import { States, Health, assertTransition } from './sandbox/state.js';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const TOKEN_DIGEST = /^sha256:[0-9a-f]{64}$/;
 const KEY_DIGEST = /^[0-9a-f]{64}$/;
@@ -172,6 +172,44 @@ const MIGRATIONS = [
     created_by TEXT
   );
   CREATE INDEX api_keys_created ON api_keys(created_at, id);
+  `,
+  // v4: webhooks and their deliveries. A delivery keeps a snapshot of its event, so pruning the
+  // event log never breaks a retry.
+  `
+  CREATE TABLE webhooks (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    types TEXT NOT NULL,
+    sandbox_id TEXT,
+    labels TEXT,
+    description TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    owner_key TEXT,
+    binding TEXT,
+    last_seq INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    disabled_reason TEXT
+  );
+  CREATE INDEX webhooks_created ON webhooks(created_at, id);
+  CREATE TABLE webhook_deliveries (
+    id TEXT PRIMARY KEY,
+    webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+    event_seq INTEGER,
+    event TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_at INTEGER,
+    last_status INTEGER,
+    last_error TEXT,
+    created_at INTEGER NOT NULL,
+    delivered_at INTEGER
+  );
+  CREATE INDEX webhook_deliveries_due ON webhook_deliveries(status, next_at);
+  CREATE INDEX webhook_deliveries_webhook ON webhook_deliveries(webhook_id, id);
+  CREATE UNIQUE INDEX webhook_deliveries_event ON webhook_deliveries(webhook_id, event_seq)
+    WHERE event_seq IS NOT NULL;
   `,
 ];
 
@@ -1168,6 +1206,351 @@ export class Store {
       .run(now, id, now - minIntervalMs);
     return Number(r.changes) > 0;
   }
+
+  // ── webhooks ──
+
+  /**
+   * Store a webhook. Its cursor starts at the newest logged event, so it receives only events
+   * logged after it. The secret is kept for signing and is never part of a returned row.
+   * @param {{url: string, secret: string, types?: string[], sandboxId?: string|null, labels?: Record<string, string>|null, description?: string|null, ownerKey?: string|null, binding?: Binding|null}} w
+   * @returns {WebhookRow}
+   */
+  createWebhook(w) {
+    if (typeof w.url !== 'string' || w.url === '')
+      throw E.invalid('url is required', { field: 'url' });
+    if (typeof w.secret !== 'string' || w.secret === '')
+      throw E.invalid('secret is required', { field: 'secret' });
+    typeFilter(w.types);
+    const now = this.clock();
+    const id = `wh_${newId(now)}`;
+    return this.tx(() => {
+      this.db
+        .prepare(
+          `INSERT INTO webhooks (id, url, secret, types, sandbox_id, labels, description, enabled, owner_key, binding, last_seq, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, (SELECT COALESCE(MAX(seq), 0) FROM events), ?, ?)`,
+        )
+        .run(
+          id,
+          w.url,
+          w.secret,
+          JSON.stringify(w.types ?? []),
+          w.sandboxId ?? null,
+          w.labels && Object.keys(w.labels).length ? JSON.stringify(w.labels) : null,
+          w.description ?? null,
+          w.ownerKey ?? null,
+          w.binding ? JSON.stringify(w.binding) : null,
+          now,
+          now,
+        );
+      return this.getWebhook(id);
+    });
+  }
+
+  /** @param {string} id @returns {WebhookRow|null} */
+  getWebhook(id) {
+    const r = this.db.prepare(`SELECT ${WEBHOOK_COLS} FROM webhooks WHERE id = ?`).get(id);
+    return r ? webhookRow(r) : null;
+  }
+
+  /** The signing secret of a webhook, or null when there is no such webhook. @param {string} id */
+  getWebhookSecret(id) {
+    const r = this.db.prepare(`SELECT secret FROM webhooks WHERE id = ?`).get(id);
+    return r ? r.secret : null;
+  }
+
+  /**
+   * At most `limit` webhooks (default and cap 1000) in creation order, after webhook `after`;
+   * with `ownerKey`, only those that principal created.
+   * @param {{ownerKey?: string, after?: string, limit?: number}} [opts]
+   * @returns {WebhookRow[]}
+   */
+  listWebhooks(opts = {}) {
+    const clauses = [];
+    const params = [];
+    if (opts.ownerKey !== undefined) {
+      clauses.push('owner_key = ?');
+      params.push(opts.ownerKey);
+    }
+    if (opts.after) {
+      clauses.push('(created_at, id) > (SELECT created_at, id FROM webhooks WHERE id = ?)');
+      params.push(opts.after);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    return this.db
+      .prepare(`SELECT ${WEBHOOK_COLS} FROM webhooks ${where} ORDER BY created_at, id LIMIT ?`)
+      .all(...params, pageSize(opts.limit, MAX_PAGE))
+      .map(webhookRow);
+  }
+
+  /**
+   * Change a webhook. `enabled: true` clears `disabledReason`; `enabled: false` records the given
+   * `disabledReason` (or none). An unknown id is E_NOT_FOUND.
+   * @param {string} id
+   * @param {{url?: string, secret?: string, types?: string[], description?: string|null, enabled?: boolean, disabledReason?: string|null}} patch
+   * @returns {WebhookRow}
+   */
+  updateWebhook(id, patch) {
+    const sets = [];
+    const params = [];
+    const set = (column, value) => {
+      sets.push(`${column} = ?`);
+      params.push(value);
+    };
+    if (patch.url !== undefined) set('url', patch.url);
+    if (patch.secret !== undefined) set('secret', patch.secret);
+    if (patch.types !== undefined) {
+      typeFilter(patch.types);
+      set('types', JSON.stringify(patch.types));
+    }
+    if (patch.description !== undefined) set('description', patch.description);
+    if (patch.enabled !== undefined) {
+      set('enabled', patch.enabled ? 1 : 0);
+      set('disabled_reason', patch.enabled ? null : (patch.disabledReason ?? null));
+    }
+    return this.tx(() => {
+      if (!this.getWebhook(id)) throw E.notFound(`webhook ${id} not found`, { webhookId: id });
+      set('updated_at', this.clock());
+      this.db.prepare(`UPDATE webhooks SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
+      return this.getWebhook(id);
+    });
+  }
+
+  /**
+   * Delete a webhook and its deliveries. An unknown id is E_NOT_FOUND.
+   * @param {string} id
+   * @returns {WebhookRow} the deleted webhook
+   */
+  deleteWebhook(id) {
+    return this.tx(() => {
+      const row = this.getWebhook(id);
+      if (!row) throw E.notFound(`webhook ${id} not found`, { webhookId: id });
+      this.db.prepare(`DELETE FROM webhook_deliveries WHERE webhook_id = ?`).run(id);
+      this.db.prepare(`DELETE FROM webhooks WHERE id = ?`).run(id);
+      return row;
+    });
+  }
+
+  /**
+   * Enabled webhooks whose owner can still act: a webhook owned by a stored key that is revoked
+   * or expired is left out.
+   * @returns {WebhookRow[]}
+   */
+  listActiveWebhooks() {
+    return this.db
+      .prepare(
+        `SELECT ${WEBHOOK_COLS} FROM webhooks w WHERE ${ACTIVE_WEBHOOK} ORDER BY created_at, id`,
+      )
+      .all(this.clock())
+      .map(webhookRow);
+  }
+
+  /**
+   * Queue a delivery for every event after the webhook's cursor that it matches (its types, its
+   * sandbox, its labels and the binding copied from its creator) and advance the cursor, in one
+   * transaction. At most `limit` events (default and cap 1000) per call; `more` says another call
+   * has events left.
+   * @param {string} id
+   * @param {{limit?: number}} [opts]
+   * @returns {{queued: number, more: boolean}}
+   */
+  enqueueWebhookEvents(id, opts = {}) {
+    const limit = pageSize(opts.limit, MAX_PAGE);
+    return this.tx(() => {
+      const w = this.db
+        .prepare(
+          `SELECT id, types, sandbox_id, labels, binding, last_seq FROM webhooks WHERE id = ?`,
+        )
+        .get(id);
+      if (!w) return { queued: 0, more: false };
+      const top = this.db.prepare(`SELECT COALESCE(MAX(seq), 0) AS top FROM events`).get().top;
+      if (top <= w.last_seq) return { queued: 0, more: false };
+      const clauses = ['seq > ?', 'seq <= ?'];
+      const params = [w.last_seq, top];
+      const add = (filter) => {
+        if (!filter) return;
+        clauses.push(filter.sql);
+        params.push(...filter.params);
+      };
+      if (w.sandbox_id !== null) add({ sql: 'sandbox_id = ?', params: [w.sandbox_id] });
+      add(typeFilter(parseColumn(w.types, 'webhooks', id, 'types')));
+      if (w.labels !== null)
+        add(
+          bindingFilter(
+            { labels: parseColumn(w.labels, 'webhooks', id, 'labels') },
+            { sandboxColumn: 'sandbox_id' },
+          ),
+        );
+      if (w.binding !== null)
+        add(
+          bindingFilter(parseColumn(w.binding, 'webhooks', id, 'binding'), {
+            sandboxColumn: 'sandbox_id',
+          }),
+        );
+      const rows = this.db
+        .prepare(
+          `SELECT ${EVENT_COLS} FROM events WHERE ${clauses.join(' AND ')} ORDER BY seq LIMIT ?`,
+        )
+        .all(...params, limit)
+        .map(eventRow);
+      const now = this.clock();
+      const insert = this.db.prepare(
+        `INSERT OR IGNORE INTO webhook_deliveries (id, webhook_id, event_seq, event, status, attempts, next_at, created_at) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)`,
+      );
+      let queued = 0;
+      for (const e of rows)
+        queued += Number(
+          insert.run(`msg_${newId(now)}`, id, e.seq, JSON.stringify(e), now, now).changes,
+        );
+      const more = rows.length === limit;
+      this.db
+        .prepare(`UPDATE webhooks SET last_seq = ? WHERE id = ?`)
+        .run(more ? rows[rows.length - 1].seq : top, id);
+      return { queued, more };
+    });
+  }
+
+  /**
+   * Queue one delivery of `event` outside the event log (a test delivery). An unknown webhook is
+   * E_NOT_FOUND.
+   * @param {string} webhookId
+   * @param {WebhookEvent} event
+   * @returns {WebhookDeliveryRow}
+   */
+  queueWebhookDelivery(webhookId, event) {
+    return this.tx(() => {
+      if (!this.getWebhook(webhookId))
+        throw E.notFound(`webhook ${webhookId} not found`, { webhookId });
+      const now = this.clock();
+      const id = `msg_${newId(now)}`;
+      this.db
+        .prepare(
+          `INSERT INTO webhook_deliveries (id, webhook_id, event_seq, event, status, attempts, next_at, created_at) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)`,
+        )
+        .run(
+          id,
+          webhookId,
+          Number.isInteger(event.seq) ? event.seq : null,
+          JSON.stringify(event),
+          now,
+          now,
+        );
+      return this.getWebhookDelivery(id);
+    });
+  }
+
+  /**
+   * Take up to `limit` deliveries that are due, of active webhooks (see listActiveWebhooks), and
+   * hold each for `leaseMs` by moving its `nextAt` forward: a process that dies mid-request
+   * leaves the delivery to be sent again once the lease ends.
+   * @param {{limit?: number, leaseMs: number}} opts
+   * @returns {WebhookDeliveryRow[]} the rows as they were before the lease
+   */
+  claimWebhookDeliveries(opts) {
+    const now = this.clock();
+    return this.tx(() => {
+      const rows = this.db
+        .prepare(
+          `SELECT ${DELIVERY_COLS_D} FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id WHERE d.status = 'pending' AND d.next_at <= ? AND ${ACTIVE_WEBHOOK} ORDER BY d.next_at, d.id LIMIT ?`,
+        )
+        .all(now, now, pageSize(opts.limit, 100))
+        .map(deliveryRow);
+      const lease = this.db.prepare(`UPDATE webhook_deliveries SET next_at = ? WHERE id = ?`);
+      for (const d of rows) lease.run(now + opts.leaseMs, d.id);
+      return rows;
+    });
+  }
+
+  /** When the next pending delivery of an active webhook is due (ms), or null. @returns {number|null} */
+  nextWebhookDeliveryAt() {
+    const r = this.db
+      .prepare(
+        `SELECT MIN(d.next_at) AS at FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id WHERE d.status = 'pending' AND ${ACTIVE_WEBHOOK}`,
+      )
+      .get(this.clock());
+    return r.at ?? null;
+  }
+
+  /**
+   * Record one delivery attempt: it counts toward `attempts`, and `status` is where it leaves the
+   * delivery (`pending` with the next attempt's `nextAt`, `delivered` or `failed`).
+   * @param {string} id
+   * @param {{status: 'pending'|'delivered'|'failed', nextAt?: number|null, lastStatus?: number|null, lastError?: string|null}} outcome
+   * @returns {WebhookDeliveryRow}
+   */
+  recordWebhookAttempt(id, outcome) {
+    if (!DELIVERY_STATUSES.includes(outcome.status))
+      throw E.invalid(`unknown delivery status ${outcome.status}`, { status: outcome.status });
+    const now = this.clock();
+    const r = this.db
+      .prepare(
+        `UPDATE webhook_deliveries SET attempts = attempts + 1, status = ?, next_at = ?, last_status = ?, last_error = ?, delivered_at = CASE WHEN ? = 'delivered' THEN ? ELSE delivered_at END WHERE id = ?`,
+      )
+      .run(
+        outcome.status,
+        outcome.status === 'pending' ? (outcome.nextAt ?? now) : null,
+        outcome.lastStatus ?? null,
+        outcome.lastError ?? null,
+        outcome.status,
+        now,
+        id,
+      );
+    if (!Number(r.changes)) throw E.notFound(`delivery ${id} not found`, { deliveryId: id });
+    return this.getWebhookDelivery(id);
+  }
+
+  /** @param {string} id @returns {WebhookDeliveryRow|null} */
+  getWebhookDelivery(id) {
+    const r = this.db
+      .prepare(`SELECT ${DELIVERY_COLS} FROM webhook_deliveries WHERE id = ?`)
+      .get(id);
+    return r ? deliveryRow(r) : null;
+  }
+
+  /**
+   * One page of a webhook's deliveries, newest first; pass the returned `cursor` back for the
+   * next. `status` keeps only deliveries in that state.
+   * @param {string} webhookId
+   * @param {{status?: 'pending'|'delivered'|'failed', limit?: number, cursor?: string|null}} [opts]
+   * @returns {{items: WebhookDeliveryRow[], cursor: string|null, complete: boolean}}
+   */
+  listWebhookDeliveries(webhookId, opts = {}) {
+    const limit = pageSize(opts.limit, 50);
+    const clauses = ['webhook_id = ?'];
+    const params = [webhookId];
+    if (opts.status !== undefined) {
+      if (!DELIVERY_STATUSES.includes(opts.status))
+        throw E.invalid(`status must be one of ${DELIVERY_STATUSES.join(', ')}`, {
+          status: opts.status,
+        });
+      clauses.push('status = ?');
+      params.push(opts.status);
+    }
+    if (opts.cursor) {
+      clauses.push('id < ?');
+      params.push(opts.cursor);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT ${DELIVERY_COLS} FROM webhook_deliveries WHERE ${clauses.join(' AND ')} ORDER BY id DESC LIMIT ?`,
+      )
+      .all(...params, limit + 1);
+    const complete = rows.length <= limit;
+    const items = rows.slice(0, limit).map(deliveryRow);
+    return { items, cursor: complete ? null : items[items.length - 1].id, complete };
+  }
+
+  /**
+   * Send a delivery again as soon as possible, whatever its state. Its attempt count is kept: a
+   * delivery past its last retry gets this one attempt. An unknown id is E_NOT_FOUND.
+   * @param {string} id
+   * @returns {WebhookDeliveryRow}
+   */
+  retryWebhookDelivery(id) {
+    const r = this.db
+      .prepare(`UPDATE webhook_deliveries SET status = 'pending', next_at = ? WHERE id = ?`)
+      .run(this.clock(), id);
+    if (!Number(r.changes)) throw E.notFound(`delivery ${id} not found`, { deliveryId: id });
+    return this.getWebhookDelivery(id);
+  }
 }
 
 /**
@@ -1186,6 +1569,44 @@ export class Store {
  * @property {number|null} revokedAt
  * @property {number|null} lastUsedAt
  * @property {string|null} createdBy
+ */
+
+/**
+ * @typedef {object} WebhookRow
+ * @property {string} id
+ * @property {string} url
+ * @property {string[]} types event types and `prefix.*` patterns; empty matches every type
+ * @property {string|null} sandboxId only this sandbox's events
+ * @property {Record<string, string>|null} labels only events of sandboxes carrying every label
+ * @property {string|null} description
+ * @property {boolean} enabled
+ * @property {string|null} disabledReason why the webhook was disabled, when it was not by request
+ * @property {string|null} ownerKey the principal that created it
+ * @property {Binding|null} binding the creator's binding, which limits the events it receives
+ * @property {number} lastSeq the event seq it has queued deliveries up to
+ * @property {number} createdAt
+ * @property {number} updatedAt
+ */
+
+/**
+ * An event as a webhook delivers it: an event log row, or a test event with a null `seq` and
+ * `sandboxId`.
+ * @typedef {{seq: number|null, sandboxId: string|null, type: string, source: string, payload: object|null, causation: string|null, at: number}} WebhookEvent
+ */
+
+/**
+ * @typedef {object} WebhookDeliveryRow
+ * @property {string} id the `webhook-id` header, the same on every attempt
+ * @property {string} webhookId
+ * @property {number|null} eventSeq null for a test delivery
+ * @property {WebhookEvent} event the event as it was when queued
+ * @property {'pending'|'delivered'|'failed'} status
+ * @property {number} attempts
+ * @property {number|null} nextAt when a pending delivery is next attempted
+ * @property {number|null} lastStatus HTTP status of the last attempt, null when none answered
+ * @property {string|null} lastError
+ * @property {number} createdAt
+ * @property {number|null} deliveredAt
  */
 
 /**
@@ -1227,6 +1648,19 @@ export function bindingFilter(binding, opts = {}) {
 Store.bindingFilter = bindingFilter;
 
 const KEY_COLS = `id, name, scopes, binding, created_at, expires_at, revoked_at, last_used_at, created_by`;
+
+const WEBHOOK_COLS = `id, url, types, sandbox_id, labels, description, enabled, owner_key, binding, last_seq, created_at, updated_at, disabled_reason`;
+
+const DELIVERY_COLS = `id, webhook_id, event_seq, event, status, attempts, next_at, last_status, last_error, created_at, delivered_at`;
+const DELIVERY_COLS_D = DELIVERY_COLS.split(', ')
+  .map((c) => `d.${c}`)
+  .join(', ');
+
+/** The states of a webhook delivery. */
+const DELIVERY_STATUSES = Object.freeze(['pending', 'delivered', 'failed']);
+
+/** A webhook (aliased `w`) that is enabled and whose owner is not a revoked or expired stored key. */
+const ACTIVE_WEBHOOK = `w.enabled = 1 AND NOT EXISTS (SELECT 1 FROM api_keys k WHERE k.id = w.owner_key AND (k.revoked_at IS NOT NULL OR (k.expires_at IS NOT NULL AND k.expires_at <= ?)))`;
 
 const digestOf = (s) => createHash('sha256').update(s).digest();
 
@@ -1388,6 +1822,40 @@ function apiKeyRow(r) {
     revokedAt: r.revoked_at,
     lastUsedAt: r.last_used_at,
     createdBy: r.created_by,
+  };
+}
+
+function webhookRow(r) {
+  return {
+    id: r.id,
+    url: r.url,
+    types: parseColumn(r.types, 'webhooks', r.id, 'types'),
+    sandboxId: r.sandbox_id,
+    labels: r.labels === null ? null : parseColumn(r.labels, 'webhooks', r.id, 'labels'),
+    description: r.description,
+    enabled: r.enabled === 1,
+    disabledReason: r.disabled_reason,
+    ownerKey: r.owner_key,
+    binding: r.binding === null ? null : parseColumn(r.binding, 'webhooks', r.id, 'binding'),
+    lastSeq: r.last_seq,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function deliveryRow(r) {
+  return {
+    id: r.id,
+    webhookId: r.webhook_id,
+    eventSeq: r.event_seq,
+    event: parseColumn(r.event, 'webhook_deliveries', r.id, 'event'),
+    status: r.status,
+    attempts: r.attempts,
+    nextAt: r.next_at,
+    lastStatus: r.last_status,
+    lastError: r.last_error,
+    createdAt: r.created_at,
+    deliveredAt: r.delivered_at,
   };
 }
 

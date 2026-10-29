@@ -301,3 +301,68 @@ test('events.retentionDays defaults to 30 and must be a whole number of days in 
     (e) => e.code === 'E_INVALID_PARAMS' && e.data.unknown.includes('events.retention'),
   );
 });
+
+test('webhooks defaults refuse private and plain-http targets; every field is checked', () => {
+  const cfg = loadConfig({ env: {} });
+  assert.deepEqual(cfg.webhooks, {
+    allowPrivate: false,
+    allowHttp: false,
+    timeoutMs: 15_000,
+    concurrency: 8,
+    retryDelaysMs: [5_000, 300_000, 1_800_000, 7_200_000, 18_000_000, 36_000_000, 36_000_000],
+  });
+  assert.ok(Object.isFrozen(cfg.webhooks.retryDelaysMs));
+  const local = loadConfig({
+    env: {},
+    overrides: {
+      webhooks: { allowPrivate: true, allowHttp: true, retryDelaysMs: [10], concurrency: 2 },
+    },
+  }).webhooks;
+  assert.deepEqual(local, {
+    allowPrivate: true,
+    allowHttp: true,
+    timeoutMs: 15_000,
+    concurrency: 2,
+    retryDelaysMs: [10],
+  });
+  assert.deepEqual(
+    loadConfig({ env: {}, overrides: { webhooks: { retryDelaysMs: [] } } }).webhooks.retryDelaysMs,
+    [],
+  );
+  const bad = {
+    'webhooks.allowPrivate': { allowPrivate: 'yes' },
+    'webhooks.allowHttp': { allowHttp: 1 },
+    'webhooks.timeoutMs': { timeoutMs: 99 },
+    'webhooks.concurrency': { concurrency: 0 },
+  };
+  for (const [name, webhooks] of Object.entries(bad))
+    assert.throws(
+      () => loadConfig({ env: {}, overrides: { webhooks } }),
+      (e) => e.code === 'E_INVALID_PARAMS' && e.message.includes(`${name} must be`),
+      name,
+    );
+  assert.throws(
+    () =>
+      loadConfig({
+        env: {},
+        overrides: { webhooks: { concurrency: MAXIMA.webhookConcurrency + 1 } },
+      }),
+    (e) => /webhooks\.concurrency must be/.test(e.message),
+  );
+  for (const retryDelaysMs of [
+    'often',
+    [-1],
+    [1.5],
+    [MAXIMA.webhookDelayMs + 1],
+    new Array(MAXIMA.webhookRetries + 1).fill(1),
+  ])
+    assert.throws(
+      () => loadConfig({ env: {}, overrides: { webhooks: { retryDelaysMs } } }),
+      (e) => e.code === 'E_INVALID_PARAMS' && /webhooks\.retryDelaysMs must be/.test(e.message),
+      String(retryDelaysMs),
+    );
+  assert.throws(
+    () => loadConfig({ env: {}, overrides: { webhooks: { allowLocal: true } } }),
+    (e) => e.code === 'E_INVALID_PARAMS' && e.data.unknown.includes('webhooks.allowLocal'),
+  );
+});

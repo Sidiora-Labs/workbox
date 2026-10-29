@@ -3,6 +3,7 @@ import https from 'node:https';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_MAX_LINE_BYTES, Methods, v, validate } from '@workbox/protocol';
 import {
+  DEFAULTS,
   E,
   Redactor,
   checkpointCreate,
@@ -19,6 +20,7 @@ import {
   SCOPE_MATRIX,
 } from './auth.js';
 import { createLabels, isBound, requireUnbound, sandboxVisible } from './access.js';
+import { WEBHOOK_CREATE_SCHEMA, WEBHOOK_UPDATE_SCHEMA, webhookHandlers } from './webhooks.js';
 import { Metrics } from './metrics.js';
 import { addressKey, createFailureLimiter } from './ratelimit.js';
 import { WsSocket, acceptKey, rejectUpgrade } from './ws.js';
@@ -72,6 +74,8 @@ export const BODY_SCHEMAS = Object.freeze({
   'POST /v1/sandboxes/:id/checkpoints': Methods['broker.checkpoint.create'].params,
   'POST /v1/asks/:askId/answer': v.object({ answer: v.any() }, { required: ['answer'] }),
   'POST /v1/keys': KEY_CREATE_SCHEMA,
+  'POST /v1/webhooks': WEBHOOK_CREATE_SCHEMA,
+  'PATCH /v1/webhooks/:webhookId': WEBHOOK_UPDATE_SCHEMA,
 });
 
 /** Audit action of every mutating route. */
@@ -87,6 +91,12 @@ const MUTATIONS = Object.freeze({
   'POST /v1/asks/:askId/answer': 'ask.answer',
   'POST /v1/keys': 'key.create',
   'DELETE /v1/keys/:keyId': 'key.revoke',
+  'POST /v1/webhooks': 'webhook.create',
+  'PATCH /v1/webhooks/:webhookId': 'webhook.update',
+  'DELETE /v1/webhooks/:webhookId': 'webhook.delete',
+  'POST /v1/webhooks/:webhookId/rotate-secret': 'webhook.rotate',
+  'POST /v1/webhooks/:webhookId/test': 'webhook.test',
+  'POST /v1/webhooks/:webhookId/deliveries/:deliveryId/retry': 'webhook.retry',
 });
 
 const ROUTES = Object.keys(SCOPE_MATRIX).map((key) => {
@@ -149,6 +159,10 @@ function matchParts(template, parts) {
  * @param {{max?: number, windowMs?: number, maxEntries?: number}} [deps.authFailures] failed
  *   authentications one address may make per window before it is answered 429 (default 20 per
  *   60 s)
+ * @param {{config: object, notify: () => void}} [deps.webhooks] the core WebhookDispatcher: its
+ *   config is the target guard's policy and it is woken when a webhook or delivery changes
+ *   (without one, the policy is the manager config's `webhooks` and deliveries wait for a
+ *   dispatcher to start)
  */
 export function createServer(deps) {
   const manager = deps.manager;
@@ -169,10 +183,17 @@ export function createServer(deps) {
   const sockets = new Set();
   let shuttingDown = false;
 
-  const handlers = routeHandlers(manager, () => {
-    refreshGauges();
-    return metrics.render();
-  });
+  const handlers = routeHandlers(
+    manager,
+    () => {
+      refreshGauges();
+      return metrics.render();
+    },
+    {
+      policy: () => deps.webhooks?.config ?? manager.config?.webhooks ?? DEFAULTS.webhooks,
+      notify: () => deps.webhooks?.notify(),
+    },
+  );
 
   const onRequest = (req, res) => {
     handle(req, res).catch(() => res.destroy());
@@ -398,7 +419,7 @@ export function createServer(deps) {
   };
 }
 
-function routeHandlers(manager, renderMetrics) {
+function routeHandlers(manager, renderMetrics, webhooks) {
   const page = (url) => ({ limit: num(url, 'limit'), cursor: query(url, 'cursor') });
   const known = (id) => {
     manager.get(id);
@@ -517,6 +538,7 @@ function routeHandlers(manager, renderMetrics) {
     },
     'GET /v1/keys': () => ({ body: { keys: manager.store.listApiKeys() } }),
     'DELETE /v1/keys/:keyId': ({ params }) => ({ body: manager.store.revokeApiKey(params.keyId) }),
+    ...webhookHandlers(manager.store, { ...webhooks, page }),
   };
 }
 

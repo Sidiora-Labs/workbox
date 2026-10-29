@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { E } from '@workbox/core';
+import { E, WebhookDispatcher } from '@workbox/core';
 import { createAuth, createServer } from '@workbox/server';
 import { parseOpts } from './commands.js';
 
@@ -122,7 +122,9 @@ function envKeys(env) {
  * are the config file's plus those from the environment, and the stored keys of the engine's
  * store (`workbox key`). With a certificate and key (flags first, then the config file's `tls`)
  * it serves HTTPS and WSS, and SIGHUP re-reads both files; a reload that fails keeps the old
- * certificate. Listening beyond loopback without TLS warns on stderr.
+ * certificate. Listening beyond loopback without TLS warns on stderr. Webhook deliveries run
+ * while it serves: the dispatcher follows the engine config's `webhooks`, wakes on every event
+ * the Manager logs, starts once the server listens and stops after the server has closed.
  * @param {{engine: object, out: NodeJS.WritableStream, err?: NodeJS.WritableStream}} ctx
  * @param {string[]} argv
  * @param {{env?: NodeJS.ProcessEnv, signal?: AbortSignal}} [opts]
@@ -136,14 +138,24 @@ export async function serveCommand(ctx, argv, opts = {}) {
   const port = Number(flags.port ?? env.WORKBOX_PORT ?? file.port ?? 8790);
   const host = flags.host ?? file.host ?? '127.0.0.1';
   const tlsFiles = tlsFilesOf(flags, file);
+  const manager = ctx.engine.manager;
+  const webhooks = new WebhookDispatcher({
+    store: ctx.engine.store,
+    config: ctx.engine.config?.webhooks,
+    logger: ctx.engine.logger,
+  });
   const app = createServer({
-    manager: ctx.engine.manager,
+    manager,
     auth: createAuth({ keys: [...file.keys, ...envKeys(env)], store: ctx.engine.store }),
     audit: ctx.engine.audit,
     serverNames: file.serverNames,
+    webhooks,
     ...(tlsFiles ? { tls: readTlsFiles(tlsFiles) } : {}),
   });
+  const onLogged = () => webhooks.notify();
   const addr = await app.listen(port, host);
+  manager.on('logged', onLogged);
+  webhooks.start();
   const scheme = tlsFiles ? 'https' : 'http';
   ctx.out.write(`workbox server listening on ${scheme}://${addr.address}:${addr.port}\n`);
   if (!tlsFiles && !isLoopback(addr.address))
@@ -164,7 +176,11 @@ export async function serveCommand(ctx, argv, opts = {}) {
       process.off('SIGINT', stop);
       process.off('SIGHUP', reload);
       opts.signal?.removeEventListener('abort', stop);
-      app.close().then(resolve, reject);
+      app
+        .close()
+        .then(() => webhooks.stop())
+        .finally(() => manager.off('logged', onLogged))
+        .then(resolve, reject);
     };
     process.on('SIGTERM', stop);
     process.on('SIGINT', stop);

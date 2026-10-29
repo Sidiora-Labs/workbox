@@ -6,6 +6,7 @@ the [security model](../security.md).
 
 - [Getting started](getting-started.md): install the host, build a rootfs, serve, and run a first command.
 - [Use the SDK](sdk.md): create sandboxes, run commands, stream a session and page events from JavaScript.
+- [Get notified with webhooks](webhooks.md): signed calls to your endpoint when a build finishes or fails, with retries.
 - [Run coding agents in a sandbox](agents.md): Claude Code and Codex with `workbox agent`.
 - [Use the MCP server](mcp.md): point an MCP client at a Workbox server.
 - [Deploy the server](deploy.md): run `workbox serve` under systemd or in the server image.

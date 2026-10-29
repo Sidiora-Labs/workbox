@@ -19,6 +19,15 @@ export const DEFAULTS = Object.freeze({
   session: Object.freeze({ spoolBytes: 8 * 1024 * 1024, stopGraceMs: 5000 }),
   lease: Object.freeze({ ttlMs: 300_000 }),
   events: Object.freeze({ retentionDays: 30 }),
+  webhooks: Object.freeze({
+    allowPrivate: false,
+    allowHttp: false,
+    timeoutMs: 15_000,
+    concurrency: 8,
+    retryDelaysMs: Object.freeze([
+      5_000, 300_000, 1_800_000, 7_200_000, 18_000_000, 36_000_000, 36_000_000,
+    ]),
+  }),
   bootTimeoutMs: 20_000,
 });
 
@@ -68,6 +77,12 @@ export const MAXIMA = Object.freeze({
   bootTimeoutMs: 2 ** 31 - 1,
   /** ECMAScript time values span 10^8 days either side of the epoch; no older cutoff exists. */
   retentionDays: 1e8,
+  /** Largest delay a Node timer honours: the bound of a webhook request and of each retry delay. */
+  webhookDelayMs: 2 ** 31 - 1,
+  /** Webhook requests in flight at once. */
+  webhookConcurrency: 256,
+  /** Retries after the first webhook attempt. */
+  webhookRetries: 32,
 });
 
 /**
@@ -83,6 +98,9 @@ export const MAXIMA = Object.freeze({
  * @property {{spoolBytes: number, stopGraceMs: number}} session
  * @property {{ttlMs: number}} lease
  * @property {{retentionDays: number}} events days the event log keeps a row
+ * @property {{allowPrivate: boolean, allowHttp: boolean, timeoutMs: number, concurrency: number, retryDelaysMs: number[]}} webhooks
+ *   outbound webhook deliveries: which targets are allowed, the request timeout, how many run at
+ *   once and the delays between attempts
  * @property {number} bootTimeoutMs
  * @property {Paths} paths
  */
@@ -237,9 +255,32 @@ function validate(cfg) {
   pos(cfg.session.stopGraceMs, 'session.stopGraceMs', 0, MAXIMA.stopGraceMs);
   pos(cfg.lease.ttlMs, 'lease.ttlMs', 1000, MAXIMA.ttlMs);
   pos(cfg.events.retentionDays, 'events.retentionDays', 1, MAXIMA.retentionDays);
+  validateWebhooks(cfg.webhooks, pos, problems);
   pos(cfg.bootTimeoutMs, 'bootTimeoutMs', 1000, MAXIMA.bootTimeoutMs);
   if (problems.length)
     throw E.invalid(`invalid configuration: ${problems.join('; ')}`, { problems });
+}
+
+/**
+ * @param {object} webhooks the `webhooks` group
+ * @param {(v: unknown, name: string, min?: number, max?: number) => void} pos integer range check
+ * @param {string[]} problems
+ */
+function validateWebhooks(webhooks, pos, problems) {
+  for (const flag of ['allowPrivate', 'allowHttp'])
+    if (typeof webhooks[flag] !== 'boolean')
+      problems.push(`webhooks.${flag} must be true or false`);
+  pos(webhooks.timeoutMs, 'webhooks.timeoutMs', 100, MAXIMA.webhookDelayMs);
+  pos(webhooks.concurrency, 'webhooks.concurrency', 1, MAXIMA.webhookConcurrency);
+  const delays = webhooks.retryDelaysMs;
+  if (
+    !Array.isArray(delays) ||
+    delays.length > MAXIMA.webhookRetries ||
+    delays.some((d) => !Number.isInteger(d) || d < 0 || d > MAXIMA.webhookDelayMs)
+  )
+    problems.push(
+      `webhooks.retryDelaysMs must be at most ${MAXIMA.webhookRetries} integers >= 0 and <= ${MAXIMA.webhookDelayMs}`,
+    );
 }
 
 function parseIntStrict(text, name) {

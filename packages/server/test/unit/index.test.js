@@ -5,6 +5,7 @@ import { createServer } from '../../src/server.js';
 import { WsSocket } from '../../src/ws.js';
 import * as auth from '../../src/auth.js';
 import * as access from '../../src/access.js';
+import * as webhooks from '../../src/webhooks.js';
 import { AUTH_FAILURE_DEFAULTS, addressKey, createFailureLimiter } from '../../src/ratelimit.js';
 
 test('index re-exports', () => {
@@ -28,4 +29,22 @@ test('index re-exports', () => {
     assert.equal(server[name], auth[name], name);
   for (const name of ['sandboxVisible', 'isBound', 'requireUnbound', 'createLabels'])
     assert.equal(server[name], access[name], name);
+  for (const name of [
+    'createWebhook',
+    'updateWebhook',
+    'rotateWebhookSecret',
+    'deleteWebhook',
+    'listWebhooks',
+    'ownedWebhook',
+    'webhookVisible',
+    'queueTestDelivery',
+    'listDeliveries',
+    'retryDelivery',
+    'webhookHandlers',
+    'WEBHOOK_CREATE_SCHEMA',
+    'WEBHOOK_UPDATE_SCHEMA',
+    'WEBHOOK_TYPE_PATTERN',
+    'DELIVERY_STATUSES',
+  ])
+    assert.equal(server[name], webhooks[name], name);
 });

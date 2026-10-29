@@ -13,6 +13,29 @@ export {
 export { Redactor, MIN_LENGTH } from './redact.js';
 export { createLogger, nullLogger, errorToJSON, LEVELS } from './log.js';
 export { Store, SCHEMA_VERSION } from './store.js';
+export {
+  WebhookDispatcher,
+  WEBHOOK_SECRET_PREFIX,
+  WEBHOOK_SECRET_BYTES,
+  WEBHOOK_USER_AGENT,
+  WEBHOOK_POLL_MS,
+  MAX_WEBHOOK_ERROR_BYTES,
+  newWebhookSecret,
+  webhookKey,
+  signWebhook,
+  webhookBody,
+  nextAttemptAt,
+  testEvent,
+} from './webhooks.js';
+export {
+  resolveTarget,
+  parseTargetUrl,
+  isPublicAddress,
+  mappedIpv4,
+  pinnedLookup,
+  NOT_PUBLIC_RANGES,
+  MAX_TARGET_URL_LENGTH,
+} from './webhook-target.js';
 export { Audit, canonicalJSON, hashEntry, dailyFile, auditFiles, GENESIS } from './audit.js';
 export {
   States,

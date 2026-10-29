@@ -9,32 +9,56 @@ and out-of-range values fail closed with a coded error rather than being ignored
 file named by `WORKBOX_CONFIG`, the environment variables below, then explicit overrides. The
 file is a JSON object whose keys mirror the defaults.
 
-| Key (file)             | Environment variable    | Default                     |
-| ---------------------- | ----------------------- | --------------------------- |
-| `root`                 | `WORKBOX_ROOT`          | `/var/lib/workbox`          |
-| `secretsFile`          | `WORKBOX_SECRETS_FILE`  | `/etc/workbox/secrets.json` |
-| `uid.base`             | `WORKBOX_UID_BASE`      | `300000`                    |
-| `uid.count`            | `WORKBOX_UID_COUNT`     | `65536`                     |
-| `cgroup.root`          | `WORKBOX_CGROUP_ROOT`   | `/sys/fs/cgroup`            |
-| `cgroup.parent`        | `WORKBOX_CGROUP_PARENT` | `workbox`                   |
-| `network.mode`         | `WORKBOX_NETWORK_MODE`  | `egress`                    |
-| `network.allow`        |                         | empty list                  |
-| `rootfs`               | `WORKBOX_ROOTFS`        | `minimal`                   |
-| `runtime`              | `WORKBOX_RUNTIME`       | `current`                   |
-| `limits.memoryBytes`   |                         | 2 GiB                       |
-| `limits.swapBytes`     |                         | 0                           |
-| `limits.cpuMillis`     |                         | 2000                        |
-| `limits.pids`          |                         | 4096                        |
-| `session.spoolBytes`   |                         | 8 MiB                       |
-| `session.stopGraceMs`  |                         | 5000                        |
-| `lease.ttlMs`          |                         | 300000                      |
-| `events.retentionDays` |                         | 30                          |
-| `bootTimeoutMs`        |                         | 20000                       |
+| Key (file)               | Environment variable    | Default                                  |
+| ------------------------ | ----------------------- | ---------------------------------------- |
+| `root`                   | `WORKBOX_ROOT`          | `/var/lib/workbox`                       |
+| `secretsFile`            | `WORKBOX_SECRETS_FILE`  | `/etc/workbox/secrets.json`              |
+| `uid.base`               | `WORKBOX_UID_BASE`      | `300000`                                 |
+| `uid.count`              | `WORKBOX_UID_COUNT`     | `65536`                                  |
+| `cgroup.root`            | `WORKBOX_CGROUP_ROOT`   | `/sys/fs/cgroup`                         |
+| `cgroup.parent`          | `WORKBOX_CGROUP_PARENT` | `workbox`                                |
+| `network.mode`           | `WORKBOX_NETWORK_MODE`  | `egress`                                 |
+| `network.allow`          |                         | empty list                               |
+| `rootfs`                 | `WORKBOX_ROOTFS`        | `minimal`                                |
+| `runtime`                | `WORKBOX_RUNTIME`       | `current`                                |
+| `limits.memoryBytes`     |                         | 2 GiB                                    |
+| `limits.swapBytes`       |                         | 0                                        |
+| `limits.cpuMillis`       |                         | 2000                                     |
+| `limits.pids`            |                         | 4096                                     |
+| `session.spoolBytes`     |                         | 8 MiB                                    |
+| `session.stopGraceMs`    |                         | 5000                                     |
+| `lease.ttlMs`            |                         | 300000                                   |
+| `events.retentionDays`   |                         | 30                                       |
+| `webhooks.allowPrivate`  |                         | `false`                                  |
+| `webhooks.allowHttp`     |                         | `false`                                  |
+| `webhooks.timeoutMs`     |                         | 15000                                    |
+| `webhooks.concurrency`   |                         | 8                                        |
+| `webhooks.retryDelaysMs` |                         | 5 s, 5 min, 30 min, 2 h, 5 h, 10 h, 10 h |
+| `bootTimeoutMs`          |                         | 20000                                    |
 
 Everything the engine stores is under `root`: `workbox.db`, `audit/`, `artifacts/`, `checkpoints/`,
 `rootfs/`, `runtime/` and `sandboxes/`. The cgroup parent is `<cgroup.root>/<cgroup.parent>`.
 A rootfs is shifted on disk for one uid base; using it under another base is refused, and
 `workbox rootfs build` rebuilds it.
+
+## Webhooks
+
+The `webhooks` keys control the requests `workbox serve` makes to
+[webhook](../guides/webhooks.md) endpoints:
+
+- `allowPrivate`: accept endpoints whose host resolves to an address that is not public (loopback,
+  private, link-local and the other ranges the guide lists). Off by default, so a webhook cannot
+  reach services only the host can reach.
+- `allowHttp`: accept `http:` endpoints as well as `https:`. Off by default.
+- `timeoutMs`: how long one attempt may take, from connecting to the end of the answer (100 to
+  2147483647).
+- `concurrency`: how many attempts run at once (1 to 256).
+- `retryDelaysMs`: the waits, in milliseconds, before each retry; a delivery gets one attempt more
+  than there are entries, then it is marked `failed`. At most 32 entries, each 0 to 2147483647.
+
+```json
+{ "webhooks": { "allowPrivate": true, "allowHttp": true, "retryDelaysMs": [1000, 60000] } }
+```
 
 ## Serve config file
 
