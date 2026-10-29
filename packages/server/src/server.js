@@ -32,6 +32,7 @@ import {
 import { createLabels, isBound, requireUnbound, sandboxVisible } from './access.js';
 import { Metrics } from './metrics.js';
 import { addressKey, createFailureLimiter } from './ratelimit.js';
+import { EventHub, eventsQuery, pollEvents, streamEvents } from './streams.js';
 import { WsSocket, acceptKey, rejectUpgrade } from './ws.js';
 
 /**
@@ -227,12 +228,14 @@ export function createServer(deps) {
   const failures = createFailureLimiter(deps.authFailures);
   const metrics = new Metrics()
     .describe('workbox_http_requests_total', 'HTTP requests by route, method and status')
-    .describe('workbox_ws_connections_total', 'WebSocket session connections accepted')
+    .describe('workbox_ws_connections_total', 'WebSocket connections accepted')
     .describe('workbox_ws_dropped_total', 'WebSocket consumers dropped for backpressure')
     .describe('workbox_sandboxes', 'Sandboxes by state');
   /** @type {Set<WsSocket>} */
   const sockets = new Set();
   let shuttingDown = false;
+  const stopping = new AbortController();
+  const hub = new EventHub(manager);
 
   const handlers = routeHandlers(
     manager,
@@ -240,8 +243,13 @@ export function createServer(deps) {
       refreshGauges();
       return metrics.render();
     },
-    { maxUploadBytes: deps.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES },
+    {
+      maxUploadBytes: deps.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES,
+      hub,
+      stopping: stopping.signal,
+    },
   );
+  const wsRoutes = webSocketRoutes(manager, hub);
 
   const onRequest = (req, res) => {
     handle(req, res).catch(() => res.destroy());
@@ -263,6 +271,9 @@ export function createServer(deps) {
       principal: null,
     };
     ctx.params = {};
+    const gone = new AbortController();
+    res.once('close', () => gone.abort());
+    ctx.signal = gone.signal;
     res.setHeader('x-request-id', ctx.requestId);
     let status = 500;
     try {
@@ -332,6 +343,7 @@ export function createServer(deps) {
       principal: ctx.principal,
       req,
       res: ctx.res,
+      signal: ctx.signal,
     });
   }
 
@@ -402,7 +414,8 @@ export function createServer(deps) {
     if (refusal) return rejectUpgrade(socket, 403, refusal);
     const url = new URL(req.url ?? '/', 'http://workbox');
     const match = matchRoute('GET', url.pathname);
-    if (!match?.key?.endsWith('/ws')) return rejectUpgrade(socket, 404, 'no websocket route');
+    const route = match?.key ? wsRoutes[match.key] : undefined;
+    if (!route) return rejectUpgrade(socket, 404, 'no websocket route');
     const retryAfter = failures.retryAfter(peer(req));
     if (retryAfter) return refuseLimited(socket, limited(retryAfter));
     const queryToken = url.searchParams.get('token');
@@ -419,8 +432,7 @@ export function createServer(deps) {
     if (shuttingDown) return rejectUpgrade(socket, 503, 'shutting down');
     const key = req.headers['sec-websocket-key'];
     if (!key) return rejectUpgrade(socket, 400, 'missing Sec-WebSocket-Key');
-    const { id, sessionId } = match.params;
-    manager.get(id);
+    const opened = route({ url, params: match.params, principal });
     socket.write(
       `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`,
     );
@@ -431,13 +443,8 @@ export function createServer(deps) {
       sockets.delete(ws);
       if (ws.dropped) metrics.inc('workbox_ws_dropped_total');
     });
-    audit?.append({
-      actor: `api:${principal.id}`,
-      action: 'api.session.attach',
-      sandboxId: id,
-      data: { sessionId },
-    });
-    return attachWsSession(manager, id, sessionId, ws);
+    audit?.append({ actor: `api:${principal.id}`, ...opened.audit });
+    return opened.open(ws);
   }
 
   function refreshGauges() {
@@ -477,6 +484,7 @@ export function createServer(deps) {
      */
     close(opts = {}) {
       shuttingDown = true;
+      stopping.abort();
       for (const ws of sockets) ws.close(1001);
       return new Promise((resolve) => {
         const timer = setTimeout(() => server.closeAllConnections(), opts.timeoutMs ?? 10_000);
@@ -491,7 +499,51 @@ export function createServer(deps) {
   };
 }
 
+/**
+ * The WebSocket routes. Each runs after the upgrade passed the browser guard, the failed-auth
+ * limit, authentication, the route's scope and the visibility of its `:id`; it checks its own
+ * parameters and returns the audit entry and the function that serves the open socket.
+ */
+function webSocketRoutes(manager, hub) {
+  const events = (url, principal, id) => {
+    const { afterSeq, types, sandboxId = id } = eventsQuery(url, { fleet: id === undefined });
+    const wanted = { afterSeq, types, sandboxId, principal };
+    const data = { afterSeq: afterSeq ?? null, types: types ?? null, sandboxId: sandboxId ?? null };
+    return {
+      audit: { action: 'api.events.stream', ...(id === undefined ? {} : { sandboxId: id }), data },
+      open: (ws) => streamEvents(hub, ws, wanted),
+    };
+  };
+  return {
+    'GET /v1/sandboxes/:id/sessions/:sessionId/ws': ({ params }) => {
+      manager.get(params.id);
+      return {
+        audit: {
+          action: 'api.session.attach',
+          sandboxId: params.id,
+          data: { sessionId: params.sessionId },
+        },
+        open: (ws) => attachWsSession(manager, params.id, params.sessionId, ws),
+      };
+    },
+    'GET /v1/events/ws': ({ url, principal }) => events(url, principal),
+    'GET /v1/sandboxes/:id/events/ws': ({ url, params, principal }) => {
+      manager.get(params.id);
+      return events(url, principal, params.id);
+    },
+  };
+}
+
 function routeHandlers(manager, renderMetrics, opts) {
+  const upgradeOnly = () => {
+    throw httpError(426, 'E_INVALID_PARAMS', 'this route requires a WebSocket upgrade');
+  };
+  const poll = (wanted, principal, signal) =>
+    pollEvents(
+      opts.hub,
+      { ...wanted, principal },
+      { signal: AbortSignal.any([signal, opts.stopping]) },
+    );
   const page = (url) => ({ limit: num(url, 'limit'), cursor: query(url, 'cursor') });
   const known = (id) => {
     manager.get(id);
@@ -646,9 +698,7 @@ function routeHandlers(manager, renderMetrics, opts) {
         cols: body.cols,
       }),
     }),
-    'GET /v1/sandboxes/:id/sessions/:sessionId/ws': () => {
-      throw httpError(426, 'E_INVALID_PARAMS', 'this route requires a WebSocket upgrade');
-    },
+    'GET /v1/sandboxes/:id/sessions/:sessionId/ws': upgradeOnly,
     'GET /v1/sandboxes/:id/evidence': ({ params, url }) => ({
       body: manager.store.listEvidence(known(params.id), page(url)),
     }),
@@ -670,14 +720,15 @@ function routeHandlers(manager, renderMetrics, opts) {
       const out = await checkpointCreate(manager.brokerContextFor(sup), body);
       return { status: 201, body: out, audit: { checkpointId: out.id } };
     },
-    'GET /v1/sandboxes/:id/events': ({ params, url }) => ({
-      body: {
-        events: manager.store.listEvents(known(params.id), {
-          afterSeq: num(url, 'afterSeq') ?? 0,
-          limit: num(url, 'limit'),
-        }),
-      },
+    'GET /v1/sandboxes/:id/events': async ({ params, url, signal }) => {
+      const wanted = { ...eventsQuery(url), sandboxId: known(params.id) };
+      return { body: await poll(wanted, null, signal) };
+    },
+    'GET /v1/sandboxes/:id/events/ws': upgradeOnly,
+    'GET /v1/events': async ({ url, principal, signal }) => ({
+      body: await poll(eventsQuery(url, { fleet: true }), principal, signal),
     }),
+    'GET /v1/events/ws': upgradeOnly,
     'POST /v1/reconcile': async () => ({ body: await manager.reconcile() }),
     'GET /v1/asks': ({ url, principal }) => {
       manager.store.expireAsks();

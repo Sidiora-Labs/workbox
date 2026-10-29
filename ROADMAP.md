@@ -6,7 +6,6 @@ Planned direction, without dates.
 
 - A full Hyperfide provider: a capability endpoint, a lifetime model, and complete coverage of
   the operations in the [provider mapping](docs/hyperfide-provider.md).
-- Pushed sandbox events. Events are paged by polling today; only session output is streamed.
 
 ## Next
 

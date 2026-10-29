@@ -3,6 +3,7 @@ export {
   Sandbox,
   SandboxSession,
   SessionStream,
+  EventStream,
   ROUTES,
   retryDelay,
 } from './client.js';

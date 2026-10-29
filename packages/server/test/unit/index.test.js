@@ -5,6 +5,7 @@ import { createServer, waitForSessionExit, writeSandboxFile } from '../../src/se
 import { WsSocket } from '../../src/ws.js';
 import * as auth from '../../src/auth.js';
 import * as access from '../../src/access.js';
+import * as streams from '../../src/streams.js';
 import { AUTH_FAILURE_DEFAULTS, addressKey, createFailureLimiter } from '../../src/ratelimit.js';
 
 test('index re-exports', () => {
@@ -32,4 +33,20 @@ test('index re-exports', () => {
   assert.equal(server.DEFAULT_MAX_UPLOAD_BYTES, 1024 * 1024 * 1024);
   assert.equal(server.waitForSessionExit, waitForSessionExit);
   assert.equal(server.writeSandboxFile, writeSandboxFile);
+  for (const name of [
+    'EventHub',
+    'EventFeed',
+    'ReplayMerge',
+    'pollEvents',
+    'streamEvents',
+    'eventsQuery',
+    'eventFilter',
+    'parseTypes',
+    'typeMatcher',
+    'drained',
+    'MAX_EVENT_WAIT_MS',
+    'REPLAY_PAGE',
+    'MAX_TYPE_PATTERNS',
+  ])
+    assert.equal(server[name], streams[name], name);
 });

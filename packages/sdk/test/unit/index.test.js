@@ -11,6 +11,7 @@ test('index re-exports the client, its handles and the error', () => {
     'Sandbox',
     'SandboxSession',
     'SessionStream',
+    'EventStream',
     'ROUTES',
     'retryDelay',
   ])

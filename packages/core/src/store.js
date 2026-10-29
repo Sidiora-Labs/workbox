@@ -674,8 +674,9 @@ export class Store {
   /**
    * Events of every sandbox in `seq` order: at most `limit` (default 100, cap 1000) after
    * `afterSeq`. `types` holds exact types and `prefix.*` patterns, which match every type that
-   * starts with `prefix.`; an absent or empty list matches every type.
-   * @param {{afterSeq?: number, limit?: number, types?: string[], sandboxId?: string}} [opts]
+   * starts with `prefix.`; an absent or empty list matches every type. With `binding`, only events
+   * of the sandboxes it makes visible, filtered in SQL so every page is full.
+   * @param {{afterSeq?: number, limit?: number, types?: string[], sandboxId?: string, binding?: Binding|null}} [opts]
    */
   listFleetEvents(opts = {}) {
     const clauses = ['seq > ?'];
@@ -683,6 +684,11 @@ export class Store {
     if (opts.sandboxId !== undefined) {
       clauses.push('sandbox_id = ?');
       params.push(opts.sandboxId);
+    }
+    if (opts.binding) {
+      const filter = bindingFilter(opts.binding, { sandboxColumn: 'sandbox_id' });
+      clauses.push(filter.sql);
+      params.push(...filter.params);
     }
     const types = typeFilter(opts.types);
     if (types) {
@@ -695,6 +701,11 @@ export class Store {
       )
       .all(...params, pageSize(opts.limit, 100))
       .map(eventRow);
+  }
+
+  /** The newest event sequence number, 0 when the log is empty. @returns {number} */
+  lastEventSeq() {
+    return Number(this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM events').get().seq);
   }
 
   /** Delete events recorded before `beforeAt` (ms). @param {number} beforeAt @returns {number} rows deleted */

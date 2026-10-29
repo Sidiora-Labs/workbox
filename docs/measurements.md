@@ -6,12 +6,12 @@ Recorded by `test/e2e/lifecycle.test.js`: 20 sandboxes created concurrently thro
 
 | Field | Value |
 |---|---|
-| Date | 2026-10-28T07:46:28.712Z |
-| Revision | 09b6f1fd28f618ed74150a87eade0b2cf70a2cb5 plus uncommitted working-tree changes |
+| Date | 2026-10-29T20:23:45.335Z |
+| Revision | 5ec2211e998bcce6525e9624ba21706cd3fee5d7 plus uncommitted working-tree changes |
 | Kernel | Linux 6.8.0-147-generic x64 |
 | CPUs | 8 (AMD EPYC Processor (with IBPB)) |
 | Memory | 23.5 GiB |
-| Load average before the creates (1/5/15 min) | 0.51 / 0.93 / 1.27 |
+| Load average before the creates (1/5/15 min) | 4.87 / 3.07 / 2.15 |
 | Node | v22.22.2 |
 | Network mode | none (Manager network setup off) |
 
@@ -21,8 +21,8 @@ Create-to-ready is the SDK `createSandbox` round trip until the server answers w
 
 | Metric | p50 | p95 | max |
 |---|---|---|---|
-| create-to-ready (ms) | 820 | 955 | 994 |
-| runner RSS per sandbox (MiB) | 50.0 | 50.1 | 50.1 |
-| cgroup memory.current per sandbox (MiB) | 11.9 | 12.1 | 12.5 |
+| create-to-ready (ms) | 842 | 1088 | 1144 |
+| runner RSS per sandbox (MiB) | 50.1 | 50.1 | 50.2 |
+| cgroup memory.current per sandbox (MiB) | 11.9 | 12.1 | 12.2 |
 
-Server process RSS (test process hosting server and Manager) at measurement: 86.7 MiB.
+Server process RSS (test process hosting server and Manager) at measurement: 87.4 MiB.
