@@ -179,6 +179,33 @@ Network setup must only ever touch a sandbox's own network namespace, never the 
   that address is answered 429 `E_LIMIT` with `Retry-After` before authentication runs, until the
   60 s are over. At most 10000 addresses are tracked; past that the oldest is dropped.
 
+### Webhooks
+
+- `workbox serve` sends webhook requests from the host, to endpoints that API keys with the
+  `admin` scope register. The host can usually reach more than the internet can, so every
+  endpoint passes a target guard (`packages/core/src/webhook-target.js`) when it is registered or
+  changed and again before every attempt: `https:` only, no credentials in the URL, at most 2048
+  characters, and a host that resolves only to public addresses. Loopback, private, shared,
+  link-local, documentation, benchmarking (which holds the sandbox proxy link `198.18.0.0/15`),
+  multicast and reserved ranges, their IPv6 counterparts and IPv4-mapped forms are refused. The
+  request connects to the address that was checked, so a DNS answer that changes in between
+  cannot reach a refused address. Redirects are not followed. The engine configuration's
+  `webhooks.allowPrivate` and `webhooks.allowHttp` turn the address and scheme checks off, for a
+  receiver on the host or a trusted network.
+- Each request is signed per Standard Webhooks (HMAC-SHA256 over the delivery id, the send time
+  and the body); receivers should check the signature and refuse timestamps older than a few
+  minutes. Payloads are event log rows, which have passed the secret redactor.
+- Signing secrets (`whsec_` and 24 random bytes) are kept in the store database, `workbox.db`
+  (mode 0600), because signing needs the key itself. They are returned only when a webhook is
+  created or its secret rotated, and are never written to webhook listings, delivery rows, logs
+  or the audit log. Anyone who can read the database can sign requests as this server; rotate the
+  secret if the database leaks.
+- A webhook belongs to the key that created it and carries a copy of that key's binding: a bound
+  key sees and manages only its own webhooks, and they receive only events of the sandboxes the
+  key sees. Webhooks of a stored key that is revoked or expired receive nothing.
+- At most 4 KiB of a failed answer is kept per delivery, and requests run with a timeout
+  (default 15 s) and a cap on how many run at once (default 8).
+
 ### Audit
 
 - Host actions are appended to NDJSON files under `<root>/audit`, each line carrying the SHA-256

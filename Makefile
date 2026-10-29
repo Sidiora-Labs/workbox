@@ -15,6 +15,7 @@ PRIVILEGED_UNIT := \
 	packages/cli/test/unit/local.test.js \
 	packages/cli/test/unit/main.test.js \
 	packages/cli/test/unit/serve.test.js \
+	packages/cli/test/unit/webhooks.test.js \
 	packages/core/test/unit/host/cgroup.test.js \
 	packages/core/test/unit/host/doctor.test.js \
 	packages/core/test/unit/host/launch.test.js \

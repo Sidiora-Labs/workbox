@@ -35,6 +35,12 @@ a report.
 | `workbox key create --name n --scope s [--scope s]... [--label k=v]... [--sandbox id]... [--ttl 30d\|12h\|3600s]`                                    | Mint a stored API key and print it with its token, which is shown only this once. `--label` and `--sandbox` bind it; `--ttl` makes it expire.     | no         |
 | `workbox key ls`                                                                                                                                     | List stored keys (`list` also works), without tokens.                                                                                             | no         |
 | `workbox key rm <keyId>`                                                                                                                             | Revoke a stored key (`revoke` also works); it stops working on the next request.                                                                  | no         |
+| `workbox webhook add <url> [--type t]... [--sandbox id] [--label k=v]... [--description d]`                                                          | Register a webhook and print it with its signing secret, which is shown only this once. Without `--type` it gets every event.                     | no         |
+| `workbox webhook ls`                                                                                                                                 | List webhooks (`list` also works), without secrets.                                                                                               | no         |
+| `workbox webhook rm <webhookId>`                                                                                                                     | Delete a webhook and its deliveries (`delete` also works).                                                                                        | no         |
+| `workbox webhook test <webhookId>`                                                                                                                   | Queue a `webhook.test` delivery.                                                                                                                  | no         |
+| `workbox webhook rotate <webhookId>`                                                                                                                 | Replace the signing secret and print the new one, shown only this once.                                                                           | no         |
+| `workbox webhook deliveries <webhookId> [--status s] [--limit n]`                                                                                    | List deliveries, newest first, with their attempts and last answer.                                                                               | no         |
 | `workbox serve [--config file] [--port n] [--host h] [--tls-cert f --tls-key f]`                                                                     | Serve the REST and WebSocket API on the local engine until SIGTERM or SIGINT; HTTPS and WSS with a certificate.                                   | yes        |
 | `workbox audit verify`                                                                                                                               | Verify the audit hash chain; prints `{ok, entries, brokenAt}`.                                                                                    | yes        |
 
@@ -60,6 +66,11 @@ The `key` commands work on the local store, even while `workbox serve` runs on t
 through `--server` with an unbound `admin` key. A running server sees a key minted or revoked
 locally on its next request. What a bound key may see is described in
 [the REST reference](rest-api.md#stored-keys-and-bound-access).
+
+The `webhook` commands work the same way: on the local store, where the webhooks they add belong
+to `cli`, or through `--server`, where they belong to the key used. `serve` delivers to every
+webhook; a running server picks up a webhook or test delivery added locally within a few
+seconds. See [the webhooks guide](../guides/webhooks.md).
 
 ## One engine per root
 

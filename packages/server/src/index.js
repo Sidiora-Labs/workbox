@@ -47,6 +47,23 @@ export {
   REPLAY_PAGE,
   MAX_TYPE_PATTERNS,
 } from './streams.js';
+export {
+  createWebhook,
+  updateWebhook,
+  rotateWebhookSecret,
+  deleteWebhook,
+  listWebhooks,
+  ownedWebhook,
+  webhookVisible,
+  queueTestDelivery,
+  listDeliveries,
+  retryDelivery,
+  webhookHandlers,
+  WEBHOOK_CREATE_SCHEMA,
+  WEBHOOK_UPDATE_SCHEMA,
+  WEBHOOK_TYPE_PATTERN,
+  DELIVERY_STATUSES,
+} from './webhooks.js';
 export { WsSocket, WS_DEFAULTS, acceptKey, rejectUpgrade } from './ws.js';
 export { Metrics } from './metrics.js';
 export { AUTH_FAILURE_DEFAULTS, addressKey, createFailureLimiter } from './ratelimit.js';

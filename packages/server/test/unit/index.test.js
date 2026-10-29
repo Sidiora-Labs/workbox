@@ -6,6 +6,7 @@ import { WsSocket } from '../../src/ws.js';
 import * as auth from '../../src/auth.js';
 import * as access from '../../src/access.js';
 import * as streams from '../../src/streams.js';
+import * as webhooks from '../../src/webhooks.js';
 import { AUTH_FAILURE_DEFAULTS, addressKey, createFailureLimiter } from '../../src/ratelimit.js';
 
 test('index re-exports', () => {
@@ -49,4 +50,22 @@ test('index re-exports', () => {
     'MAX_TYPE_PATTERNS',
   ])
     assert.equal(server[name], streams[name], name);
+  for (const name of [
+    'createWebhook',
+    'updateWebhook',
+    'rotateWebhookSecret',
+    'deleteWebhook',
+    'listWebhooks',
+    'ownedWebhook',
+    'webhookVisible',
+    'queueTestDelivery',
+    'listDeliveries',
+    'retryDelivery',
+    'webhookHandlers',
+    'WEBHOOK_CREATE_SCHEMA',
+    'WEBHOOK_UPDATE_SCHEMA',
+    'WEBHOOK_TYPE_PATTERN',
+    'DELIVERY_STATUSES',
+  ])
+    assert.equal(server[name], webhooks[name], name);
 });

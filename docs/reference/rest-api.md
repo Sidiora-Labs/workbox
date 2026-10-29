@@ -167,6 +167,39 @@ A client that reads too slowly is dropped once 1 MiB (the default) is waiting to
 the streams with 1001. To resume after either, reconnect with `afterSeq` set to the last `seq`
 received, or to the `live` frame's `N` when that is greater. The SDK's `events()` does this.
 
+## Webhooks
+
+A webhook is an endpoint that gets a signed `POST` for every event it matches; see
+[the guide](../guides/webhooks.md) for the request format, signature checks and retries.
+
+| Route                                                       | Scope   | Purpose                                                                                                                          |
+| ----------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/webhooks`                                         | `admin` | Register a webhook (201). Body: `url` (required), `types`, `sandboxId`, `labels`, `description`. The `secret` is in this answer. |
+| `GET /v1/webhooks`                                          | `read`  | `{webhooks: [...]}`, in creation order, without secrets.                                                                         |
+| `GET /v1/webhooks/:webhookId`                               | `read`  | One webhook.                                                                                                                     |
+| `PATCH /v1/webhooks/:webhookId`                             | `admin` | Change it. Body: `url`, `types`, `description`, `enabled`; enabling clears `disabledReason`.                                     |
+| `DELETE /v1/webhooks/:webhookId`                            | `admin` | Delete it and its deliveries. Answers the deleted webhook.                                                                       |
+| `POST /v1/webhooks/:webhookId/rotate-secret`                | `admin` | Replace the signing secret; the new `secret` is in this answer. Later attempts, retries included, use it.                        |
+| `POST /v1/webhooks/:webhookId/test`                         | `admin` | Queue one `webhook.test` delivery (202), outside the event log: its `seq` and `sandboxId` are null.                              |
+| `GET /v1/webhooks/:webhookId/deliveries`                    | `read`  | Deliveries, newest first; query `status` (`pending`, `delivered`, `failed`), `limit`, `cursor`.                                  |
+| `POST /v1/webhooks/:webhookId/deliveries/:deliveryId/retry` | `admin` | Send a delivery again now (202), whatever its state.                                                                             |
+
+- `url` must be `https:` without credentials, at most 2048 characters, and its host must resolve
+  only to public addresses; otherwise the request is 400 `E_INVALID_PARAMS`. The engine
+  configuration's `webhooks.allowHttp` and `webhooks.allowPrivate` relax this
+  ([Configuration](configuration.md#webhooks)).
+- `types` holds up to 64 event types or `prefix.*` patterns; none means every type. `sandboxId`
+  must name a sandbox the caller sees (404 otherwise). `labels` keeps events of sandboxes that
+  carry every label.
+- A webhook row is `{id, url, types, sandboxId, labels, description, enabled, disabledReason,
+ownerKey, binding, lastSeq, createdAt, updatedAt}`. `ownerKey` is the key that created it and
+  `binding` a copy of that key's binding, which limits the events it receives. `lastSeq` is the
+  event it has queued deliveries up to; a new webhook starts at the newest event.
+- A delivery row is `{id, webhookId, eventSeq, event, status, attempts, nextAt, lastStatus,
+lastError, createdAt, deliveredAt}`. `id` is the `webhook-id` header; `event` is the event as it
+  was when the delivery was queued; `lastError` holds at most 4 KiB of the last failed answer.
+- The secret is returned by create and rotate only, and never written to logs or the audit log.
+
 ## Scopes
 
 `read`, `exec`, `admin` and `answer`. A key holds a set of them; a request needs the one in the
@@ -200,6 +233,8 @@ For a bound key:
   already used by a sandbox the key does not see is 409, and `fromCheckpoint` must name a
   checkpoint of a sandbox it sees.
 - The fleet routes `GET /metrics`, `POST /v1/reconcile` and the `/v1/keys` routes are 403.
+- The `/v1/webhooks` routes show and change only the webhooks the key created; any other answers
+  404 like a missing one. A webhook it creates receives only events of the sandboxes it sees.
 
 ## Errors
 

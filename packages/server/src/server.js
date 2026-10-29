@@ -13,6 +13,7 @@ import {
   validate,
 } from '@workbox/protocol';
 import {
+  DEFAULTS,
   E,
   Redactor,
   artifactPath,
@@ -30,6 +31,7 @@ import {
   SCOPE_MATRIX,
 } from './auth.js';
 import { createLabels, isBound, requireUnbound, sandboxVisible } from './access.js';
+import { WEBHOOK_CREATE_SCHEMA, WEBHOOK_UPDATE_SCHEMA, webhookHandlers } from './webhooks.js';
 import { Metrics } from './metrics.js';
 import { addressKey, createFailureLimiter } from './ratelimit.js';
 import { EventHub, eventsQuery, pollEvents, streamEvents } from './streams.js';
@@ -128,6 +130,8 @@ export const BODY_SCHEMAS = Object.freeze({
   'POST /v1/sandboxes/:id/checkpoints': Methods['broker.checkpoint.create'].params,
   'POST /v1/asks/:askId/answer': v.object({ answer: v.any() }, { required: ['answer'] }),
   'POST /v1/keys': KEY_CREATE_SCHEMA,
+  'POST /v1/webhooks': WEBHOOK_CREATE_SCHEMA,
+  'PATCH /v1/webhooks/:webhookId': WEBHOOK_UPDATE_SCHEMA,
 });
 
 /** Audit action of every mutating route. */
@@ -152,6 +156,12 @@ const MUTATIONS = Object.freeze({
   'POST /v1/asks/:askId/answer': 'ask.answer',
   'POST /v1/keys': 'key.create',
   'DELETE /v1/keys/:keyId': 'key.revoke',
+  'POST /v1/webhooks': 'webhook.create',
+  'PATCH /v1/webhooks/:webhookId': 'webhook.update',
+  'DELETE /v1/webhooks/:webhookId': 'webhook.delete',
+  'POST /v1/webhooks/:webhookId/rotate-secret': 'webhook.rotate',
+  'POST /v1/webhooks/:webhookId/test': 'webhook.test',
+  'POST /v1/webhooks/:webhookId/deliveries/:deliveryId/retry': 'webhook.retry',
 });
 
 const ROUTES = Object.keys(SCOPE_MATRIX).map((key) => {
@@ -215,6 +225,10 @@ function matchParts(template, parts) {
  *   authentications one address may make per window before it is answered 429 (default 20 per
  *   60 s)
  * @param {number} [deps.maxUploadBytes] cap of one raw file upload (default 1 GiB)
+ * @param {{config: object, notify: () => void}} [deps.webhooks] the core WebhookDispatcher: its
+ *   config is the target guard's policy and it is woken when a webhook or delivery changes
+ *   (without one, the policy is the manager config's `webhooks` and deliveries wait for a
+ *   dispatcher to start)
  */
 export function createServer(deps) {
   const manager = deps.manager;
@@ -247,6 +261,8 @@ export function createServer(deps) {
       maxUploadBytes: deps.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES,
       hub,
       stopping: stopping.signal,
+      policy: () => deps.webhooks?.config ?? manager.config?.webhooks ?? DEFAULTS.webhooks,
+      notify: () => deps.webhooks?.notify(),
     },
   );
   const wsRoutes = webSocketRoutes(manager, hub);
@@ -770,6 +786,7 @@ function routeHandlers(manager, renderMetrics, opts) {
     },
     'GET /v1/keys': () => ({ body: { keys: manager.store.listApiKeys() } }),
     'DELETE /v1/keys/:keyId': ({ params }) => ({ body: manager.store.revokeApiKey(params.keyId) }),
+    ...webhookHandlers(manager.store, { policy: opts.policy, notify: opts.notify, page }),
   };
 }
 

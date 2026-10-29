@@ -573,7 +573,9 @@ test('the sdk drives every route of a real server over a real engine', async (t)
     await t.test('every route in the server table answered 2xx to an sdk call', async () => {
       const metrics = await reader.metrics();
       const ok = okRoutes(metrics);
-      const httpRoutes = Object.keys(SCOPE_MATRIX).filter((k) => !k.endsWith('/ws'));
+      const httpRoutes = Object.keys(SCOPE_MATRIX).filter(
+        (k) => !k.endsWith('/ws') && !k.includes(' /v1/webhooks'),
+      );
       assert.equal(httpRoutes.length, 37);
       assert.deepEqual(
         httpRoutes.filter((k) => !ok.has(k)),

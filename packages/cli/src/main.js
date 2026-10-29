@@ -7,6 +7,7 @@ import { serveCommand } from './serve.js';
 import { agentCommand } from './agent.js';
 import { keyCommand } from './keys.js';
 import { eventsCommand } from './events.js';
+import { webhookCommand } from './webhooks.js';
 import {
   connectionOpts,
   withoutConnection,
@@ -43,6 +44,9 @@ Usage:
   workbox key create --name N --scope S [--scope S]... [--label k=v]... [--sandbox ID]...
         [--ttl 30d|12h|3600s] [--server URL --token T]
   workbox key ls|rm <keyId> [--server URL --token T]
+  workbox webhook add <url> [--type T]... [--sandbox ID] [--label k=v]... [--description D]
+        [--server URL --token T]
+  workbox webhook ls|rm|test|rotate|deliveries <webhookId> [--server URL --token T]
   workbox serve [--config server.json] [--port 8790] [--host 127.0.0.1]
         [--tls-cert cert.pem --tls-key key.pem]
   workbox audit verify
@@ -63,6 +67,9 @@ the sandboxes it may see, --ttl makes it expire, and \`key rm\` revokes it at on
 the output and exits with the command's code. \`logs\` prints a session's retained output, \`wait\`
 waits for its exit, \`kill\` signals it (default SIGTERM). \`cp\` copies a file into or out of a
 sandbox; one side is <id>:<path>.
+\`webhook add\` registers an HTTPS endpoint that gets a signed POST for every matching event
+(--type session.exited or session.*; none means every type) and prints its signing secret once;
+\`webhook test\` queues a webhook.test delivery and \`webhook deliveries\` lists the attempts.
 The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames",
 "tls": {"certFile", "keyFile"}}. With TLS, serve answers HTTPS and WSS and SIGHUP reloads the certificate.
 Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable/busy (and doctor on a
@@ -88,6 +95,7 @@ const COMMANDS = {
   agent: agentCommand,
   key: keyCommand,
   events: eventsCommand,
+  webhook: webhookCommand,
   sandbox: sandboxCommand,
   shell: shellCommand,
   rootfs: rootfsCommand,

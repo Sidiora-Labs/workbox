@@ -84,6 +84,17 @@ export const ROUTES = Object.freeze({
   'POST /v1/keys': ['WorkboxClient#createKey'],
   'GET /v1/keys': ['WorkboxClient#listKeys'],
   'DELETE /v1/keys/:keyId': ['WorkboxClient#revokeKey'],
+  'POST /v1/webhooks': ['WorkboxClient#createWebhook'],
+  'GET /v1/webhooks': ['WorkboxClient#listWebhooks'],
+  'GET /v1/webhooks/:webhookId': ['WorkboxClient#getWebhook'],
+  'PATCH /v1/webhooks/:webhookId': ['WorkboxClient#updateWebhook'],
+  'DELETE /v1/webhooks/:webhookId': ['WorkboxClient#deleteWebhook'],
+  'POST /v1/webhooks/:webhookId/rotate-secret': ['WorkboxClient#rotateWebhookSecret'],
+  'POST /v1/webhooks/:webhookId/test': ['WorkboxClient#testWebhook'],
+  'GET /v1/webhooks/:webhookId/deliveries': ['WorkboxClient#listWebhookDeliveries'],
+  'POST /v1/webhooks/:webhookId/deliveries/:deliveryId/retry': [
+    'WorkboxClient#retryWebhookDelivery',
+  ],
 });
 
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'DELETE']);
@@ -310,6 +321,96 @@ export class WorkboxClient {
    */
   revokeKey(keyId, opts = {}) {
     return this.request('DELETE', `/v1/keys/${enc(keyId)}`, opts);
+  }
+
+  /**
+   * Register a webhook (sent once, never retried). `types` holds event types and `prefix.*`
+   * patterns (none: every type); `sandboxId` and `labels` narrow it to some sandboxes. The
+   * returned `secret` signs every delivery and is shown only here and on rotate.
+   * @param {{url: string, types?: string[], sandboxId?: string, labels?: Record<string, string>, description?: string}} input
+   * @param {CallOptions} [opts]
+   * @returns {Promise<{id: string, url: string, secret: string, types: string[], enabled: boolean, [k: string]: unknown}>}
+   */
+  createWebhook(input, opts = {}) {
+    return this.request('POST', '/v1/webhooks', { body: input, signal: opts.signal });
+  }
+
+  /** @param {CallOptions} [opts] @returns {Promise<{webhooks: object[]}>} */
+  listWebhooks(opts = {}) {
+    return this.request('GET', '/v1/webhooks', opts);
+  }
+
+  /** @param {string} webhookId @param {CallOptions} [opts] @returns {Promise<object>} */
+  getWebhook(webhookId, opts = {}) {
+    return this.request('GET', `/v1/webhooks/${enc(webhookId)}`, opts);
+  }
+
+  /**
+   * Change a webhook's URL, types, description or enabled state; enabling it clears the reason
+   * it was disabled.
+   * @param {string} webhookId
+   * @param {{url?: string, types?: string[], description?: string|null, enabled?: boolean}} patch
+   * @param {CallOptions} [opts]
+   * @returns {Promise<object>}
+   */
+  updateWebhook(webhookId, patch, opts = {}) {
+    return this.request('PATCH', `/v1/webhooks/${enc(webhookId)}`, {
+      body: patch,
+      signal: opts.signal,
+      idempotent: true,
+    });
+  }
+
+  /**
+   * Delete a webhook and its deliveries.
+   * @param {string} webhookId @param {CallOptions} [opts] @returns {Promise<object>} the deleted webhook
+   */
+  deleteWebhook(webhookId, opts = {}) {
+    return this.request('DELETE', `/v1/webhooks/${enc(webhookId)}`, opts);
+  }
+
+  /**
+   * Replace the signing secret (sent once, never retried); the new `secret` is in the result.
+   * @param {string} webhookId @param {CallOptions} [opts]
+   * @returns {Promise<{id: string, secret: string, [k: string]: unknown}>}
+   */
+  rotateWebhookSecret(webhookId, opts = {}) {
+    return this.request('POST', `/v1/webhooks/${enc(webhookId)}/rotate-secret`, opts);
+  }
+
+  /**
+   * Queue one `webhook.test` delivery (sent once, never retried).
+   * @param {string} webhookId @param {CallOptions} [opts] @returns {Promise<object>} the delivery
+   */
+  testWebhook(webhookId, opts = {}) {
+    return this.request('POST', `/v1/webhooks/${enc(webhookId)}/test`, opts);
+  }
+
+  /**
+   * One page of a webhook's deliveries, newest first; pass `cursor` back for the next page.
+   * @param {string} webhookId
+   * @param {CallOptions & {status?: 'pending'|'delivered'|'failed', limit?: number, cursor?: string}} [opts]
+   * @returns {Promise<Page>}
+   */
+  listWebhookDeliveries(webhookId, opts = {}) {
+    const query = { status: opts.status, limit: opts.limit, cursor: opts.cursor };
+    return this.request('GET', `/v1/webhooks/${enc(webhookId)}/deliveries`, {
+      query,
+      signal: opts.signal,
+    });
+  }
+
+  /**
+   * Send a delivery again as soon as possible.
+   * @param {string} webhookId @param {string} deliveryId @param {CallOptions} [opts]
+   * @returns {Promise<object>} the delivery
+   */
+  retryWebhookDelivery(webhookId, deliveryId, opts = {}) {
+    return this.request(
+      'POST',
+      `/v1/webhooks/${enc(webhookId)}/deliveries/${enc(deliveryId)}/retry`,
+      { signal: opts.signal, idempotent: true },
+    );
   }
 }
 

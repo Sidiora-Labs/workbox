@@ -32,8 +32,8 @@ test('a v2 database migrates to v3 with an empty api_keys table and its rows int
     v2.close();
 
     const store = Store.open(file, { clock });
-    assert.equal(SCHEMA_VERSION, 3);
-    assert.equal(store.schemaVersion, 3);
+    assert.ok(SCHEMA_VERSION >= 3);
+    assert.equal(store.schemaVersion, SCHEMA_VERSION);
     assert.equal(store.db.prepare(table).get().name, 'api_keys');
     assert.deepEqual(store.getSandbox(s.id).labels, { team: 'a' });
     assert.deepEqual(store.listApiKeys(), []);

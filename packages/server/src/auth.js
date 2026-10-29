@@ -63,6 +63,15 @@ export const SCOPE_MATRIX = Object.freeze({
   'POST /v1/keys': 'admin',
   'GET /v1/keys': 'admin',
   'DELETE /v1/keys/:keyId': 'admin',
+  'POST /v1/webhooks': 'admin',
+  'GET /v1/webhooks': 'read',
+  'GET /v1/webhooks/:webhookId': 'read',
+  'PATCH /v1/webhooks/:webhookId': 'admin',
+  'DELETE /v1/webhooks/:webhookId': 'admin',
+  'POST /v1/webhooks/:webhookId/rotate-secret': 'admin',
+  'POST /v1/webhooks/:webhookId/test': 'admin',
+  'GET /v1/webhooks/:webhookId/deliveries': 'read',
+  'POST /v1/webhooks/:webhookId/deliveries/:deliveryId/retry': 'admin',
 });
 
 /** Routes that act on the whole fleet. A key bound to sandboxes is refused on them with 403. */
