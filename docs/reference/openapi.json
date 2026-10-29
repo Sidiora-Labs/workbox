@@ -1,0 +1,3652 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Workbox API",
+    "version": "0.1.0-alpha.1",
+    "summary": "Sandboxes for AI agents over REST and WebSocket.",
+    "description": "Create sandboxes, run commands and durable sessions in them, move files, follow events and manage keys and webhooks. This document is generated from the server's route table and request schemas.\n\nAuthenticate with `Authorization: Bearer <token>`. Each operation names the scope it needs in `x-workbox-scope` and its description; `admin` stands for every scope. Operations with `x-workbox-unbound-key` refuse a key bound to sandboxes. Operations with `x-websocket` are WebSocket upgrades. A request carrying `Origin` or `Sec-Fetch-Site`, or addressed to a Host the server does not serve, is refused with 403 before authentication.\n\nJSON bodies are at most 8388608 bytes and are checked against the schemas here; string lengths count UTF-8 bytes. Send `x-request-id` to choose the request id that errors and logs carry.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The server that serves this document; `workbox serve` listens on http://127.0.0.1:8790 by default."
+    }
+  ],
+  "security": [
+    {
+      "bearer": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "system",
+      "description": "Health, readiness, metrics, this document and the calling key."
+    },
+    {
+      "name": "sandboxes",
+      "description": "Create, inspect, run in, checkpoint and destroy sandboxes."
+    },
+    {
+      "name": "files",
+      "description": "Read, write and transfer files inside a sandbox."
+    },
+    {
+      "name": "sessions",
+      "description": "Durable sessions: start, drive, wait for and read them."
+    },
+    {
+      "name": "events",
+      "description": "The event log, by long-poll or WebSocket."
+    },
+    {
+      "name": "asks",
+      "description": "Questions raised inside sandboxes with `wb ask`."
+    },
+    {
+      "name": "keys",
+      "description": "Stored API keys and their bindings."
+    },
+    {
+      "name": "webhooks",
+      "description": "Signed webhook deliveries of events."
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness",
+        "description": "Answers while the process serves requests.\n\nNo authentication.",
+        "tags": ["system"],
+        "responses": {
+          "200": {
+            "description": "`{ok: true}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "A browser-originated request or a Host the server does not serve (`E_DENIED`)."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "security": [],
+        "x-workbox-scope": "none"
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "getReadiness",
+        "summary": "Readiness",
+        "description": "Answers 503 `E_UNAVAILABLE` while the server is not ready or shuts down.\n\nNo authentication.",
+        "tags": ["system"],
+        "responses": {
+          "200": {
+            "description": "`{ready: true}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "A browser-originated request or a Host the server does not serve (`E_DENIED`)."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "security": [],
+        "x-workbox-scope": "none"
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "summary": "This document",
+        "description": "The OpenAPI 3.1 document of this server, generated from its route table.\n\nNo authentication.",
+        "tags": ["system"],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "A browser-originated request or a Host the server does not serve (`E_DENIED`)."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "security": [],
+        "x-workbox-scope": "none"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "summary": "Prometheus metrics",
+        "description": "HTTP requests by route, method and status, WebSocket counts and sandboxes by state.\n\nScope: `read`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+        "tags": ["system"],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition format 0.0.4.",
+            "content": {
+              "text/plain; version=0.0.4": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read",
+        "x-workbox-unbound-key": true
+      }
+    },
+    "/v1/sandboxes": {
+      "get": {
+        "operationId": "listSandboxes",
+        "summary": "List sandboxes",
+        "description": "One page of the inventory; pass the returned `cursor` back until `complete` is true. A bound key lists only the sandboxes it sees.\n\nScope: `read`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of the previous page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Rows per page (default 50; more than 1000 counts as 1000).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "includeDeleted",
+            "in": "query",
+            "required": false,
+            "description": "Include destroyed sandboxes.",
+            "schema": {
+              "type": "string",
+              "enum": ["1"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{items, cursor, complete}`; each item is a sandbox row.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      },
+      "post": {
+        "operationId": "createSandbox",
+        "summary": "Create a sandbox",
+        "description": "Create a sandbox and wait until it is ready. The same `idempotencyKey` returns the sandbox it made before. `fromCheckpoint` restores a checkpoint. A bound key puts its labels on the new sandbox; a body label with another value is 403, and a key bound only by `sandboxIds` cannot create sandboxes.\n\nScope: `admin`.",
+        "tags": ["sandboxes"],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "rootfs": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "runtime": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "profile": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 256
+                    }
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "secretRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "maxItems": 64
+                  },
+                  "fromCheckpoint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The sandbox row.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      }
+    },
+    "/v1/sandboxes/{id}": {
+      "get": {
+        "operationId": "getSandbox",
+        "summary": "Inspect a sandbox",
+        "description": "The sandbox row with its state, limits and health.\n\nScope: `read`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sandbox.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      },
+      "delete": {
+        "operationId": "destroySandbox",
+        "summary": "Destroy a sandbox",
+        "description": "Stop every session and remove the sandbox.\n\nScope: `admin`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The destroyed sandbox.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      }
+    },
+    "/v1/sandboxes/{id}/drain": {
+      "post": {
+        "operationId": "drainSandbox",
+        "summary": "Drain a sandbox",
+        "description": "Stop accepting new work in the sandbox.\n\nScope: `admin`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The drained sandbox.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      }
+    },
+    "/v1/sandboxes/{id}/exec": {
+      "post": {
+        "operationId": "execCommand",
+        "summary": "Run a command to completion",
+        "description": "Run `argv` in the sandbox and wait for it to finish. `input` is written to stdin; output beyond `maxOutputBytes` is cut.\n\nScope: `exec`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 65536
+                    },
+                    "minItems": 1,
+                    "maxItems": 4096
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "env": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "input": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "uid": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "gid": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 86400000
+                  },
+                  "graceMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 600000
+                  },
+                  "maxOutputBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 67108864
+                  }
+                },
+                "required": ["argv"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The exit code and the captured stdout and stderr.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/files": {
+      "get": {
+        "operationId": "getFile",
+        "summary": "Read, list or stat a path",
+        "description": "With `list=1`, list the directory at `path`; with `stat=1`, stat it; otherwise read a byte range of the file (at most 4 MiB per call).\n\nScope: `read`.",
+        "tags": ["files"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "Absolute path inside the sandbox.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "list",
+            "in": "query",
+            "required": false,
+            "description": "List the directory: `{path, entries: [{name, type}]}`.",
+            "schema": {
+              "type": "string",
+              "enum": ["1"]
+            }
+          },
+          {
+            "name": "stat",
+            "in": "query",
+            "required": false,
+            "description": "Stat the path: `{path, size, mode, uid, gid, isFile, isDir, mtimeMs}`.",
+            "schema": {
+              "type": "string",
+              "enum": ["1"]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "First byte to read (default 0).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "length",
+            "in": "query",
+            "required": false,
+            "description": "Bytes to read (at most 4194304).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4194304
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A read is `{path, size, offset, data, eof}` with `data` base64.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      },
+      "put": {
+        "operationId": "writeFile",
+        "summary": "Write a file",
+        "description": "Write base64 `data` to `path`, replacing the file or with `append` adding to it. `mkdirs` creates missing parent directories.\n\nScope: `exec`.",
+        "tags": ["files"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "data": {
+                    "type": "string",
+                    "maxLength": 6291456,
+                    "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+                    "contentEncoding": "base64",
+                    "description": "Base64-encoded bytes."
+                  },
+                  "append": {
+                    "type": "boolean"
+                  },
+                  "mode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4095
+                  },
+                  "mkdirs": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["path", "data"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`{path, bytes, size}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      },
+      "delete": {
+        "operationId": "removeFile",
+        "summary": "Remove a file or directory",
+        "description": "Remove the file or empty directory at `path`; with `recursive=1`, a whole tree.\n\nScope: `exec`.",
+        "tags": ["files"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "Absolute path inside the sandbox.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "recursive",
+            "in": "query",
+            "required": false,
+            "description": "Remove a directory and everything in it.",
+            "schema": {
+              "type": "string",
+              "enum": ["1"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{path, removed: true}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/files/mkdir": {
+      "post": {
+        "operationId": "makeDirectory",
+        "summary": "Create a directory",
+        "description": "Create the directory at `path`. `parents` defaults to true; when false, a missing parent is 404.\n\nScope: `exec`.",
+        "tags": ["files"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "parents": {
+                    "type": "boolean"
+                  },
+                  "mode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4095
+                  }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`{path, created: true}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/files/raw": {
+      "get": {
+        "operationId": "downloadFile",
+        "summary": "Download a file",
+        "description": "The file's bytes, streamed, with `content-length` from its size. If the file shrinks while it is read, the connection is cut short of that length.\n\nScope: `read`.",
+        "tags": ["files"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "Absolute path of the file.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file's bytes.",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      },
+      "put": {
+        "operationId": "uploadFile",
+        "summary": "Upload a file",
+        "description": "Replace the file at `path` with the request body, streamed into the sandbox as it arrives. A body over the server's upload cap (default 1 GiB) is 413 `E_LIMIT`. On any failure the partly written file is removed.\n\nScope: `exec`.",
+        "tags": ["files"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "Absolute path of the file.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "description": "Octal file mode, such as `644`.",
+            "schema": {
+              "type": "string",
+              "pattern": "^0?[0-7]{1,4}$"
+            }
+          },
+          {
+            "name": "mkdirs",
+            "in": "query",
+            "required": false,
+            "description": "Create missing parent directories.",
+            "schema": {
+              "type": "string",
+              "enum": ["1"]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {}
+          },
+          "description": "The file's bytes."
+        },
+        "responses": {
+          "200": {
+            "description": "`{path, bytes}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "List sessions",
+        "description": "Live and exited sessions: from the runner while its control channel is up (`source: runner`), else from the server's records (`source: store`).\n\nScope: `read`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{source, sessions}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      },
+      "post": {
+        "operationId": "startSession",
+        "summary": "Start a session",
+        "description": "Start a durable session from `argv`. It keeps running whether or not anyone is attached; `pty` gives it a terminal.\n\nScope: `exec`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 65536
+                    },
+                    "minItems": 1,
+                    "maxItems": 4096
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "env": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 32768
+                    },
+                    "maxProperties": 512,
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    }
+                  },
+                  "inheritEnv": {
+                    "type": "boolean"
+                  },
+                  "uid": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "gid": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._-]+$"
+                  },
+                  "pty": {
+                    "type": "boolean"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "cols": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "spoolBytes": {
+                    "type": "integer",
+                    "minimum": 4096,
+                    "maximum": 67108864
+                  },
+                  "secretRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "maxItems": 64
+                  }
+                },
+                "required": ["argv"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The session, with its `sessionId`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions/{sessionId}": {
+      "get": {
+        "operationId": "getSession",
+        "summary": "Inspect a session",
+        "description": "One session with `exited`: `{code, signal, at}`, or null while it runs.\n\nScope: `read`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      },
+      "delete": {
+        "operationId": "removeSession",
+        "summary": "Forget a session",
+        "description": "Forget an exited session and its output; 409 `E_STATE` while it runs.\n\nScope: `exec`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{sessionId, removed: true}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions/{sessionId}/output": {
+      "get": {
+        "operationId": "readSessionOutput",
+        "summary": "Read session output",
+        "description": "Retained output without attaching. Chunks are whole: they come from `fromSeq` until the next would pass `maxBytes`, and at least one comes when any is retained. Read again from `nextSeq` while `truncated` is true. `gap` is `{requested, available}` when earlier output was dropped from the spool. Once `exited` is set, every byte of output is in the spool. A sandbox whose runner lacks this call answers 501 `E_UNSUPPORTED`.\n\nScope: `read`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "fromSeq",
+            "in": "query",
+            "required": false,
+            "description": "First chunk sequence number (default 0).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "maxBytes",
+            "in": "query",
+            "required": false,
+            "description": "Most output bytes to return (default 1048576).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4194304
+            }
+          },
+          {
+            "name": "encoding",
+            "in": "query",
+            "required": false,
+            "description": "`base64` (default) or `text` for UTF-8 `data`.",
+            "schema": {
+              "type": "string",
+              "enum": ["base64", "text"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{sessionId, chunks: [{seq, stream, data}], nextSeq, gap, truncated, exited}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions/{sessionId}/wait": {
+      "post": {
+        "operationId": "waitForSession",
+        "summary": "Wait for a session to exit",
+        "description": "Answer as soon as the session exits, at once if it already has, or with `exited: null` when `timeoutMs` (default 30000) passes first; call again to keep waiting.\n\nScope: `read`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 300000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`{sessionId, exited}`; `exited` is `{code, signal, at}` or null.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions/{sessionId}/input": {
+      "post": {
+        "operationId": "sendSessionInput",
+        "summary": "Write to session stdin",
+        "description": "Write base64 `data` or UTF-8 `text` (not both) to the session stdin; `eof` closes it.\n\nScope: `exec`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "data": {
+                    "type": "string",
+                    "maxLength": 6291456,
+                    "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+                    "contentEncoding": "base64",
+                    "description": "Base64-encoded bytes."
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 4194304
+                  },
+                  "eof": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The runner acknowledgement.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions/{sessionId}/signal": {
+      "post": {
+        "operationId": "signalSession",
+        "summary": "Signal a session",
+        "description": "Send a signal, such as `SIGTERM`, to the session's process group.\n\nScope: `exec`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "signal": {
+                    "type": "string",
+                    "pattern": "^SIG[A-Z0-9]{2,8}$"
+                  }
+                },
+                "required": ["signal"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The runner acknowledgement.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions/{sessionId}/stop": {
+      "post": {
+        "operationId": "stopSession",
+        "summary": "Stop a session",
+        "description": "SIGTERM the session, then SIGKILL after `graceMs`.\n\nScope: `exec`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "graceMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 600000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The exit.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions/{sessionId}/resize": {
+      "post": {
+        "operationId": "resizeSession",
+        "summary": "Resize a PTY session",
+        "description": "Set the terminal size. A session without a PTY is 501.\n\nScope: `exec`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "cols": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  }
+                },
+                "required": ["rows", "cols"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The runner acknowledgement.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "exec"
+      }
+    },
+    "/v1/sandboxes/{id}/sessions/{sessionId}/ws": {
+      "get": {
+        "operationId": "attachSession",
+        "summary": "Attach to a session (WebSocket)",
+        "description": "Attach to a session over a WebSocket: output, input, resize and signal. A plain GET is 426.\n\nServer frames:\n\n- `{\"type\": \"ready\", \"sessionId\"}` first; client frames sent before it are not read.\n- `{\"type\": \"session.output\", \"params\": {sessionId, stream, seq, data}}`: output, `data` base64, `stream` `stdout`, `stderr` or `pty`. The session's retained output is replayed first.\n- `{\"type\": \"session.exit\", \"params\": {sessionId, code, signal, seq, at}}` when the session exits.\n- `{\"type\": \"error\", \"code\", \"message\"}` when a client frame fails; a failed attach also closes the socket with 1011.\n\nClient frames:\n\n- `{\"type\": \"input\", \"data\": \"<base64>\", \"eof\": true}`: write to stdin; `eof` is optional and closes it.\n- `{\"type\": \"resize\", \"rows\", \"cols\"}`: resize a PTY session.\n- `{\"type\": \"signal\", \"signal\": \"SIGINT\"}`: signal the session's process group.\n\nClosing the socket detaches; the session keeps running.\n\nScope: `exec`.",
+        "tags": ["sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching Protocols: the WebSocket is open."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "426": {
+            "$ref": "#/components/responses/Error",
+            "description": "A plain GET without a WebSocket upgrade (`E_INVALID_PARAMS`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "queryToken": []
+          }
+        ],
+        "x-workbox-scope": "exec",
+        "x-websocket": true
+      }
+    },
+    "/v1/sandboxes/{id}/evidence": {
+      "get": {
+        "operationId": "listEvidence",
+        "summary": "List evidence",
+        "description": "Evidence envelopes recorded by `wb run` in the sandbox.\n\nScope: `read`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of the previous page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Rows per page (default 50; more than 1000 counts as 1000).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{items, cursor, complete}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/sandboxes/{id}/artifacts": {
+      "get": {
+        "operationId": "listArtifacts",
+        "summary": "List artifacts",
+        "description": "Artifacts the sandbox recorded.\n\nScope: `read`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of the previous page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Rows per page (default 50; more than 1000 counts as 1000).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{items, cursor, complete}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/sandboxes/{id}/artifacts/{sha256}": {
+      "get": {
+        "operationId": "downloadArtifact",
+        "summary": "Download an artifact",
+        "description": "The artifact's bytes, streamed; 404 unless this sandbox holds that digest.\n\nScope: `read`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sha256",
+            "in": "path",
+            "required": true,
+            "description": "Artifact digest: 64 lowercase hex characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The artifact's bytes.",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/sandboxes/{id}/checkpoints": {
+      "get": {
+        "operationId": "listCheckpoints",
+        "summary": "List checkpoints",
+        "description": "The sandbox's checkpoints.\n\nScope: `read`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{checkpoints}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      },
+      "post": {
+        "operationId": "createCheckpoint",
+        "summary": "Create a checkpoint",
+        "description": "Checkpoint the sandbox's upper layer, optionally limited to `paths`, with a `name` and `summary`.\n\nScope: `admin`.",
+        "tags": ["sandboxes"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "summary": {
+                    "type": "string",
+                    "maxLength": 65536
+                  },
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    },
+                    "maxItems": 256
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The checkpoint.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      }
+    },
+    "/v1/sandboxes/{id}/events": {
+      "get": {
+        "operationId": "listSandboxEvents",
+        "summary": "List a sandbox's events",
+        "description": "This sandbox's events after `afterSeq`. With `waitMs`, the request answers as soon as a matching event is logged, or with an empty `events` when the time is up.\n\nScope: `read`.",
+        "tags": ["events"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "afterSeq",
+            "in": "query",
+            "required": false,
+            "description": "Events with a greater `seq` (default 0).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many events (default 100, at most 1000).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated event types, each exact or `prefix.*` for every type starting with `prefix.`; at most 32. May repeat.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "waitMs",
+            "in": "query",
+            "required": false,
+            "description": "Long-poll: with nothing after `afterSeq` yet, wait this long for a new matching event.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{events, nextSeq}` in `seq` order. Each event is `{seq, sandboxId, type, source, payload, causation, at}`. Pass `nextSeq` back as `afterSeq` for the next page.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/sandboxes/{id}/events/ws": {
+      "get": {
+        "operationId": "streamSandboxEvents",
+        "summary": "Stream a sandbox's events (WebSocket)",
+        "description": "This sandbox's events over a WebSocket: the stored ones after `afterSeq`, then live ones, each once and in order. A plain GET is 426.\n\nServer frames:\n\n- `{\"type\": \"event\", \"event\": {...}}`, one per event, in `seq` order.\n- `{\"type\": \"live\", \"seq\": N}`, once, when the stream turns live: every matching event up to `N` has been sent and later ones follow as they are logged.\n- `{\"type\": \"error\", \"code\", \"message\"}` before the server closes the stream with 1011.\n\nA client that reads too slowly is dropped once 1 MiB is waiting to be sent to it; shutdown closes the stream with 1001. To resume, reconnect with `afterSeq` set to the last `seq` received, or to the `live` frame's `N` when that is greater.\n\nScope: `read`.",
+        "tags": ["events"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Sandbox id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "afterSeq",
+            "in": "query",
+            "required": false,
+            "description": "Replay the stored events after this `seq` first; without it, only new ones.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated event types, each exact or `prefix.*` for every type starting with `prefix.`; at most 32. May repeat.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching Protocols: the WebSocket is open."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "426": {
+            "$ref": "#/components/responses/Error",
+            "description": "A plain GET without a WebSocket upgrade (`E_INVALID_PARAMS`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "queryToken": []
+          }
+        ],
+        "x-workbox-scope": "read",
+        "x-websocket": true
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "listEvents",
+        "summary": "List events",
+        "description": "Events of every sandbox the key sees, after `afterSeq`. With `waitMs`, the request answers as soon as a matching event is logged, or with an empty `events` when the time is up.\n\nScope: `read`.",
+        "tags": ["events"],
+        "parameters": [
+          {
+            "name": "afterSeq",
+            "in": "query",
+            "required": false,
+            "description": "Events with a greater `seq` (default 0).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many events (default 100, at most 1000).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated event types, each exact or `prefix.*` for every type starting with `prefix.`; at most 32. May repeat.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "waitMs",
+            "in": "query",
+            "required": false,
+            "description": "Long-poll: with nothing after `afterSeq` yet, wait this long for a new matching event.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60000
+            }
+          },
+          {
+            "name": "sandboxId",
+            "in": "query",
+            "required": false,
+            "description": "Only the events of this sandbox.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{events, nextSeq}` in `seq` order. Each event is `{seq, sandboxId, type, source, payload, causation, at}`. Pass `nextSeq` back as `afterSeq` for the next page.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/events/ws": {
+      "get": {
+        "operationId": "streamEvents",
+        "summary": "Stream events (WebSocket)",
+        "description": "Events of every sandbox the key sees over a WebSocket: the stored ones after `afterSeq`, then live ones, each once and in order. A plain GET is 426.\n\nServer frames:\n\n- `{\"type\": \"event\", \"event\": {...}}`, one per event, in `seq` order.\n- `{\"type\": \"live\", \"seq\": N}`, once, when the stream turns live: every matching event up to `N` has been sent and later ones follow as they are logged.\n- `{\"type\": \"error\", \"code\", \"message\"}` before the server closes the stream with 1011.\n\nA client that reads too slowly is dropped once 1 MiB is waiting to be sent to it; shutdown closes the stream with 1001. To resume, reconnect with `afterSeq` set to the last `seq` received, or to the `live` frame's `N` when that is greater.\n\nScope: `read`.",
+        "tags": ["events"],
+        "parameters": [
+          {
+            "name": "afterSeq",
+            "in": "query",
+            "required": false,
+            "description": "Replay the stored events after this `seq` first; without it, only new ones.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated event types, each exact or `prefix.*` for every type starting with `prefix.`; at most 32. May repeat.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sandboxId",
+            "in": "query",
+            "required": false,
+            "description": "Only the events of this sandbox.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching Protocols: the WebSocket is open."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "426": {
+            "$ref": "#/components/responses/Error",
+            "description": "A plain GET without a WebSocket upgrade (`E_INVALID_PARAMS`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "queryToken": []
+          }
+        ],
+        "x-workbox-scope": "read",
+        "x-websocket": true
+      }
+    },
+    "/v1/reconcile": {
+      "post": {
+        "operationId": "reconcile",
+        "summary": "Reconcile with the host",
+        "description": "Compare the recorded sandboxes with what runs on the host.\n\nScope: `admin`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+        "tags": ["sandboxes"],
+        "responses": {
+          "200": {
+            "description": "`{attached, absent, suspect, quarantined}`, each a list of sandbox ids.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin",
+        "x-workbox-unbound-key": true
+      }
+    },
+    "/v1/asks": {
+      "get": {
+        "operationId": "listAsks",
+        "summary": "List asks",
+        "description": "Questions raised with `wb ask` inside sandboxes.\n\nScope: `read`.",
+        "tags": ["asks"],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Which asks (default `all`).",
+            "schema": {
+              "type": "string",
+              "enum": ["open", "answered", "expired", "all"]
+            }
+          },
+          {
+            "name": "sandboxId",
+            "in": "query",
+            "required": false,
+            "description": "Only the asks of this sandbox.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many (default 100; more than 1000 counts as 1000).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{asks}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/asks/{askId}/answer": {
+      "post": {
+        "operationId": "answerAsk",
+        "summary": "Answer an ask",
+        "description": "Answer a pending ask; `answer` is any JSON value.\n\nScope: `answer`.",
+        "tags": ["asks"],
+        "parameters": [
+          {
+            "name": "askId",
+            "in": "path",
+            "required": true,
+            "description": "Ask id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {}
+                },
+                "required": ["answer"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answered ask.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "answer"
+      }
+    },
+    "/v1/whoami": {
+      "get": {
+        "operationId": "whoami",
+        "summary": "The calling key",
+        "description": "The key this request authenticated with.\n\nScope: any key.",
+        "tags": ["system"],
+        "responses": {
+          "200": {
+            "description": "`{id, scopes, binding, source, expiresAt}`; `source` is `config` or `store`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "any key"
+      }
+    },
+    "/v1/keys": {
+      "post": {
+        "operationId": "createKey",
+        "summary": "Mint a stored key",
+        "description": "Mint a key with `scopes`, optionally bound to sandboxes by `labels` or `sandboxIds` and expiring after `ttlSeconds`. The token is in this answer only.\n\nScope: `admin`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+        "tags": ["keys"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": ["read", "exec", "admin", "answer"]
+                    },
+                    "minItems": 1,
+                    "maxItems": 4
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxProperties": 32,
+                    "propertyNames": {
+                      "pattern": "^[\\s\\S]{1,128}$"
+                    }
+                  },
+                  "sandboxIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "maxItems": 1000
+                  },
+                  "ttlSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 315360000
+                  }
+                },
+                "required": ["name", "scopes"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "`{id, name, token, scopes, binding, createdAt, expiresAt}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin",
+        "x-workbox-unbound-key": true
+      },
+      "get": {
+        "operationId": "listKeys",
+        "summary": "List stored keys",
+        "description": "Stored keys with `lastUsedAt` and `revokedAt`; never a token or its digest.\n\nScope: `admin`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+        "tags": ["keys"],
+        "responses": {
+          "200": {
+            "description": "`{keys}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin",
+        "x-workbox-unbound-key": true
+      }
+    },
+    "/v1/keys/{keyId}": {
+      "delete": {
+        "operationId": "revokeKey",
+        "summary": "Revoke a stored key",
+        "description": "The key stops working on the next request.\n\nScope: `admin`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+        "tags": ["keys"],
+        "parameters": [
+          {
+            "name": "keyId",
+            "in": "path",
+            "required": true,
+            "description": "Stored key id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked key.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin",
+        "x-workbox-unbound-key": true
+      }
+    },
+    "/v1/webhooks": {
+      "post": {
+        "operationId": "createWebhook",
+        "summary": "Register a webhook",
+        "description": "`url` must be `https:` without credentials and resolve only to public addresses unless the server configuration allows otherwise. `types` holds event types or `prefix.*` patterns; none means every type. `sandboxId` must name a sandbox the key sees. `labels` keeps events of sandboxes that carry every label. The signing `secret` is in this answer only.\n\nScope: `admin`.",
+        "tags": ["webhooks"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[a-z][a-z0-9_.-]*(\\.\\*)?$"
+                    },
+                    "maxItems": 64
+                  },
+                  "sandboxId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxProperties": 32,
+                    "propertyNames": {
+                      "pattern": "^[\\s\\S]{1,128}$"
+                    }
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The webhook with its `secret`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      },
+      "get": {
+        "operationId": "listWebhooks",
+        "summary": "List webhooks",
+        "description": "Webhooks in creation order, without secrets. A bound key sees the ones it created.\n\nScope: `read`.",
+        "tags": ["webhooks"],
+        "responses": {
+          "200": {
+            "description": "`{webhooks}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/webhooks/{webhookId}": {
+      "get": {
+        "operationId": "getWebhook",
+        "summary": "Inspect a webhook",
+        "description": "One webhook, without its secret.\n\nScope: `read`.",
+        "tags": ["webhooks"],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "description": "Webhook id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{id, url, types, sandboxId, labels, description, enabled, disabledReason, ownerKey, binding, lastSeq, createdAt, updatedAt}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      },
+      "patch": {
+        "operationId": "updateWebhook",
+        "summary": "Change a webhook",
+        "description": "Change `url`, `types`, `description` or `enabled`; enabling clears `disabledReason`.\n\nScope: `admin`.",
+        "tags": ["webhooks"],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "description": "Webhook id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[a-z][a-z0-9_.-]*(\\.\\*)?$"
+                    },
+                    "maxItems": 64
+                  },
+                  "description": {
+                    "type": ["string", "null"],
+                    "maxLength": 1024
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The webhook.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      },
+      "delete": {
+        "operationId": "deleteWebhook",
+        "summary": "Delete a webhook",
+        "description": "Delete the webhook and its deliveries.\n\nScope: `admin`.",
+        "tags": ["webhooks"],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "description": "Webhook id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deleted webhook.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      }
+    },
+    "/v1/webhooks/{webhookId}/rotate-secret": {
+      "post": {
+        "operationId": "rotateWebhookSecret",
+        "summary": "Rotate the signing secret",
+        "description": "Replace the signing secret; later attempts, retries included, use the new one.\n\nScope: `admin`.",
+        "tags": ["webhooks"],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "description": "Webhook id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The webhook with its new `secret`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      }
+    },
+    "/v1/webhooks/{webhookId}/test": {
+      "post": {
+        "operationId": "testWebhook",
+        "summary": "Send a test delivery",
+        "description": "Queue one `webhook.test` delivery, outside the event log: its `seq` and `sandboxId` are null.\n\nScope: `admin`.",
+        "tags": ["webhooks"],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "description": "Webhook id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The queued delivery.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      }
+    },
+    "/v1/webhooks/{webhookId}/deliveries": {
+      "get": {
+        "operationId": "listWebhookDeliveries",
+        "summary": "List deliveries",
+        "description": "The webhook's deliveries, newest first.\n\nScope: `read`.",
+        "tags": ["webhooks"],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "description": "Webhook id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Only deliveries in this state.",
+            "schema": {
+              "type": "string",
+              "enum": ["pending", "delivered", "failed"]
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of the previous page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Rows per page (default 50; more than 1000 counts as 1000).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`{items, cursor, complete}`; each delivery is `{id, webhookId, eventSeq, event, status, attempts, nextAt, lastStatus, lastError, createdAt, deliveredAt}`.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "read"
+      }
+    },
+    "/v1/webhooks/{webhookId}/deliveries/{deliveryId}/retry": {
+      "post": {
+        "operationId": "retryWebhookDelivery",
+        "summary": "Retry a delivery",
+        "description": "Send a delivery again now, whatever its state.\n\nScope: `admin`.",
+        "tags": ["webhooks"],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "description": "Webhook id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "deliveryId",
+            "in": "path",
+            "required": true,
+            "description": "Delivery id.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The delivery.",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "A missing or invalid bearer token (`E_DENIED`)."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "No such resource, or one the key does not see."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure; see the error codes."
+          }
+        },
+        "x-workbox-scope": "admin"
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A scoped API key: `Authorization: Bearer <token>`. Scopes are `read`, `exec`, `admin`, `answer`; `admin` stands for all of them."
+      },
+      "queryToken": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "token",
+        "description": "The same token as a query parameter, accepted on WebSocket upgrades only."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable code, such as `E_NOT_FOUND`."
+              },
+              "message": {
+                "type": "string",
+                "description": "For people; may change."
+              },
+              "details": {
+                "description": "Machine-readable detail, such as `{errors: [{path, message}]}` for a validation failure."
+              },
+              "requestId": {
+                "type": "string",
+                "description": "The request id, also in the `x-request-id` header; absent when a WebSocket upgrade is refused."
+              }
+            }
+          }
+        },
+        "description": "The error envelope. Each code answers with one status:\n\n- 400: `E_PARSE`, `E_INVALID_PARAMS`\n- 403: `E_DENIED`\n- 404: `E_UNKNOWN_METHOD`, `E_NOT_FOUND`\n- 409: `E_CONFLICT`, `E_BUSY`, `E_STATE`\n- 413: `E_LINE_TOO_LONG`\n- 416: `E_GAP`\n- 423: `E_QUARANTINED`\n- 429: `E_LIMIT`\n- 499: `E_CANCELLED`\n- 500: `E_INTERNAL`\n- 501: `E_UNSUPPORTED`\n- 503: `E_CLOSED`, `E_UNAVAILABLE`\n- 504: `E_TIMEOUT`\n\nA missing or invalid token is 401 `E_DENIED`, a body over the size cap 413 `E_LIMIT`, a route that exists under another method 405 `E_INVALID_PARAMS`, and an unknown path 404. The 5xx message of an error without a code is `internal error`."
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "The error envelope.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

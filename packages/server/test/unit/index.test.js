@@ -7,6 +7,7 @@ import * as auth from '../../src/auth.js';
 import * as access from '../../src/access.js';
 import * as streams from '../../src/streams.js';
 import * as webhooks from '../../src/webhooks.js';
+import * as openapi from '../../src/openapi.js';
 import { AUTH_FAILURE_DEFAULTS, addressKey, createFailureLimiter } from '../../src/ratelimit.js';
 
 test('index re-exports', () => {
@@ -68,4 +69,18 @@ test('index re-exports', () => {
     'DELIVERY_STATUSES',
   ])
     assert.equal(server[name], webhooks[name], name);
+  for (const name of [
+    'buildOpenApi',
+    'routeDocProblems',
+    'allRoutes',
+    'openApiPath',
+    'patternOf',
+    'toJsonSchema',
+    'ROUTE_DOCS',
+    'PUBLIC_ROUTES',
+    'OPENAPI_PATH',
+    'SERVER_VERSION',
+    'BASE64_PATTERN',
+  ])
+    assert.equal(server[name], openapi[name], name);
 });

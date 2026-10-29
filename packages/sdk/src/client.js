@@ -44,6 +44,7 @@ import { WorkboxApiError } from './errors.js';
 export const ROUTES = Object.freeze({
   'GET /healthz': ['WorkboxClient#health'],
   'GET /readyz': ['WorkboxClient#ready'],
+  'GET /v1/openapi.json': ['WorkboxClient#openapi'],
   'GET /metrics': ['WorkboxClient#metrics'],
   'GET /v1/sandboxes': ['WorkboxClient#listSandboxes'],
   'POST /v1/sandboxes': ['WorkboxClient#createSandbox'],
@@ -189,6 +190,15 @@ export class WorkboxClient {
    */
   ready(opts = {}) {
     return this.request('GET', '/readyz', { signal: opts.signal, idempotent: false });
+  }
+
+  /**
+   * The server's OpenAPI 3.1 document: every route, its scope and its request schema. Served
+   * without authentication.
+   * @param {CallOptions} [opts] @returns {Promise<Record<string, any>>}
+   */
+  openapi(opts = {}) {
+    return this.request('GET', '/v1/openapi.json', opts);
   }
 
   /** Prometheus exposition text. @param {CallOptions} [opts] @returns {Promise<string>} */

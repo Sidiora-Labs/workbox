@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { ReadableStream } from 'node:stream/web';
-import { SCOPE_MATRIX, WsSocket, acceptKey } from '@workbox/server';
+import { PUBLIC_ROUTES, SCOPE_MATRIX, WsSocket, acceptKey } from '@workbox/server';
 import {
   EventStream,
   ROUTES,
@@ -68,7 +68,8 @@ const unavailable = { status: 503, body: { error: { code: 'E_UNAVAILABLE', messa
 const page = { status: 200, body: { items: [], cursor: null, complete: true } };
 
 test('every server route maps to SDK methods that exist', () => {
-  const serverRoutes = [...Object.keys(SCOPE_MATRIX), 'GET /healthz', 'GET /readyz'].sort();
+  const serverRoutes = [...Object.keys(SCOPE_MATRIX), ...PUBLIC_ROUTES].sort();
+  assert.ok(PUBLIC_ROUTES.includes('GET /v1/openapi.json'));
   assert.deepEqual(Object.keys(ROUTES).sort(), serverRoutes);
   const classes = { WorkboxClient, Sandbox, SandboxSession };
   for (const [route, methods] of Object.entries(ROUTES))

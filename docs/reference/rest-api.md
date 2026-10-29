@@ -6,6 +6,22 @@ it is given a certificate. The routes, scopes and body schemas below are `SCOPE_
 [SDK](../guides/sdk.md) covers every route; the table in
 [the provider mapping](../hyperfide-provider.md) shows how they line up with Hyperfide's contract.
 
+## OpenAPI document
+
+`GET /v1/openapi.json` returns an OpenAPI 3.1 description of every route below, generated from the
+same route table, scopes and body schemas the server enforces. It needs no token; the browser and
+`Host` checks still apply. A copy is checked in at [openapi.json](openapi.json); `make openapi-docs`
+rewrites it and `make docs-check` fails when it is out of date.
+
+An agent can hand the document to its tools to learn the routes and their request shapes, then
+write its own calls against them. Beyond standard OpenAPI, each operation carries:
+
+- `x-workbox-scope`: the scope it needs (`read`, `exec`, `admin`, `answer`, `any key`, or `none`).
+- `x-workbox-unbound-key: true`: a key bound to sandboxes is refused (the fleet routes).
+- `x-websocket: true`: a WebSocket upgrade; its description lists the frames.
+
+The SDK's `client.openapi()` fetches it.
+
 ## Requests
 
 - Authenticate with `Authorization: Bearer <token>`. A WebSocket upgrade also accepts
@@ -29,6 +45,7 @@ it is given a certificate. The routes, scopes and body schemas below are `SCOPE_
 | ---------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /healthz`                                 | none     | Liveness.                                                                                                                              |
 | `GET /readyz`                                  | none     | Readiness; 503 while the server shuts down.                                                                                            |
+| `GET /v1/openapi.json`                         | none     | The OpenAPI 3.1 document of this API; see [above](#openapi-document).                                                                  |
 | `GET /metrics`                                 | `read`   | Prometheus text.                                                                                                                       |
 | `GET /v1/sandboxes`                            | `read`   | List; query `cursor`, `limit`, `includeDeleted=1`.                                                                                     |
 | `POST /v1/sandboxes`                           | `admin`  | Create (201). Body: `name`, `rootfs`, `runtime`, `profile`, `labels`, `idempotencyKey`, `secretRefs`, `fromCheckpoint`.                |

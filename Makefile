@@ -33,7 +33,7 @@ PRIVILEGED_UNIT := \
 ALL_UNIT := $(sort $(shell find packages -path '*/test/unit/*' -name '*.test.js' -not -path '*/node_modules/*'))
 UNPRIVILEGED_UNIT := $(filter-out $(PRIVILEGED_UNIT),$(ALL_UNIT))
 
-.PHONY: help install lint fmt fmt-check check-tests docs-check wb-docs check \
+.PHONY: help install lint fmt fmt-check check-tests docs-check wb-docs openapi-docs check \
 	unit unit-unprivileged test coverage deploy-check ci changelog
 
 help: ## List the targets
@@ -54,11 +54,14 @@ fmt-check: ## Check formatting without writing
 check-tests: ## 1:1 src to unit test mapping, integration and e2e presence
 	$(PNPM) check:tests
 
-docs-check: ## docs/wb.md is current and every doc link resolves
+docs-check: ## docs/wb.md and docs/reference/openapi.json are current; every doc link resolves
 	$(NODE) docs/check.mjs
 
 wb-docs: ## Regenerate docs/wb.md from the wb command table
 	$(NODE) docs/gen-wb.mjs
+
+openapi-docs: ## Regenerate docs/reference/openapi.json from the server's routes
+	$(NODE) docs/gen-openapi.mjs
 
 check: lint fmt-check check-tests docs-check ## Static gates; no privileges needed
 
