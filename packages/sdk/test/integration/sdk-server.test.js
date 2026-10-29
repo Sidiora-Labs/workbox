@@ -297,7 +297,7 @@ test('the sdk drives every route of a real server over a real engine', async (t)
           (e) => e.name === 'AbortError',
         );
         assert.equal((await later).exitCode, 0);
-        assert.equal(followed.at(-1), 'sdk.later');
+        assert.ok(followed.includes('sdk.later'), followed.join(', '));
 
         const put = await harness.sandbox(a.id).exec({
           argv: [

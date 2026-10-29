@@ -1,5 +1,6 @@
 import { E } from '../errors.js';
 import { acceptOutboxFile, deliverToInbox } from './outbox.js';
+import { appendLogged } from './events.js';
 
 /** `broker.artifact.*` handlers over the outbox/CAS handoff. */
 
@@ -28,6 +29,11 @@ export function artifactPut(ctx, params) {
     action: 'artifact.put',
     sandboxId: ctx.sandboxId,
     data: { sha256: accepted.sha256, size: accepted.size, name: params.name ?? '' },
+  });
+  appendLogged(ctx, 'artifact.added', {
+    sha256: accepted.sha256,
+    size: accepted.size,
+    name: params.name ?? '',
   });
   return { sha256: accepted.sha256, size: accepted.size };
 }

@@ -5,6 +5,30 @@ import { E } from '../errors.js';
 /** Maximum serialised payload bytes persisted per event. */
 export const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
 
+/** Type prefixes of the events the host records; `wb event emit` may not use them. */
+export const RESERVED_EVENT_PREFIXES = Object.freeze([
+  'sandbox.',
+  'session.',
+  'exec.',
+  'ask.',
+  'checkpoint.',
+  'artifact.',
+  'webhook.',
+  'key.',
+]);
+
+/**
+ * Append to the context's sandbox event log: through `ctx.logEvent` when the engine provides it,
+ * so the append is announced, otherwise straight to the store.
+ * @param {object} ctx @param {string} type @param {object} [payload]
+ * @param {{causation?: string, source?: 'host'|'wb'}} [opts]
+ * @returns {number} the event sequence number
+ */
+export function appendLogged(ctx, type, payload, opts = {}) {
+  if (ctx.logEvent) return ctx.logEvent(type, payload, opts).seq;
+  return ctx.store.appendEvent(ctx.sandboxId, type, payload, opts);
+}
+
 /**
  * Bound an arbitrary JSON value by depth and serialised size (fail closed).
  * @param {unknown} value @param {number} [depth]
@@ -21,6 +45,12 @@ export function assertBoundedJson(value, depth = 0) {
 
 /** @param {object} ctx @param {{type: string, payload?: object, causation?: string}} params */
 export function eventEmit(ctx, params) {
+  const reserved = RESERVED_EVENT_PREFIXES.find((p) => params.type.startsWith(p));
+  if (reserved)
+    throw E.invalid(`event type ${params.type} is reserved for the host (${reserved}*)`, {
+      type: params.type,
+      prefix: reserved,
+    });
   const payload = params.payload ?? null;
   if (payload !== null) {
     assertBoundedJson(payload);
@@ -28,7 +58,7 @@ export function eventEmit(ctx, params) {
     if (bytes > MAX_EVENT_PAYLOAD_BYTES)
       throw E.limit(`event payload is ${bytes} bytes, max ${MAX_EVENT_PAYLOAD_BYTES}`, { bytes });
   }
-  const seq = ctx.store.appendEvent(ctx.sandboxId, params.type, payload ?? undefined, {
+  const seq = appendLogged(ctx, params.type, payload ?? undefined, {
     causation: params.causation,
     source: 'wb',
   });

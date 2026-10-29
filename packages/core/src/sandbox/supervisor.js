@@ -124,7 +124,8 @@ export async function connectWithRetry(socketPath, opts = {}) {
  * Host-side supervisor of one sandbox: launches the chain, performs the boot handshake, holds the
  * control channel, observes health and tears everything down.
  *
- * Emits: 'state' (row), 'health' (health), 'detached', 'event' (method, params) for runner events.
+ * Emits: 'state' (row, {from, to, reason}), 'health' (health, {from, to, reason}) when health
+ * changes, 'detached', 'event' (method, params) for runner events.
  */
 export class Supervisor extends EventEmitter {
   /**
@@ -216,16 +217,18 @@ export class Supervisor extends EventEmitter {
   }
 
   _transition(to, reason, patch) {
+    const from = this.store.getSandbox(this.id)?.state ?? null;
     this.sandbox = this.store.transition(this.id, to, reason, patch ? { patch } : {});
     this.log.info('state', { to, reason });
-    this.emit('state', this.sandbox);
+    this.emit('state', this.sandbox, { from, to, reason: reason ?? null });
     return this.sandbox;
   }
 
   _observe(health, reason) {
-    if (this.sandbox.health !== health) {
+    const from = this.sandbox.health;
+    if (from !== health) {
       this.log.info('health', reason ? { health, reason } : { health });
-      this.emit('health', health);
+      this.emit('health', health, { from, to: health, reason: reason ?? null });
     }
     this.sandbox = this.store.observe(this.id, health);
   }

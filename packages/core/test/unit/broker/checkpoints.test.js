@@ -21,6 +21,10 @@ test('create/list/restore round-trip; unsafe tar names rejected', async () => {
   const ctx = { store, sandboxId: sb.id, upperDir, checkpointsDir: path.join(t.dir, 'cps') };
   const cp = await checkpointCreate(ctx, { name: 'first' });
   assert.equal(checkpointList(ctx).checkpoints.length, 1);
+  assert.deepEqual(
+    store.listEvents(sb.id).map((e) => [e.type, e.source, e.payload]),
+    [['checkpoint.created', 'host', { checkpointId: cp.id, name: 'first' }]],
+  );
   const target = path.join(t.dir, 'upper2');
   await checkpointRestore(ctx, cp.id, target);
   assert.equal(fs.readFileSync(path.join(target, 'work', 'f.txt'), 'utf8'), 'checkpoint me');
@@ -46,6 +50,7 @@ test('a failed checkpoint create removes its partial archive and nothing outside
     assert.deepEqual(fs.readdirSync(ctx.checkpointsDir), [], 'partial archive removed');
     assert.equal(fs.readFileSync(path.join(upperDir, 'kept.txt'), 'utf8'), 'upper data');
     assert.equal(checkpointList(ctx).checkpoints.length, 0);
+    assert.deepEqual(store.listEvents(sb.id), [], 'a refused checkpoint logs nothing');
   } finally {
     store.close();
     t.cleanup();

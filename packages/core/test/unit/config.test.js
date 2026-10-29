@@ -277,3 +277,27 @@ test('numeric settings above their kernel, cgroup or wire maxima are rejected', 
   assert.equal(total, 2 ** 53);
   assert.equal(total - 1, Number.MAX_SAFE_INTEGER, 'the sum is still exact');
 });
+
+test('events.retentionDays defaults to 30 and must be a whole number of days in range', () => {
+  assert.equal(loadConfig({ env: {} }).events.retentionDays, 30);
+  assert.equal(DEFAULTS.events.retentionDays, 30);
+  assert.equal(
+    loadConfig({ env: {}, overrides: { events: { retentionDays: 7 } } }).events.retentionDays,
+    7,
+  );
+  assert.equal(
+    loadConfig({ env: {}, overrides: { events: { retentionDays: MAXIMA.retentionDays } } }).events
+      .retentionDays,
+    1e8,
+  );
+  for (const retentionDays of [0, -1, 1.5, '30', null, MAXIMA.retentionDays + 1])
+    assert.throws(
+      () => loadConfig({ env: {}, overrides: { events: { retentionDays } } }),
+      (e) => e.code === 'E_INVALID_PARAMS' && /events\.retentionDays must be/.test(e.message),
+      String(retentionDays),
+    );
+  assert.throws(
+    () => loadConfig({ env: {}, overrides: { events: { retention: 3 } } }),
+    (e) => e.code === 'E_INVALID_PARAMS' && e.data.unknown.includes('events.retention'),
+  );
+});

@@ -18,6 +18,7 @@ export const DEFAULTS = Object.freeze({
   runtime: 'current',
   session: Object.freeze({ spoolBytes: 8 * 1024 * 1024, stopGraceMs: 5000 }),
   lease: Object.freeze({ ttlMs: 300_000 }),
+  events: Object.freeze({ retentionDays: 30 }),
   bootTimeoutMs: 20_000,
 });
 
@@ -65,6 +66,8 @@ export const MAXIMA = Object.freeze({
   ttlMs: 24 * 3600 * 1000,
   /** Largest delay a Node timer honours; beyond it setTimeout fires after 1 ms. */
   bootTimeoutMs: 2 ** 31 - 1,
+  /** ECMAScript time values span 10^8 days either side of the epoch; no older cutoff exists. */
+  retentionDays: 1e8,
 });
 
 /**
@@ -79,6 +82,7 @@ export const MAXIMA = Object.freeze({
  * @property {string} runtime
  * @property {{spoolBytes: number, stopGraceMs: number}} session
  * @property {{ttlMs: number}} lease
+ * @property {{retentionDays: number}} events days the event log keeps a row
  * @property {number} bootTimeoutMs
  * @property {Paths} paths
  */
@@ -232,6 +236,7 @@ function validate(cfg) {
   pos(cfg.session.spoolBytes, 'session.spoolBytes', 4096, MAXIMA.spoolBytes);
   pos(cfg.session.stopGraceMs, 'session.stopGraceMs', 0, MAXIMA.stopGraceMs);
   pos(cfg.lease.ttlMs, 'lease.ttlMs', 1000, MAXIMA.ttlMs);
+  pos(cfg.events.retentionDays, 'events.retentionDays', 1, MAXIMA.retentionDays);
   pos(cfg.bootTimeoutMs, 'bootTimeoutMs', 1000, MAXIMA.bootTimeoutMs);
   if (problems.length)
     throw E.invalid(`invalid configuration: ${problems.join('; ')}`, { problems });

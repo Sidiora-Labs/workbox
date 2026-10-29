@@ -120,6 +120,15 @@ policy and test, and preset manifests.
 - `packages/core/src/audit.js`: append-only NDJSON with a SHA-256 chain across files, a
   cross-process lockfile, torn-final-line repair, and streaming verification.
 
+The `events` table is one sequenced log of what happens to every sandbox. The Manager records
+host events (`source: 'host'`): `sandbox.created`, `sandbox.state`, `sandbox.health` when health
+changes, `session.started`, `session.exited`, `exec.finished` (naming only `argv[0]`),
+`ask.raised`, `ask.answered`, `checkpoint.created` and `artifact.added`. `wb event emit` appends
+`source: 'wb'` events and may not use those prefixes, nor `webhook.` or `key.`. Payloads pass
+through the secret redactor, and the Manager emits `'logged'` with each stored row. A session
+that exits while no host is attached is recorded when the Manager reattaches. Rows older than
+`events.retentionDays` are pruned at start and every hour.
+
 ## State
 
 Desired state follows `REQUESTED → PROVISIONING → BOOTSTRAPPING → READY → DRAINING → DELETING →
