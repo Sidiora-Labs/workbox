@@ -29,6 +29,11 @@ Usage:
   workbox runtime install|list [--node-version v]
   workbox sandbox create|ls|inspect|rm|exec|shell|drain|events [--server URL --token T]
   workbox sandbox attach <id> <sessionId> [--server URL --token T]
+  workbox sandbox run <id> [--name n] [--wait] -- <cmd...>
+  workbox sandbox logs <id> <sessionId>
+  workbox sandbox wait <id> <sessionId> [--timeout ms]
+  workbox sandbox kill <id> <sessionId> [--signal NAME]
+  workbox sandbox cp <src> <dest>
   workbox shell <id>
   workbox agent <claude|codex> [<sandbox-id>] [-p|--prompt TEXT] [--name N]
         [--network allowlist|egress|none] [--allow HOST|@set]... [--secret REF[=ENV]]...
@@ -49,6 +54,10 @@ OPENAI_API_KEY as CODEX_API_KEY); --secret replaces it, --no-secret grants none 
 inside the box. \`sandbox attach\` replays a session from its start and follows it to its exit.
 \`key create\` mints a stored API key and prints its token once; --label and --sandbox bind it to
 the sandboxes it may see, --ttl makes it expire, and \`key rm\` revokes it at once.
+\`sandbox run\` starts a background session and prints {sessionId}; with --wait it waits, prints
+the output and exits with the command's code. \`logs\` prints a session's retained output, \`wait\`
+waits for its exit, \`kill\` signals it (default SIGTERM). \`cp\` copies a file into or out of a
+sandbox; one side is <id>:<path>.
 The serve config file holds {"keys": [{"id", "tokenSha256", "scopes"}], "host", "port", "serverNames",
 "tls": {"certFile", "keyFile"}}. With TLS, serve answers HTTPS and WSS and SIGHUP reloads the certificate.
 Exit codes: 0 ok, 1 internal, 2 usage, 3 not found, 4 denied/unavailable/busy (and doctor on a

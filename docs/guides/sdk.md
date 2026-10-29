@@ -39,7 +39,40 @@ const { data, eof } = await box.readFile('/tmp/hello.txt'); // data is base64
 ```
 
 `listFiles(dir)` lists a directory. The paths are sandbox paths. `writeFile` also takes `append` and
-`mode`; a string is written as UTF-8.
+`mode`; a string is written as UTF-8. `statFile(path)`, `mkdir(dir, { parents, mode })` and
+`removeFile(path, { recursive })` do what their names say.
+
+`readFile` and `writeFile` move at most 4 MiB per call. For files of any size use the raw routes:
+
+```js
+import fs from 'node:fs';
+
+await box.upload('/workspace/data.tar', fs.createReadStream('data.tar'), { mkdirs: true });
+const report = await box.download('/workspace/report.json'); // a Buffer
+const body = await box.download('/workspace/big.log', { stream: true }); // a web ReadableStream
+```
+
+`upload` takes a Buffer, a string, a web ReadableStream, a Node readable or any async iterable of
+chunks, and `mode` and `mkdirs`. An upload from bytes is retried like a write; one from a stream is
+sent once. `downloadArtifact(sha256)` returns an artifact's bytes the same way.
+
+## Control a session over HTTP
+
+```js
+const { sessionId } = await box.startSession({ argv: ['sh', '-c', 'make test'] });
+const build = box.session(sessionId);
+const { exited } = await build.wait({ timeoutMs: 300_000 }); // null if still running
+const out = await build.output({ encoding: 'text' });
+for (const chunk of out.chunks) process.stdout.write(chunk.data);
+await build.remove();
+```
+
+`box.session(sessionId)` makes no request. Its methods are `info()`, `output({ fromSeq,
+maxBytes, encoding })`, `wait({ timeoutMs })`, `input(data, { eof })`, `signal(name)`,
+`stop({ graceMs })`, `resize(rows, cols)` and `remove()`. `output` returns whole chunks up to
+`maxBytes`; read again from `nextSeq` while `truncated` is true. `wait`, `stop` and `resize` are
+retried; `input` and `signal` are sent once. See the
+[REST API reference](../reference/rest-api.md#sessions-without-a-websocket).
 
 ## Stream a session
 

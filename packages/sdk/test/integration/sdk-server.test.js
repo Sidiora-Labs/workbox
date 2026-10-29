@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { SCOPE_MATRIX } from '@workbox/server';
 import { bootServer, TOKENS } from '../../../server/test/helpers/real-server.js';
 import { WorkboxApiError, WorkboxClient } from '../../src/index.js';
@@ -317,6 +319,85 @@ test('the sdk drives every route of a real server over a real engine', async (t)
       },
     );
 
+    await t.test(
+      'sessions, files and artifacts over plain HTTP, without a websocket',
+      { timeout: 120_000 },
+      async () => {
+        const { version: runtime } = await srv.eng.runtime.ensureFresh();
+        const own = await admin.createSandbox({ name: 'sdk-control', runtime });
+        const box = harness.sandbox(own.id);
+        const view = reader.sandbox(own.id);
+        const cat = box.session((await box.startSession({ argv: ['cat'] })).sessionId);
+        assert.equal((await cat.input('line one\n')).bytes, 9);
+        assert.equal((await cat.input(undefined, { eof: true })).eof, true);
+        const watched = view.session(cat.id);
+        assert.equal((await watched.wait({ timeoutMs: 30_000 })).exited.code, 0);
+        assert.equal((await watched.info()).exited.code, 0);
+        const out = await watched.output({ encoding: 'text' });
+        assert.equal(out.chunks.map((c) => c.data).join(''), 'line one\n');
+        assert.equal(
+          text((await watched.output({ fromSeq: 0, maxBytes: 4 })).chunks[0].data),
+          'line one\n',
+        );
+        await assert.rejects(watched.remove(), (e) => e.status === 403);
+        assert.deepEqual(await cat.remove(), { sessionId: cat.id, removed: true });
+        await assert.rejects(watched.info(), (e) => e.status === 404);
+
+        const sleeper = box.session((await box.startSession({ argv: ['sleep', '600'] })).sessionId);
+        assert.equal((await sleeper.wait({ timeoutMs: 50 })).exited, null);
+        assert.deepEqual(await sleeper.signal('SIGTERM'), {
+          sessionId: sleeper.id,
+          signal: 'SIGTERM',
+        });
+        assert.equal((await sleeper.wait()).exited.signal, 'SIGTERM');
+        const tty = box.session(
+          (await box.startSession({ argv: ['sleep', '600'], pty: true })).sessionId,
+        );
+        assert.deepEqual(await tty.resize(30, 100), { sessionId: tty.id, rows: 30, cols: 100 });
+        assert.ok((await tty.stop({ graceMs: 2000 })).exited);
+
+        const bytes = randomBytes(5 * 1024 * 1024 + 7);
+        const put = await box.upload('/tmp/sdk-raw/big.bin', bytes, { mkdirs: true, mode: 0o600 });
+        assert.deepEqual(put, { path: '/tmp/sdk-raw/big.bin', bytes: bytes.length });
+        assert.ok((await view.download('/tmp/sdk-raw/big.bin')).equals(bytes));
+        const st = await view.statFile('/tmp/sdk-raw/big.bin');
+        assert.equal(st.size, bytes.length);
+        assert.equal(st.mode, 0o600);
+        const pieces = [bytes.subarray(0, 1000), bytes.subarray(1000)];
+        const streamed = await box.upload('/tmp/sdk-raw/streamed.bin', Readable.from(pieces));
+        assert.equal(streamed.bytes, bytes.length);
+        const body = await view.download('/tmp/sdk-raw/streamed.bin', { stream: true });
+        const parts = [];
+        for await (const c of body) parts.push(Buffer.from(c));
+        assert.ok(Buffer.concat(parts).equals(bytes));
+        assert.equal((await box.mkdir('/tmp/sdk-raw/d/e')).created, true);
+        assert.equal((await view.statFile('/tmp/sdk-raw/d/e')).isDir, true);
+        await assert.rejects(
+          box.mkdir('/tmp/sdk-none/x', { parents: false }),
+          (e) => e.status === 404,
+        );
+        assert.equal((await box.removeFile('/tmp/sdk-raw/big.bin')).removed, true);
+        assert.equal((await box.removeFile('/tmp/sdk-raw', { recursive: true })).removed, true);
+        await assert.rejects(view.statFile('/tmp/sdk-raw'), (e) => e.status === 404);
+
+        const stored = await box.exec({
+          argv: ['sh', '-c', 'echo control-body > /tmp/c.txt && wb artifact put /tmp/c.txt --json'],
+        });
+        assert.equal(stored.exitCode, 0, stored.stderr);
+        const { sha256 } = lastJson(stored.stdout);
+        assert.equal((await view.downloadArtifact(sha256)).toString(), 'control-body\n');
+        const art = await view.downloadArtifact(sha256, { stream: true });
+        const artParts = [];
+        for await (const c of art) artParts.push(Buffer.from(c));
+        assert.equal(Buffer.concat(artParts).toString(), 'control-body\n');
+        await assert.rejects(
+          reader.sandbox(b.id).downloadArtifact(sha256),
+          (e) => e.status === 404 && e.code === 'E_NOT_FOUND',
+        );
+        assert.equal((await own.destroy()).state, 'DELETED');
+      },
+    );
+
     await t.test('checkpoints create and list', async () => {
       const cp = await admin.sandbox(a.id).createCheckpoint({ name: 'sdk-cp' });
       assert.ok(cp.id);
@@ -389,7 +470,7 @@ test('the sdk drives every route of a real server over a real engine', async (t)
       const metrics = await reader.metrics();
       const ok = okRoutes(metrics);
       const httpRoutes = Object.keys(SCOPE_MATRIX).filter((k) => !k.endsWith('/ws'));
-      assert.equal(httpRoutes.length, 23);
+      assert.equal(httpRoutes.length, 36);
       assert.deepEqual(
         httpRoutes.filter((k) => !ok.has(k)),
         [],

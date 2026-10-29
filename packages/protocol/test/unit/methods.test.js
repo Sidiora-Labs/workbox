@@ -4,6 +4,8 @@ import {
   Methods,
   Events,
   PROTOCOL_VERSION,
+  SESSION_READ_DEFAULT_BYTES,
+  SESSION_READ_MAX_BYTES,
   validateParams,
   isBrokerMethod,
   methodNames,
@@ -69,6 +71,30 @@ test('validateParams enforces each method schema', () => {
     () => validateParams('missing.method'),
     (e) => e.code === Codes.UNKNOWN_METHOD,
   );
+});
+
+test('session.read takes a session, a start sequence and a byte budget of at most 4 MiB', () => {
+  assert.equal(SESSION_READ_DEFAULT_BYTES, 1024 * 1024);
+  assert.equal(SESSION_READ_MAX_BYTES, 4 * 1024 * 1024);
+  assert.deepEqual(validateParams('session.read', { sessionId: 's' }), { sessionId: 's' });
+  assert.ok(
+    validateParams('session.read', {
+      sessionId: 's',
+      fromSeq: 7,
+      maxBytes: SESSION_READ_MAX_BYTES,
+    }),
+  );
+  for (const bad of [
+    {},
+    { sessionId: 's', fromSeq: -1 },
+    { sessionId: 's', maxBytes: 0 },
+    { sessionId: 's', maxBytes: SESSION_READ_MAX_BYTES + 1 },
+  ])
+    assert.throws(
+      () => validateParams('session.read', bad),
+      (e) => e.code === Codes.INVALID_PARAMS,
+      JSON.stringify(bad),
+    );
 });
 
 test('event schemas accept the runner event shapes', () => {

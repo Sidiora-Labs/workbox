@@ -3,8 +3,9 @@ import { WorkboxApiError } from './errors.js';
 /**
  * JavaScript client for the Workbox REST and WebSocket API (task 3.2), built on the `fetch` and
  * `WebSocket` globals only. Idempotent calls (GET, DELETE, drain, reconcile, a file write that
- * does not append, and create, which always carries an idempotency key) retry with jittered
- * exponential backoff on 5xx, 429 and transport failures; every other call is sent exactly once.
+ * does not append, an upload from bytes, mkdir, a session wait, stop or resize, and create, which
+ * always carries an idempotency key) retry with jittered exponential backoff on 5xx, 429 and
+ * transport failures; every other call, an upload from a stream included, is sent exactly once.
  * Every method takes an AbortSignal, which also cuts a pending backoff short.
  */
 
@@ -30,6 +31,13 @@ import { WorkboxApiError } from './errors.js';
  * @property {Record<string, string|number|boolean|undefined|null>} [query] query parameters
  * @property {AbortSignal} [signal]
  * @property {boolean} [idempotent] safe to resend (default: GET and DELETE)
+ * @property {Uint8Array|string|ReadableStream|AsyncIterable<Uint8Array|string>} [bytes] raw
+ *   request body, sent as `application/octet-stream` instead of `body`
+ */
+
+/**
+ * @typedef {CallOptions & {stream?: boolean}} DownloadOptions `stream: true` resolves to the
+ *   response body as a web ReadableStream instead of a Buffer
  */
 
 /** Every server route and the SDK methods that call it (`Class#method`). */
@@ -43,13 +51,26 @@ export const ROUTES = Object.freeze({
   'DELETE /v1/sandboxes/:id': ['Sandbox#destroy'],
   'POST /v1/sandboxes/:id/drain': ['Sandbox#drain'],
   'POST /v1/sandboxes/:id/exec': ['Sandbox#exec'],
-  'GET /v1/sandboxes/:id/files': ['Sandbox#readFile', 'Sandbox#listFiles'],
+  'GET /v1/sandboxes/:id/files': ['Sandbox#readFile', 'Sandbox#listFiles', 'Sandbox#statFile'],
   'PUT /v1/sandboxes/:id/files': ['Sandbox#writeFile'],
+  'DELETE /v1/sandboxes/:id/files': ['Sandbox#removeFile'],
+  'POST /v1/sandboxes/:id/files/mkdir': ['Sandbox#mkdir'],
+  'GET /v1/sandboxes/:id/files/raw': ['Sandbox#download'],
+  'PUT /v1/sandboxes/:id/files/raw': ['Sandbox#upload'],
   'GET /v1/sandboxes/:id/sessions': ['Sandbox#listSessions'],
   'POST /v1/sandboxes/:id/sessions': ['Sandbox#startSession'],
+  'GET /v1/sandboxes/:id/sessions/:sessionId': ['SandboxSession#info'],
+  'DELETE /v1/sandboxes/:id/sessions/:sessionId': ['SandboxSession#remove'],
+  'GET /v1/sandboxes/:id/sessions/:sessionId/output': ['SandboxSession#output'],
+  'POST /v1/sandboxes/:id/sessions/:sessionId/wait': ['SandboxSession#wait'],
+  'POST /v1/sandboxes/:id/sessions/:sessionId/input': ['SandboxSession#input'],
+  'POST /v1/sandboxes/:id/sessions/:sessionId/signal': ['SandboxSession#signal'],
+  'POST /v1/sandboxes/:id/sessions/:sessionId/stop': ['SandboxSession#stop'],
+  'POST /v1/sandboxes/:id/sessions/:sessionId/resize': ['SandboxSession#resize'],
   'GET /v1/sandboxes/:id/sessions/:sessionId/ws': ['Sandbox#attach'],
   'GET /v1/sandboxes/:id/evidence': ['Sandbox#listEvidence'],
   'GET /v1/sandboxes/:id/artifacts': ['Sandbox#listArtifacts'],
+  'GET /v1/sandboxes/:id/artifacts/:sha256': ['Sandbox#downloadArtifact'],
   'GET /v1/sandboxes/:id/checkpoints': ['Sandbox#listCheckpoints'],
   'POST /v1/sandboxes/:id/checkpoints': ['Sandbox#createCheckpoint'],
   'GET /v1/sandboxes/:id/events': ['Sandbox#listEvents', 'Sandbox#events'],
@@ -82,12 +103,35 @@ export class WorkboxClient {
    * @returns {Promise<any>}
    */
   async request(method, path, opts = {}) {
+    const { text, type } = await this.#call(method, path, opts, async (res) => ({
+      text: await res.text(),
+      type: res.headers.get('content-type') ?? '',
+    }));
+    if (!text) return null;
+    return type.includes('json') ? JSON.parse(text) : text;
+  }
+
+  /**
+   * One API call whose response body is bytes (the raw file and artifact routes): a Buffer, or
+   * with `stream` the body as a web ReadableStream. A buffered read is part of the attempt, so
+   * a body cut short is retried like any transport failure; a stream is handed over unread.
+   * @param {string} method @param {string} path @param {RequestOptions & {stream?: boolean}} [opts]
+   * @returns {Promise<Buffer|ReadableStream<Uint8Array>>}
+   */
+  requestBytes(method, path, opts = {}) {
+    return this.#call(method, path, opts, async (res) => {
+      if (opts.stream) return res.body ?? emptyStream();
+      return Buffer.from(await res.arrayBuffer());
+    });
+  }
+
+  async #call(method, path, opts, read) {
     const idempotent = opts.idempotent ?? IDEMPOTENT_METHODS.has(method);
     const attempts = idempotent ? this.retries + 1 : 1;
     const target = `${path}${qs(opts.query)}`;
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.#send(method, target, opts);
+        return await this.#send(method, target, opts, read);
       } catch (e) {
         if (opts.signal?.aborted || !e?.retryable || attempt + 1 >= attempts) throw e;
       }
@@ -95,27 +139,29 @@ export class WorkboxClient {
     }
   }
 
-  async #send(method, target, opts) {
+  async #send(method, target, opts, read) {
     const headers = { accept: 'application/json' };
     if (this.token) headers.authorization = `Bearer ${this.token}`;
-    if (opts.body !== undefined) headers['content-type'] = 'application/json';
+    const init = { method, headers, signal: opts.signal };
+    if (opts.bytes !== undefined) {
+      headers['content-type'] = 'application/octet-stream';
+      init.body = isBytes(opts.bytes) ? Buffer.from(opts.bytes) : bodyStream(opts.bytes);
+      if (!isBytes(opts.bytes)) init.duplex = 'half';
+    } else if (opts.body !== undefined) {
+      headers['content-type'] = 'application/json';
+      init.body = JSON.stringify(opts.body);
+    }
     let res;
-    let text;
+    let out;
     try {
-      res = await fetch(`${this.baseUrl}${target}`, {
-        method,
-        headers,
-        signal: opts.signal,
-        body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-      });
-      if (res.ok) text = await res.text();
+      res = await fetch(`${this.baseUrl}${target}`, init);
+      if (res.ok) out = await read(res);
     } catch (e) {
       if (opts.signal?.aborted) throw e;
       throw WorkboxApiError.transport(e, `${method} ${target.split('?')[0]}`);
     }
     if (!res.ok) throw await WorkboxApiError.fromResponse(res);
-    if (!text) return null;
-    return (res.headers.get('content-type') ?? '').includes('json') ? JSON.parse(text) : text;
+    return out;
   }
 
   /** Liveness. @param {CallOptions} [opts] @returns {Promise<{ok: boolean}>} */
@@ -299,6 +345,73 @@ export class Sandbox {
   }
 
   /**
+   * @param {string} filePath @param {CallOptions} [opts]
+   * @returns {Promise<{size: number, mode: number, isFile: boolean, isDir: boolean, mtimeMs: number, [k: string]: unknown}>}
+   */
+  statFile(filePath, opts = {}) {
+    const query = { path: filePath, stat: '1' };
+    return this.client.request('GET', `${this.path}/files`, { query, signal: opts.signal });
+  }
+
+  /**
+   * Remove a file or an empty directory; `recursive` removes a tree.
+   * @param {string} filePath @param {CallOptions & {recursive?: boolean}} [opts]
+   * @returns {Promise<{path: string, removed: boolean}>}
+   */
+  removeFile(filePath, opts = {}) {
+    const query = { path: filePath, recursive: opts.recursive ? '1' : undefined };
+    return this.client.request('DELETE', `${this.path}/files`, { query, signal: opts.signal });
+  }
+
+  /**
+   * Create a directory, with its parents unless `parents` is false.
+   * @param {string} dir @param {CallOptions & {parents?: boolean, mode?: number}} [opts]
+   * @returns {Promise<{path: string, created: boolean}>}
+   */
+  mkdir(dir, opts = {}) {
+    return this.client.request('POST', `${this.path}/files/mkdir`, {
+      body: { path: dir, parents: opts.parents, mode: opts.mode },
+      signal: opts.signal,
+      idempotent: true,
+    });
+  }
+
+  /**
+   * A file's bytes, of any size: a Buffer, or with `stream: true` a web ReadableStream.
+   * @param {string} filePath @param {DownloadOptions} [opts]
+   * @returns {Promise<Buffer|ReadableStream<Uint8Array>>}
+   */
+  download(filePath, opts = {}) {
+    return this.client.requestBytes('GET', `${this.path}/files/raw`, {
+      query: { path: filePath },
+      signal: opts.signal,
+      stream: opts.stream,
+    });
+  }
+
+  /**
+   * Replace a file with bytes (a string is UTF-8) or a stream (a web ReadableStream, a Node
+   * readable or any async iterable of chunks). Bytes are retried; a stream is sent once.
+   * @param {string} filePath
+   * @param {Uint8Array|string|ReadableStream|AsyncIterable<Uint8Array|string>} data
+   * @param {CallOptions & {mode?: number, mkdirs?: boolean}} [opts]
+   * @returns {Promise<{path: string, bytes: number}>}
+   */
+  upload(filePath, data, opts = {}) {
+    const query = {
+      path: filePath,
+      mode: opts.mode === undefined ? undefined : opts.mode.toString(8),
+      mkdirs: opts.mkdirs ? '1' : undefined,
+    };
+    return this.client.request('PUT', `${this.path}/files/raw`, {
+      query,
+      bytes: data,
+      signal: opts.signal,
+      idempotent: isBytes(data),
+    });
+  }
+
+  /**
    * Write bytes (a string is written as UTF-8). Retried only when it does not append.
    * @param {string} filePath @param {Uint8Array|string} data
    * @param {CallOptions & {append?: boolean, mode?: number, mkdirs?: boolean}} [opts]
@@ -344,6 +457,14 @@ export class Sandbox {
     return new SessionStream(url, opts);
   }
 
+  /**
+   * A handle on one session for plain HTTP control (no request is made).
+   * @param {string} sessionId @returns {SandboxSession}
+   */
+  session(sessionId) {
+    return new SandboxSession(this, sessionId);
+  }
+
   /** @param {CallOptions & {cursor?: string, limit?: number}} [opts] @returns {Promise<Page>} */
   listEvidence(opts = {}) {
     const query = { cursor: opts.cursor, limit: opts.limit };
@@ -354,6 +475,18 @@ export class Sandbox {
   listArtifacts(opts = {}) {
     const query = { cursor: opts.cursor, limit: opts.limit };
     return this.client.request('GET', `${this.path}/artifacts`, { query, signal: opts.signal });
+  }
+
+  /**
+   * The bytes of an artifact this sandbox holds: a Buffer, or with `stream: true` a stream.
+   * @param {string} sha256 @param {DownloadOptions} [opts]
+   * @returns {Promise<Buffer|ReadableStream<Uint8Array>>}
+   */
+  downloadArtifact(sha256, opts = {}) {
+    return this.client.requestBytes('GET', `${this.path}/artifacts/${enc(sha256)}`, {
+      signal: opts.signal,
+      stream: opts.stream,
+    });
   }
 
   /** @param {CallOptions} [opts] @returns {Promise<{checkpoints: object[]}>} */
@@ -406,6 +539,111 @@ export class Sandbox {
       if (!opts.follow) return;
       await sleep(opts.intervalMs ?? 1000, opts.signal);
     }
+  }
+}
+
+/**
+ * One session of a sandbox, controlled over plain HTTP: read its output, wait for it, give it
+ * input, signal, stop, resize and forget it.
+ */
+export class SandboxSession {
+  /** @param {Sandbox} sandbox @param {string} sessionId */
+  constructor(sandbox, sessionId) {
+    this.sandbox = sandbox;
+    this.client = sandbox.client;
+    this.id = sessionId;
+    this.path = `${sandbox.path}/sessions/${enc(sessionId)}`;
+  }
+
+  /**
+   * The session with its exit status (`exited` is `{code, signal, at}` or null).
+   * @param {CallOptions} [opts] @returns {Promise<{sessionId: string, exited: object|null, [k: string]: unknown}>}
+   */
+  info(opts = {}) {
+    return this.client.request('GET', this.path, opts);
+  }
+
+  /**
+   * Retained output from `fromSeq` (default 0), at most `maxBytes` (default 1 MiB, at most
+   * 4 MiB) of it. Read again from `nextSeq` while `truncated` is true. With `encoding: 'text'`
+   * each chunk's `data` is UTF-8 text instead of base64.
+   * @param {CallOptions & {fromSeq?: number, maxBytes?: number, encoding?: 'base64'|'text'}} [opts]
+   * @returns {Promise<{sessionId: string, chunks: {seq: number, stream: string, data: string}[], nextSeq: number, gap: object|null, truncated: boolean, exited: object|null}>}
+   */
+  output(opts = {}) {
+    const query = { fromSeq: opts.fromSeq, maxBytes: opts.maxBytes, encoding: opts.encoding };
+    return this.client.request('GET', `${this.path}/output`, { query, signal: opts.signal });
+  }
+
+  /**
+   * Wait up to `timeoutMs` (default 30000, at most 300000) for the session to exit; resolves at
+   * once if it already has. `exited` is null when the time ran out first.
+   * @param {CallOptions & {timeoutMs?: number}} [opts]
+   * @returns {Promise<{sessionId: string, exited: {code: number|null, signal: string|null, at: number}|null}>}
+   */
+  wait(opts = {}) {
+    return this.client.request('POST', `${this.path}/wait`, {
+      body: opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs },
+      signal: opts.signal,
+      idempotent: true,
+    });
+  }
+
+  /**
+   * Write to the session's stdin (a string is UTF-8); `eof` closes it. Sent once.
+   * @param {Uint8Array|string|undefined} data @param {CallOptions & {eof?: boolean}} [opts]
+   * @returns {Promise<{sessionId: string, bytes: number, eof: boolean}>}
+   */
+  input(data, opts = {}) {
+    const body = { eof: opts.eof };
+    if (data !== undefined) body.data = Buffer.from(data).toString('base64');
+    return this.client.request('POST', `${this.path}/input`, { body, signal: opts.signal });
+  }
+
+  /**
+   * Send a signal to the session's process group. Sent once.
+   * @param {string} name e.g. `SIGTERM` @param {CallOptions} [opts]
+   * @returns {Promise<{sessionId: string, signal: string}>}
+   */
+  signal(name, opts = {}) {
+    return this.client.request('POST', `${this.path}/signal`, {
+      body: { signal: name },
+      signal: opts.signal,
+    });
+  }
+
+  /**
+   * SIGTERM, then SIGKILL after `graceMs`; resolves with the exit.
+   * @param {CallOptions & {graceMs?: number}} [opts]
+   * @returns {Promise<{sessionId: string, exited: object, escalated: boolean}>}
+   */
+  stop(opts = {}) {
+    return this.client.request('POST', `${this.path}/stop`, {
+      body: opts.graceMs === undefined ? {} : { graceMs: opts.graceMs },
+      signal: opts.signal,
+      idempotent: true,
+    });
+  }
+
+  /**
+   * Resize a PTY session.
+   * @param {number} rows @param {number} cols @param {CallOptions} [opts]
+   * @returns {Promise<{sessionId: string, rows: number, cols: number}>}
+   */
+  resize(rows, cols, opts = {}) {
+    return this.client.request('POST', `${this.path}/resize`, {
+      body: { rows, cols },
+      signal: opts.signal,
+      idempotent: true,
+    });
+  }
+
+  /**
+   * Forget an exited session (409 E_STATE while it runs).
+   * @param {CallOptions} [opts] @returns {Promise<{sessionId: string, removed: boolean}>}
+   */
+  remove(opts = {}) {
+    return this.client.request('DELETE', this.path, opts);
   }
 }
 
@@ -579,6 +817,34 @@ function sleep(ms, signal) {
       resolve();
     }, ms);
     signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function isBytes(data) {
+  return typeof data === 'string' || data instanceof Uint8Array || data instanceof ArrayBuffer;
+}
+
+/** A web ReadableStream over a stream or async iterable of chunks (strings are UTF-8). */
+function bodyStream(source) {
+  if (source instanceof globalThis.ReadableStream) return source;
+  const it = source[Symbol.asyncIterator]();
+  return new globalThis.ReadableStream({
+    async pull(controller) {
+      const { value, done } = await it.next();
+      if (done) controller.close();
+      else controller.enqueue(typeof value === 'string' ? Buffer.from(value) : value);
+    },
+    async cancel(reason) {
+      await it.return?.(reason);
+    },
+  });
+}
+
+function emptyStream() {
+  return new globalThis.ReadableStream({
+    start(controller) {
+      controller.close();
+    },
   });
 }
 

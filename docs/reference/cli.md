@@ -22,6 +22,11 @@ a report.
 | `workbox sandbox exec <id> -- <cmd...>`                                                                                                              | Run a command to completion.                                                                                                                      | no         |
 | `workbox sandbox shell <id>` or `workbox shell <id>`                                                                                                 | Interactive PTY shell (`/bin/bash -l`), locally or through `--server`. Without a terminal on stdin, the session starts detached and is described. | no         |
 | `workbox sandbox attach <id> <sessionId>`                                                                                                            | Replay a session from its start and follow it to its exit.                                                                                        | no         |
+| `workbox sandbox run <id> [--name n] [--wait] -- <cmd...>`                                                                                           | Start a background session (no PTY) and print `{sessionId}`. With `--wait`, wait for it, print its output and exit with its code.                 | no         |
+| `workbox sandbox logs <id> <sessionId>`                                                                                                              | Print a session's retained output: stderr to stderr, the rest to stdout.                                                                          | no         |
+| `workbox sandbox wait <id> <sessionId> [--timeout ms]`                                                                                               | Wait for a session to exit, print `{sessionId, exited, exitCode}` and exit with its code; past `--timeout`, exit 5.                               | no         |
+| `workbox sandbox kill <id> <sessionId> [--signal NAME]`                                                                                              | Signal a session's process group (default `SIGTERM`; `KILL` and `SIGKILL` both work).                                                             | no         |
+| `workbox sandbox cp <src> <dest>`                                                                                                                    | Copy one file into or out of a sandbox, of any size; one side is `<id>:<path>`. See below.                                                        | no         |
 | `workbox sandbox drain <id>`                                                                                                                         | Move the sandbox to DRAINING: stop new work; processes keep running until destroy.                                                                | no         |
 | `workbox sandbox rm <id>`                                                                                                                            | Destroy the sandbox (`destroy` also works).                                                                                                       | no         |
 | `workbox sandbox events <id>`                                                                                                                        | Events; locally also the state transitions.                                                                                                       | no         |
@@ -31,6 +36,11 @@ a report.
 | `workbox key rm <keyId>`                                                                                                                             | Revoke a stored key (`revoke` also works); it stops working on the next request.                                                                  | no         |
 | `workbox serve [--config file] [--port n] [--host h] [--tls-cert f --tls-key f]`                                                                     | Serve the REST and WebSocket API on the local engine until SIGTERM or SIGINT; HTTPS and WSS with a certificate.                                   | yes        |
 | `workbox audit verify`                                                                                                                               | Verify the audit hash chain; prints `{ok, entries, brokenAt}`.                                                                                    | yes        |
+
+`sandbox cp` streams the file in 4 MiB pieces. A sandbox path that ends in `/`, or a local
+destination that is a directory, takes the source's file name. An upload keeps the local file's
+permission bits; a download that fails leaves no partial file. A local path that contains `:`
+before any `/` reads as a sandbox path: write it as `./name:x`.
 
 `serve` takes no `--server`. The listen address comes from the flags, then `WORKBOX_PORT`, then the
 config file, then `127.0.0.1:8790`; see [Configuration](configuration.md#serve-config-file). With
@@ -61,5 +71,5 @@ running. See [Operations](../operations.md#run-the-server).
 | 4    | denied, unavailable or busy; also `doctor` on a host that is not ready |
 | 5    | timeout                                                                |
 
-`sandbox exec`, `shell`, `agent` and `sandbox attach` exit with the wrapped command's own non-zero exit code when it has one.
+`sandbox exec`, `shell`, `agent`, `sandbox attach`, `sandbox run --wait` and `sandbox wait` exit with the wrapped command's own non-zero exit code when it has one (128 plus the signal number for a session a signal ended).
 `audit verify` exits 0 whether or not the chain verifies; read `ok`.

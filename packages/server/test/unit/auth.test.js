@@ -189,7 +189,8 @@ test('the scope matrix: read observes only, exec runs, answer answers, admin mut
   const scopes = new Set(Object.values(SCOPE_MATRIX));
   for (const s of scopes) assert.ok(SCOPES.includes(s) || s === ANY_KEY, s);
   for (const [key, scope] of Object.entries(SCOPE_MATRIX))
-    if (scope === 'read' || scope === ANY_KEY) assert.match(key, /^GET /, key);
+    if (scope === 'read' || scope === ANY_KEY)
+      assert.match(key, /^GET |^POST .*\/sessions\/:sessionId\/wait$/, key);
   assert.equal(SCOPE_MATRIX['POST /v1/sandboxes/:id/exec'], 'exec');
   assert.equal(SCOPE_MATRIX['DELETE /v1/sandboxes/:id'], 'admin');
   assert.equal(SCOPE_MATRIX['POST /v1/asks/:askId/answer'], 'answer');
@@ -202,6 +203,9 @@ test('the scope matrix: read observes only, exec runs, answer answers, admin mut
     FLEET_ROUTES.filter((r) => r.includes(':id')),
     [],
   );
+  assert.equal(SCOPE_MATRIX['POST /v1/sandboxes/:id/sessions/:sessionId/wait'], 'read');
+  assert.equal(SCOPE_MATRIX['PUT /v1/sandboxes/:id/files/raw'], 'exec');
+  assert.equal(SCOPE_MATRIX['GET /v1/sandboxes/:id/artifacts/:sha256'], 'read');
 });
 
 test('H15 browser guard: Origin, Sec-Fetch-Site and foreign hosts are refused', () => {

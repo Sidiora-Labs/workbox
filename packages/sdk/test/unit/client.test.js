@@ -1,8 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { ReadableStream } from 'node:stream/web';
 import { SCOPE_MATRIX } from '@workbox/server';
-import { ROUTES, Sandbox, SessionStream, WorkboxClient, retryDelay } from '../../src/client.js';
+import {
+  ROUTES,
+  Sandbox,
+  SandboxSession,
+  SessionStream,
+  WorkboxClient,
+  retryDelay,
+} from '../../src/client.js';
 import { WorkboxApiError } from '../../src/errors.js';
 
 const b64 = (s) => Buffer.from(s).toString('base64');
@@ -19,17 +27,23 @@ async function scripted(script) {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      const text = Buffer.concat(chunks).toString();
+      const raw = Buffer.concat(chunks);
+      const json = (req.headers['content-type'] ?? '').includes('json');
       hits.push({
         method: req.method,
         url: req.url,
         headers: req.headers,
         at: Date.now(),
-        body: text ? JSON.parse(text) : undefined,
+        body: raw.length && json ? JSON.parse(raw.toString()) : undefined,
+        raw,
       });
       const step = script[Math.min(hits.length, script.length) - 1];
       if (step === 'drop') return req.socket.destroy();
       if (step === 'hang') return undefined;
+      if (step.bytes) {
+        res.writeHead(step.status, { 'content-type': 'application/octet-stream' });
+        return res.end(step.bytes);
+      }
       res.writeHead(step.status, { 'content-type': 'application/json', connection: 'close' });
       return res.end(JSON.stringify(step.body));
     });
@@ -55,7 +69,7 @@ const page = { status: 200, body: { items: [], cursor: null, complete: true } };
 test('every server route maps to SDK methods that exist', () => {
   const serverRoutes = [...Object.keys(SCOPE_MATRIX), 'GET /healthz', 'GET /readyz'].sort();
   assert.deepEqual(Object.keys(ROUTES).sort(), serverRoutes);
-  const classes = { WorkboxClient, Sandbox };
+  const classes = { WorkboxClient, Sandbox, SandboxSession };
   for (const [route, methods] of Object.entries(ROUTES))
     for (const name of methods) {
       const [cls, method] = name.split('#');
@@ -189,6 +203,168 @@ test('a file write is retried unless it appends; text and bytes go as base64', a
     assert.equal(srv.hits[2].body.data, Buffer.from([0, 255]).toString('base64'));
   } finally {
     await srv.close();
+  }
+});
+
+test('session control: reads, waits, stops and resizes retry; input and signals go once', async () => {
+  const ok = { status: 200, body: { ok: true } };
+  const srv = await scripted([unavailable, ok]);
+  try {
+    const session = srv.client({ retries: 3 }).sandbox('sb-1').session('se 1');
+    assert.ok(session instanceof SandboxSession);
+    const steps = [
+      () => session.info(),
+      () => session.output({ fromSeq: 2, maxBytes: 10, encoding: 'text' }),
+      () => session.wait({ timeoutMs: 5 }),
+      () => session.stop({ graceMs: 1 }),
+      () => session.resize(10, 20),
+      () => session.remove(),
+    ];
+    for (const step of steps) {
+      srv.hits.length = 0;
+      assert.deepEqual(await step(), { ok: true });
+      assert.equal(srv.hits.length, 2, 'retried once after the 503');
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
+test('session control sends each route its method, path and body', async () => {
+  const srv = await scripted([{ status: 200, body: {} }]);
+  try {
+    const session = srv.client().sandbox('sb-1').session('se 1');
+    await session.info();
+    await session.output({ fromSeq: 2, maxBytes: 10, encoding: 'text' });
+    await session.output();
+    await session.wait({ timeoutMs: 5 });
+    await session.wait();
+    await session.input('hi', { eof: true });
+    await session.input(undefined, { eof: true });
+    await session.signal('SIGINT');
+    await session.stop({ graceMs: 1 });
+    await session.stop();
+    await session.resize(10, 20);
+    await session.remove();
+    const base = '/v1/sandboxes/sb-1/sessions/se%201';
+    assert.deepEqual(
+      srv.hits.map((h) => [h.method, h.url, h.body]),
+      [
+        ['GET', base, undefined],
+        ['GET', `${base}/output?fromSeq=2&maxBytes=10&encoding=text`, undefined],
+        ['GET', `${base}/output`, undefined],
+        ['POST', `${base}/wait`, { timeoutMs: 5 }],
+        ['POST', `${base}/wait`, {}],
+        ['POST', `${base}/input`, { eof: true, data: b64('hi') }],
+        ['POST', `${base}/input`, { eof: true }],
+        ['POST', `${base}/signal`, { signal: 'SIGINT' }],
+        ['POST', `${base}/stop`, { graceMs: 1 }],
+        ['POST', `${base}/stop`, {}],
+        ['POST', `${base}/resize`, { rows: 10, cols: 20 }],
+        ['DELETE', base, undefined],
+      ],
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+test('input and signals are sent once on a 503', async () => {
+  const srv = await scripted([unavailable]);
+  try {
+    const session = srv.client({ retries: 3 }).sandbox('sb-1').session('se-1');
+    await assert.rejects(session.input('x'), (e) => e.status === 503);
+    await assert.rejects(session.signal('SIGTERM'), (e) => e.status === 503);
+    assert.equal(srv.hits.length, 2);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('files: stat, remove and mkdir; downloads as a Buffer or a stream', async () => {
+  const bytes = Buffer.from([0, 1, 2, 250, 255]);
+  const srv = await scripted([
+    { status: 200, body: { size: 5 } },
+    { status: 200, body: { removed: true } },
+    unavailable,
+    { status: 200, body: { created: true } },
+    unavailable,
+    { status: 200, bytes },
+    { status: 200, bytes },
+    { status: 200, bytes },
+  ]);
+  try {
+    const box = srv.client().sandbox('sb-1');
+    assert.equal((await box.statFile('/a b')).size, 5);
+    assert.equal((await box.removeFile('/d', { recursive: true })).removed, true);
+    assert.equal((await box.mkdir('/d/e', { parents: false, mode: 0o700 })).created, true);
+    assert.deepEqual(await box.download('/f'), bytes, 'retried after the 503');
+    const stream = await box.download('/f', { stream: true });
+    assert.ok(stream instanceof ReadableStream);
+    const parts = [];
+    for await (const c of stream) parts.push(Buffer.from(c));
+    assert.deepEqual(Buffer.concat(parts), bytes);
+    assert.deepEqual(await box.downloadArtifact('ab'.repeat(32)), bytes);
+    assert.deepEqual(
+      srv.hits.map((h) => [h.method, h.url, h.body]),
+      [
+        ['GET', '/v1/sandboxes/sb-1/files?path=%2Fa+b&stat=1', undefined],
+        ['DELETE', '/v1/sandboxes/sb-1/files?path=%2Fd&recursive=1', undefined],
+        ['POST', '/v1/sandboxes/sb-1/files/mkdir', { path: '/d/e', parents: false, mode: 0o700 }],
+        ['POST', '/v1/sandboxes/sb-1/files/mkdir', { path: '/d/e', parents: false, mode: 0o700 }],
+        ['GET', '/v1/sandboxes/sb-1/files/raw?path=%2Ff', undefined],
+        ['GET', '/v1/sandboxes/sb-1/files/raw?path=%2Ff', undefined],
+        ['GET', '/v1/sandboxes/sb-1/files/raw?path=%2Ff', undefined],
+        ['GET', `/v1/sandboxes/sb-1/artifacts/${'ab'.repeat(32)}`, undefined],
+      ],
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+test('an upload from bytes is retried; one from a stream is sent once', async () => {
+  const srv = await scripted([unavailable, { status: 200, body: { bytes: 3 } }]);
+  const down = await scripted([unavailable]);
+  try {
+    const box = srv.client().sandbox('sb-1');
+    assert.equal((await box.upload('/u', 'abc', { mode: 0o640, mkdirs: true })).bytes, 3);
+    assert.deepEqual(
+      srv.hits.map((h) => [h.method, h.url, h.headers['content-type'], h.raw.toString()]),
+      [
+        [
+          'PUT',
+          '/v1/sandboxes/sb-1/files/raw?path=%2Fu&mode=640&mkdirs=1',
+          'application/octet-stream',
+          'abc',
+        ],
+        [
+          'PUT',
+          '/v1/sandboxes/sb-1/files/raw?path=%2Fu&mode=640&mkdirs=1',
+          'application/octet-stream',
+          'abc',
+        ],
+      ],
+    );
+    async function* pieces() {
+      yield 'one ';
+      yield Buffer.from('two');
+    }
+    const streamed = down.client({ retries: 3 }).sandbox('sb-1');
+    await assert.rejects(streamed.upload('/s', pieces()), (e) => e.status === 503);
+    assert.equal(down.hits.length, 1);
+    assert.equal(down.hits[0].raw.toString(), 'one two');
+    const web = new ReadableStream({
+      start(c) {
+        c.enqueue(new Uint8Array([7, 8]));
+        c.close();
+      },
+    });
+    await assert.rejects(streamed.upload('/w', web), (e) => e.status === 503);
+    assert.deepEqual([...down.hits[1].raw], [7, 8]);
+  } finally {
+    await srv.close();
+    await down.close();
   }
 });
 

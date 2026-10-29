@@ -237,6 +237,18 @@ test('ready runner serves session control, fs and broker relay, and resolves sec
     const checked = await exitOf(check.sessionId);
     assert.deepEqual(resolvedRefs, [['WB_TOKEN']]);
     assert.equal(checked.code, 0, 'the resolved secret reached the child environment');
+    const said = await local.request('session.start', { argv: ['sh', '-c', 'printf read-me'] });
+    await exitOf(said.sessionId);
+    const spooled = await local.request('session.read', {
+      sessionId: said.sessionId,
+      maxBytes: 64,
+    });
+    assert.equal(Buffer.from(spooled.chunks[0].data, 'base64').toString(), 'read-me');
+    assert.equal(spooled.exited.code, 0);
+    await assert.rejects(
+      local.request('session.read', { sessionId: said.sessionId, maxBytes: 0 }),
+      (e) => e.code === 'E_INVALID_PARAMS',
+    );
 
     const sleeper = await local.request('session.start', { argv: ['sleep', '30'] });
     await local.request('session.attach', { sessionId: sleeper.sessionId });

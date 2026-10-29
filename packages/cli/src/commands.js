@@ -1,5 +1,6 @@
 import os from 'node:os';
 import { runDoctor, formatReport, Audit, loadConfig } from '@workbox/core';
+import { CONTROL_COMMANDS } from './control.js';
 
 /**
  * Operator CLI command bodies. Each receives `(ctx, argv)`; ctx is either local
@@ -127,6 +128,7 @@ export async function sandboxCommand(ctx, argv) {
   }
   if (sub === 'ls' || sub === 'list') return remote ? remote.listSandboxes() : manager(ctx).list();
   if (sub === 'exec') return sandboxExec(ctx, rest);
+  if (Object.hasOwn(CONTROL_COMMANDS, sub ?? '')) return CONTROL_COMMANDS[sub](ctx, rest);
   const fn = byId[sub];
   if (fn) return fn(need(rest[0], `workbox sandbox ${sub} <id>`));
   throw new Error(`unknown sandbox subcommand ${sub ?? ''}`);

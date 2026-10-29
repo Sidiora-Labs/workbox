@@ -32,6 +32,8 @@ test('index exports the public surface', () => {
     'Methods',
     'Events',
     'PROTOCOL_VERSION',
+    'SESSION_READ_DEFAULT_BYTES',
+    'SESSION_READ_MAX_BYTES',
     'validateParams',
     'isBrokerMethod',
     'methodNames',

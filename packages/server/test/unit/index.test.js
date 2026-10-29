@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as server from '../../src/index.js';
-import { createServer } from '../../src/server.js';
+import { createServer, waitForSessionExit, writeSandboxFile } from '../../src/server.js';
 import { WsSocket } from '../../src/ws.js';
 import * as auth from '../../src/auth.js';
 import * as access from '../../src/access.js';
@@ -28,4 +28,8 @@ test('index re-exports', () => {
     assert.equal(server[name], auth[name], name);
   for (const name of ['sandboxVisible', 'isBound', 'requireUnbound', 'createLabels'])
     assert.equal(server[name], access[name], name);
+  assert.equal(server.FILE_CHUNK_BYTES, 4 * 1024 * 1024);
+  assert.equal(server.DEFAULT_MAX_UPLOAD_BYTES, 1024 * 1024 * 1024);
+  assert.equal(server.waitForSessionExit, waitForSessionExit);
+  assert.equal(server.writeSandboxFile, writeSandboxFile);
 });
