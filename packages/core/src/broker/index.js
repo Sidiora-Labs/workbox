@@ -23,7 +23,13 @@ export {
   publicAsk,
 } from './asks.js';
 export { secretList, secretResolve } from './secrets.js';
-export { eventEmit, assertBoundedJson, MAX_EVENT_PAYLOAD_BYTES } from './events.js';
+export {
+  eventEmit,
+  assertBoundedJson,
+  appendLogged,
+  MAX_EVENT_PAYLOAD_BYTES,
+  RESERVED_EVENT_PREFIXES,
+} from './events.js';
 export { leaseStatus, leaseRenew, issueLease, hashToken } from './leases.js';
 export {
   checkpointCreate,
@@ -64,6 +70,8 @@ export {
  * @property {number} [maxArtifactBytes]
  * @property {() => number} [clock]
  * @property {(ask: object) => void} [onAsk]
+ * @property {(type: string, payload?: object, opts?: {causation?: string, source?: 'host'|'wb'}) => {seq: number}} [logEvent]
+ *   append to this sandbox's event log and announce the row
  * @property {(host: string, port: number, timeoutMs: number) => Promise<object>} [netProbe]
  */
 

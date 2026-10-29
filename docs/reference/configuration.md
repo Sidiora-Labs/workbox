@@ -9,26 +9,27 @@ and out-of-range values fail closed with a coded error rather than being ignored
 file named by `WORKBOX_CONFIG`, the environment variables below, then explicit overrides. The
 file is a JSON object whose keys mirror the defaults.
 
-| Key (file)            | Environment variable    | Default                     |
-| --------------------- | ----------------------- | --------------------------- |
-| `root`                | `WORKBOX_ROOT`          | `/var/lib/workbox`          |
-| `secretsFile`         | `WORKBOX_SECRETS_FILE`  | `/etc/workbox/secrets.json` |
-| `uid.base`            | `WORKBOX_UID_BASE`      | `300000`                    |
-| `uid.count`           | `WORKBOX_UID_COUNT`     | `65536`                     |
-| `cgroup.root`         | `WORKBOX_CGROUP_ROOT`   | `/sys/fs/cgroup`            |
-| `cgroup.parent`       | `WORKBOX_CGROUP_PARENT` | `workbox`                   |
-| `network.mode`        | `WORKBOX_NETWORK_MODE`  | `egress`                    |
-| `network.allow`       |                         | empty list                  |
-| `rootfs`              | `WORKBOX_ROOTFS`        | `minimal`                   |
-| `runtime`             | `WORKBOX_RUNTIME`       | `current`                   |
-| `limits.memoryBytes`  |                         | 2 GiB                       |
-| `limits.swapBytes`    |                         | 0                           |
-| `limits.cpuMillis`    |                         | 2000                        |
-| `limits.pids`         |                         | 4096                        |
-| `session.spoolBytes`  |                         | 8 MiB                       |
-| `session.stopGraceMs` |                         | 5000                        |
-| `lease.ttlMs`         |                         | 300000                      |
-| `bootTimeoutMs`       |                         | 20000                       |
+| Key (file)             | Environment variable    | Default                     |
+| ---------------------- | ----------------------- | --------------------------- |
+| `root`                 | `WORKBOX_ROOT`          | `/var/lib/workbox`          |
+| `secretsFile`          | `WORKBOX_SECRETS_FILE`  | `/etc/workbox/secrets.json` |
+| `uid.base`             | `WORKBOX_UID_BASE`      | `300000`                    |
+| `uid.count`            | `WORKBOX_UID_COUNT`     | `65536`                     |
+| `cgroup.root`          | `WORKBOX_CGROUP_ROOT`   | `/sys/fs/cgroup`            |
+| `cgroup.parent`        | `WORKBOX_CGROUP_PARENT` | `workbox`                   |
+| `network.mode`         | `WORKBOX_NETWORK_MODE`  | `egress`                    |
+| `network.allow`        |                         | empty list                  |
+| `rootfs`               | `WORKBOX_ROOTFS`        | `minimal`                   |
+| `runtime`              | `WORKBOX_RUNTIME`       | `current`                   |
+| `limits.memoryBytes`   |                         | 2 GiB                       |
+| `limits.swapBytes`     |                         | 0                           |
+| `limits.cpuMillis`     |                         | 2000                        |
+| `limits.pids`          |                         | 4096                        |
+| `session.spoolBytes`   |                         | 8 MiB                       |
+| `session.stopGraceMs`  |                         | 5000                        |
+| `lease.ttlMs`          |                         | 300000                      |
+| `events.retentionDays` |                         | 30                          |
+| `bootTimeoutMs`        |                         | 20000                       |
 
 Everything the engine stores is under `root`: `workbox.db`, `audit/`, `artifacts/`, `checkpoints/`,
 `rootfs/`, `runtime/` and `sandboxes/`. The cgroup parent is `<cgroup.root>/<cgroup.parent>`.

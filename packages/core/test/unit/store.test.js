@@ -235,6 +235,140 @@ test('sessions and events', () => {
     );
     assert.equal(store.listEvents(s.id, { afterSeq: seq1 }).length, 1);
     assert.equal(store.listEvents(s.id, { limit: 1 }).length, 1);
+    assert.deepEqual(store.getEvent(seq1), { ...ev[0], sandboxId: s.id });
+    assert.equal(ev[1].sandboxId, s.id);
+    assert.equal(store.getEvent(seq2 + 1), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('fleet events across sandboxes with type patterns, sandbox filter and pages', () => {
+  const { store, cleanup } = openTmp();
+  try {
+    const a = store.createSandbox(base);
+    const b = store.createSandbox(base);
+    const appended = [
+      [a.id, 'sandbox.created'],
+      [b.id, 'sandbox.created'],
+      [a.id, 'session.started'],
+      [b.id, 'build.done'],
+      [a.id, 'session.exited'],
+      [b.id, 'sessions.count'],
+      [a.id, 'exec.finished'],
+    ].map(([id, type]) => ({ id, type, seq: store.appendEvent(id, type, { type }) }));
+    const types = (rows) => rows.map((r) => [r.sandboxId === a.id ? 'a' : 'b', r.type]);
+
+    const all = store.listFleetEvents();
+    assert.deepEqual(
+      all.map((r) => r.seq),
+      appended.map((e) => e.seq),
+    );
+    assert.deepEqual(Object.keys(all[0]).sort(), [
+      'at',
+      'causation',
+      'payload',
+      'sandboxId',
+      'seq',
+      'source',
+      'type',
+    ]);
+    assert.deepEqual(all[2].payload, { type: 'session.started' });
+    assert.deepEqual(store.listFleetEvents({ types: [] }), all, 'an empty list matches all');
+
+    assert.deepEqual(types(store.listFleetEvents({ types: ['session.*'] })), [
+      ['a', 'session.started'],
+      ['a', 'session.exited'],
+    ]);
+    assert.deepEqual(types(store.listFleetEvents({ types: ['build.done', 'sandbox.*'] })), [
+      ['a', 'sandbox.created'],
+      ['b', 'sandbox.created'],
+      ['b', 'build.done'],
+    ]);
+    assert.deepEqual(
+      types(store.listFleetEvents({ types: ['session.started', 'session.*'] })),
+      [
+        ['a', 'session.started'],
+        ['a', 'session.exited'],
+      ],
+      'an exact type and a pattern that both match return the row once',
+    );
+    assert.deepEqual(store.listFleetEvents({ types: ['session'] }), [], 'exact means exact');
+    assert.deepEqual(store.listFleetEvents({ types: ['sessio.*'] }), []);
+    assert.deepEqual(types(store.listFleetEvents({ types: ['*.created'] })), []);
+
+    assert.deepEqual(types(store.listFleetEvents({ sandboxId: b.id, types: ['session*'] })), []);
+    assert.deepEqual(types(store.listFleetEvents({ sandboxId: b.id })), [
+      ['b', 'sandbox.created'],
+      ['b', 'build.done'],
+      ['b', 'sessions.count'],
+    ]);
+    assert.deepEqual(
+      store.listFleetEvents({ afterSeq: appended[4].seq }).map((r) => r.type),
+      ['sessions.count', 'exec.finished'],
+    );
+    const page = store.listFleetEvents({ afterSeq: appended[0].seq, limit: 2 });
+    assert.deepEqual(
+      page.map((r) => r.seq),
+      [appended[1].seq, appended[2].seq],
+    );
+    assert.equal(store.listFleetEvents({ limit: 0 }).length, 1, 'limit is at least 1');
+    for (const bad of ['session.*', [''], [7], [null]])
+      assert.throws(
+        () => store.listFleetEvents({ types: bad }),
+        (e) => e.code === 'E_INVALID_PARAMS',
+        JSON.stringify(bad),
+      );
+  } finally {
+    cleanup();
+  }
+});
+
+test('fleet event pages default to 100 and stop at 1000', () => {
+  const store = Store.open(':memory:');
+  try {
+    const s = store.createSandbox(base);
+    store.tx(() => {
+      for (let i = 0; i < 1005; i++) store.appendEvent(s.id, 'tick', { i });
+    });
+    assert.equal(store.listFleetEvents().length, 100);
+    assert.equal(store.listFleetEvents({ limit: 5000 }).length, 1000);
+    assert.equal(store.listFleetEvents({ afterSeq: 1000, limit: 5000 }).length, 5);
+  } finally {
+    store.close();
+  }
+});
+
+test('pruneEvents deletes rows recorded before the cutoff and keeps sequence numbers', () => {
+  const { store, clock, cleanup } = openTmp();
+  try {
+    const s = store.createSandbox(base);
+    const old = store.appendEvent(s.id, 'old', {});
+    clock.advance(1000);
+    const edge = store.appendEvent(s.id, 'edge', {});
+    const cutoff = clock();
+    clock.advance(1000);
+    store.appendEvent(s.id, 'new', {});
+    assert.equal(store.pruneEvents(cutoff), 1);
+    assert.equal(store.getEvent(old), null);
+    assert.deepEqual(
+      store.listFleetEvents().map((e) => e.type),
+      ['edge', 'new'],
+    );
+    assert.equal(store.pruneEvents(cutoff), 0);
+    const last = store.appendEvent(s.id, 'last', {});
+    assert.ok(last > edge);
+    clock.advance(1);
+    assert.equal(store.pruneEvents(clock()), 3);
+    assert.ok(store.appendEvent(s.id, 'after', {}) > last, 'a pruned sequence is never reused');
+    assert.throws(
+      () => store.pruneEvents(Number.NaN),
+      (e) => e.code === 'E_INVALID_PARAMS',
+    );
+    assert.throws(
+      () => store.pruneEvents('soon'),
+      (e) => e.code === 'E_INVALID_PARAMS',
+    );
   } finally {
     cleanup();
   }

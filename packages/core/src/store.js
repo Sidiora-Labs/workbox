@@ -615,21 +615,53 @@ export class Store {
     return Number(r.lastInsertRowid);
   }
 
+  /** One event by sequence number, or null. @param {number} seq */
+  getEvent(seq) {
+    const r = this.db.prepare(`SELECT ${EVENT_COLS} FROM events WHERE seq = ?`).get(seq);
+    return r ? eventRow(r) : null;
+  }
+
   /** @param {string} sandboxId @param {{afterSeq?: number, limit?: number}} [opts] */
   listEvents(sandboxId, opts = {}) {
     return this.db
       .prepare(
-        `SELECT seq, type, payload, causation, source, at FROM events WHERE sandbox_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
+        `SELECT ${EVENT_COLS} FROM events WHERE sandbox_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
       )
       .all(sandboxId, opts.afterSeq ?? 0, pageSize(opts.limit, 100))
-      .map((r) => ({
-        seq: r.seq,
-        type: r.type,
-        payload: r.payload === null ? null : parseColumn(r.payload, 'events', r.seq, 'payload'),
-        causation: r.causation,
-        source: r.source,
-        at: r.at,
-      }));
+      .map(eventRow);
+  }
+
+  /**
+   * Events of every sandbox in `seq` order: at most `limit` (default 100, cap 1000) after
+   * `afterSeq`. `types` holds exact types and `prefix.*` patterns, which match every type that
+   * starts with `prefix.`; an absent or empty list matches every type.
+   * @param {{afterSeq?: number, limit?: number, types?: string[], sandboxId?: string}} [opts]
+   */
+  listFleetEvents(opts = {}) {
+    const clauses = ['seq > ?'];
+    const params = [opts.afterSeq ?? 0];
+    if (opts.sandboxId !== undefined) {
+      clauses.push('sandbox_id = ?');
+      params.push(opts.sandboxId);
+    }
+    const types = typeFilter(opts.types);
+    if (types) {
+      clauses.push(types.sql);
+      params.push(...types.params);
+    }
+    return this.db
+      .prepare(
+        `SELECT ${EVENT_COLS} FROM events WHERE ${clauses.join(' AND ')} ORDER BY seq LIMIT ?`,
+      )
+      .all(...params, pageSize(opts.limit, 100))
+      .map(eventRow);
+  }
+
+  /** Delete events recorded before `beforeAt` (ms). @param {number} beforeAt @returns {number} rows deleted */
+  pruneEvents(beforeAt) {
+    if (!Number.isFinite(beforeAt))
+      throw E.invalid('beforeAt must be a time in milliseconds', { beforeAt });
+    return Number(this.db.prepare(`DELETE FROM events WHERE at < ?`).run(beforeAt).changes);
   }
 
   // ── artifacts and evidence ──
@@ -1021,6 +1053,45 @@ function parseColumn(text, table, id, column) {
   } catch {
     throw E.internal(`corrupt ${column} in ${table} row ${id}`, { table, id, column });
   }
+}
+
+const EVENT_COLS = 'seq, sandbox_id, type, source, payload, causation, at';
+
+function eventRow(r) {
+  return {
+    seq: r.seq,
+    sandboxId: r.sandbox_id,
+    type: r.type,
+    source: r.source,
+    payload: r.payload === null ? null : parseColumn(r.payload, 'events', r.seq, 'payload'),
+    causation: r.causation,
+    at: r.at,
+  };
+}
+
+/**
+ * SQL for a list of event type patterns, or null when the list matches everything.
+ * @param {string[]|undefined} types
+ * @returns {{sql: string, params: (string|number)[]}|null}
+ */
+function typeFilter(types) {
+  if (types === undefined || types === null) return null;
+  if (!Array.isArray(types) || types.some((t) => typeof t !== 'string' || t.length === 0))
+    throw E.invalid('types must be an array of event types or prefix.* patterns', { types });
+  if (types.length === 0) return null;
+  const ors = [];
+  const params = [];
+  for (const t of new Set(types)) {
+    if (t.endsWith('.*')) {
+      const prefix = t.slice(0, -1);
+      ors.push('substr(type, 1, ?) = ?');
+      params.push(prefix.length, prefix);
+    } else {
+      ors.push('type = ?');
+      params.push(t);
+    }
+  }
+  return { sql: `(${ors.join(' OR ')})`, params };
 }
 
 function checkIntegrity(db, dbPath) {

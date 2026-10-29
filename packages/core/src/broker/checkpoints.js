@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import { E } from '../errors.js';
 import { removeUnder } from '../host/safefs.js';
+import { appendLogged } from './events.js';
 
 /**
  * Checkpoints: a tar of the sandbox upper layer plus an envelope JSON with its digest.
@@ -125,6 +126,7 @@ export async function checkpointCreate(ctx, params) {
     sandboxId: ctx.sandboxId,
     data: { id: row.id, sha256, size },
   });
+  appendLogged(ctx, 'checkpoint.created', { checkpointId: row.id, name: row.name });
   return { id: row.id, sha256, size, name: row.name, createdAt: row.createdAt };
 }
 

@@ -25,6 +25,10 @@ test('put/get/list round-trip through the CAS', () => {
   };
   const put = artifactPut(ctx, { outboxName: 'a.bin', sha256, size: data.length, name: 'a.bin' });
   assert.equal(put.sha256, sha256);
+  assert.deepEqual(
+    store.listEvents(sb.id).map((e) => [e.type, e.source, e.payload]),
+    [['artifact.added', 'host', { sha256, size: data.length, name: 'a.bin' }]],
+  );
   assert.equal(artifactList(ctx, {}).items.length, 1);
   const got = artifactGet(ctx, { sha256 });
   assert.equal(fs.readFileSync(path.join(ctx.inboxDir, got.inboxName), 'utf8'), 'artifact bytes');

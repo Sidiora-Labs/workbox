@@ -13,10 +13,15 @@ import {
   publicAsk,
 } from '../broker/index.js';
 import { secretRedactor } from '../secrets.js';
+import { nullLogger } from '../log.js';
 import { sandboxDirs, writeNetState, readNetState } from '../host/launch.js';
 import { SandboxNet } from '../host/netns.js';
 import { normalizeAllowEntry } from '../host/proxy.js';
 import { buildSeccompProgram } from '../host/seccomp.js';
+
+/** How often the Manager prunes the event log, besides once at start. */
+export const EVENT_PRUNE_INTERVAL_MS = 3600_000;
+const DAY_MS = 86_400_000;
 
 /**
  * The fleet manager (task 1.6): owns every Supervisor, creates/destroys sandboxes, reconciles
@@ -24,7 +29,8 @@ import { buildSeccompProgram } from '../host/seccomp.js';
  * and fans supervisor/runner events out to server/CLI consumers.
  *
  * Emits: 'sandbox' (row), 'health' ({sandboxId, health}), 'event' ({sandboxId, method, params}),
- * 'ask' (ask row).
+ * 'ask' (ask row), 'logged' ({seq, sandboxId, type, source, payload, causation, at}) after every
+ * append to the event log.
  */
 export class Manager extends EventEmitter {
   /**
@@ -63,11 +69,69 @@ export class Manager extends EventEmitter {
     this.askChannels = deps.askChannels ?? [];
     if (this.audit && this.secrets)
       this.audit.redactor = secretRedactor(this.secrets, this.audit.redactor);
+    this.redactor = this.audit?.redactor ?? (this.secrets ? secretRedactor(this.secrets) : null);
+    this.log = (this.logger ?? nullLogger()).child('manager');
     this.supervisorFactory = deps.supervisorFactory ?? ((d) => new Supervisor(d));
     /** @type {Map<string, Supervisor>} */
     this.supervisors = new Map();
     /** @type {Map<string, SandboxNet>} */
     this.nets = new Map();
+    /**
+     * Sessions whose start and exit are already logged, per sandbox, seeded from the store.
+     * @type {Map<string, Map<string, {name: string|null, exited: boolean}>>}
+     */
+    this.loggedSessions = new Map();
+    this._prune();
+    this.pruneTimer = setInterval(() => this._prune(), EVENT_PRUNE_INTERVAL_MS);
+    this.pruneTimer.unref();
+  }
+
+  /**
+   * Append an event to a sandbox's log and emit 'logged' with the stored row. The payload passes
+   * through the secret redactor first.
+   * @param {string} sandboxId
+   * @param {string} type
+   * @param {object} [payload]
+   * @param {{causation?: string, source?: 'host'|'wb'}} [opts]
+   * @returns {{seq: number, sandboxId: string, type: string, source: string, payload: object|null, causation: string|null, at: number}}
+   */
+  logEvent(sandboxId, type, payload, opts = {}) {
+    const body =
+      payload !== undefined && this.redactor ? this.redactor.applyDeep(payload) : payload;
+    const seq = this.store.appendEvent(sandboxId, type, body, {
+      causation: opts.causation,
+      source: opts.source ?? 'host',
+    });
+    const row = this.store.getEvent(seq);
+    try {
+      this.emit('logged', row);
+    } catch (e) {
+      this.log.warn('a logged listener failed', { seq, type, err: e });
+    }
+    return row;
+  }
+
+  /** Record a host event; a failure is logged and never breaks the operation that caused it. */
+  _hostEvent(sandboxId, type, payload) {
+    try {
+      this.logEvent(sandboxId, type, payload);
+    } catch (e) {
+      this.log.warn('event not recorded', { sandboxId, type, err: e });
+    }
+  }
+
+  /** Delete events older than `events.retentionDays`. @returns {number} rows deleted */
+  pruneEvents() {
+    const days = this.config.events?.retentionDays ?? 30;
+    return this.store.pruneEvents(this.store.clock() - days * DAY_MS);
+  }
+
+  _prune() {
+    try {
+      this.pruneEvents();
+    } catch (e) {
+      this.log.warn('event log not pruned', { err: e });
+    }
   }
 
   /** @param {object} sandbox store row */
@@ -91,8 +155,14 @@ export class Manager extends EventEmitter {
       },
     });
     sup.registerPeerHandlers?.((peer, s) => registerBrokerHandlers(peer, this.brokerContextFor(s)));
-    sup.on('state', (row) => this.emit('sandbox', row));
-    sup.on('health', (health) => this.emit('health', { sandboxId: sandbox.id, health }));
+    sup.on('state', (row, change) => {
+      this._hostEvent(sandbox.id, 'sandbox.state', change);
+      this.emit('sandbox', row);
+    });
+    sup.on('health', (health, change) => {
+      this._hostEvent(sandbox.id, 'sandbox.health', change);
+      this.emit('health', { sandboxId: sandbox.id, health });
+    });
     sup.on('event', (method, params) => {
       this._trackSession(sandbox.id, method, params);
       this.emit('event', { sandboxId: sandbox.id, method, params });
@@ -101,15 +171,58 @@ export class Manager extends EventEmitter {
     return sup;
   }
 
+  /**
+   * Record a session start or exit in the store and log it once. The runner reports an exit to
+   * the control channel, to every attached subscriber and again on each later attach; only the
+   * first report the store has not seen is logged.
+   */
   _trackSession(sandboxId, method, params) {
+    if (!params?.sessionId) return;
     try {
-      if (method === 'session.started' && params?.sessionId)
+      const known = this._loggedSessionsOf(sandboxId);
+      const seen = known.get(params.sessionId);
+      if (method === 'session.started') {
         this.store.upsertSession(sandboxId, params);
-      if (method === 'session.exit' && params?.sessionId)
+        if (!seen) {
+          known.set(params.sessionId, { name: params.name ?? null, exited: false });
+          this._hostEvent(sandboxId, 'session.started', {
+            sessionId: params.sessionId,
+            name: params.name ?? null,
+            argv: params.argv,
+            pid: params.pid ?? null,
+          });
+        }
+      }
+      if (method === 'session.exit' && !seen?.exited) {
+        const name = seen?.name ?? null;
         this.store.sessionExited(sandboxId, params.sessionId, params);
-    } catch {
+        known.set(params.sessionId, { name, exited: true });
+        this._hostEvent(sandboxId, 'session.exited', {
+          sessionId: params.sessionId,
+          name,
+          code: params.code ?? null,
+          signal: params.signal ?? null,
+        });
+      }
+    } catch (e) {
       // session bookkeeping must never break the event fan-out
+      this.log.warn('session not recorded', { sandboxId, sessionId: params.sessionId, err: e });
     }
+  }
+
+  /** @param {string} sandboxId */
+  _loggedSessionsOf(sandboxId) {
+    let known = this.loggedSessions.get(sandboxId);
+    if (known) return known;
+    known = new Map();
+    for (let after; ; ) {
+      const page = this.store.listSessions(sandboxId, { after, limit: 1000 });
+      for (const s of page) known.set(s.sessionId, { name: s.name, exited: s.exitedAt !== null });
+      if (page.length < 1000) break;
+      after = page[page.length - 1].sessionId;
+    }
+    this.loggedSessions.set(sandboxId, known);
+    return known;
   }
 
   async _beforeGo(sup) {
@@ -231,7 +344,11 @@ export class Manager extends EventEmitter {
           return {};
         }
       },
+      logEvent: (type, payload, opts) => this.logEvent(sup.id, type, payload, opts),
       onAsk: (ask) => {
+        const raised = publicAsk(ask);
+        delete raised.answer;
+        this._hostEvent(sup.id, 'ask.raised', raised);
         this.emit('ask', ask);
         notifyAsk(
           { audit: this.audit ?? undefined, sandboxId: sup.id },
@@ -292,6 +409,12 @@ export class Manager extends EventEmitter {
         });
     }
     const row = this.store.createSandbox(sandboxInput(this.config, input));
+    if (row.state === States.REQUESTED)
+      this._hostEvent(row.id, 'sandbox.created', {
+        name: row.name,
+        rootfs: row.rootfs,
+        labels: row.labels,
+      });
     if (input.secretRefs?.length) this.store.setSecretPolicy(row.id, input.secretRefs);
     else if (input.profile?.secretRefs?.length)
       this.store.setSecretPolicy(row.id, input.profile.secretRefs);
@@ -377,9 +500,21 @@ export class Manager extends EventEmitter {
     return sup;
   }
 
-  /** @param {string} id @param {object} opts exec options */
+  /**
+   * Run a command to completion and log `exec.finished`, which names only the program (argv[0]).
+   * @param {string} id @param {object} opts exec options
+   */
   exec(id, opts) {
-    return execCommand(this.supervisor(id), opts);
+    return execCommand(this.supervisor(id), opts).then((result) => {
+      this._hostEvent(id, 'exec.finished', {
+        argv0: opts.argv[0],
+        exitCode: result.exitCode,
+        signal: result.signal,
+        timedOut: result.timedOut,
+        durationMs: result.durationMs,
+      });
+      return result;
+    });
   }
 
   /** @param {string} id @param {string} method @param {object} [params] @param {object} [opts] */
@@ -400,13 +535,18 @@ export class Manager extends EventEmitter {
     } finally {
       this.nets.get(id)?.stop();
       this.nets.delete(id);
-      if (this.store.getSandbox(id)?.state === States.DELETED) this.supervisors.delete(id);
+      if (this.store.getSandbox(id)?.state === States.DELETED) {
+        this.supervisors.delete(id);
+        this.loggedSessions.delete(id);
+      }
     }
   }
 
   /**
    * Rediscover every non-DELETED sandbox from store + cgroup after a restart. Live sandboxes are
-   * reattached; empty-cgroup sandboxes are observed ABSENT and never relaunched.
+   * reattached and their sessions caught up from the runner, so an exit that happened while no
+   * host was attached is recorded and logged; empty-cgroup sandboxes are observed ABSENT and
+   * never relaunched.
    * @returns {Promise<{attached: string[], absent: string[], suspect: string[], quarantined: string[]}>}
    */
   async reconcile() {
@@ -417,6 +557,7 @@ export class Manager extends EventEmitter {
       const sup = this._makeSupervisor(row);
       try {
         const health = await sup.attach();
+        if (health !== Health.ABSENT) await this._catchUpSessions(row.id);
         if (health === Health.HEALTHY) out.attached.push(row.id);
         else if (health === Health.ABSENT) out.absent.push(row.id);
         else out.suspect.push(row.id);
@@ -428,12 +569,22 @@ export class Manager extends EventEmitter {
     return out;
   }
 
+  /** Sync a reattached sandbox's sessions from its runner. @param {string} id */
+  async _catchUpSessions(id) {
+    try {
+      await this.sessions(id);
+    } catch (e) {
+      this.log.warn('sessions not caught up after reattach', { sandboxId: id, err: e });
+    }
+  }
+
   /** Answer an ask (host-only path). @param {string} askId @param {{answer: unknown, by?: string}} input */
   answerAsk(askId, input) {
     const ask = this.store.getAsk(askId);
     if (!ask) throw E.notFound(`ask ${askId} not found`, { askId });
     const ctx = this.brokerContextFor(this.supervisor(ask.sandboxId));
     const answered = answerAskHost(ctx, askId, input);
+    this._hostEvent(ask.sandboxId, 'ask.answered', { askId, by: input.by ?? null });
     const sup = this.supervisors.get(ask.sandboxId);
     sup?.peer?.notify?.('ask.answered', { askId, answer: input.answer }).catch(() => undefined);
     return answered;
@@ -454,6 +605,8 @@ export class Manager extends EventEmitter {
 
   /** Detach from every sandbox without touching them (daemon shutdown). */
   close() {
+    clearInterval(this.pruneTimer);
+    this.loggedSessions.clear();
     for (const net of this.nets.values()) net.stop();
     this.nets.clear();
     for (const sup of this.supervisors.values()) sup.close();

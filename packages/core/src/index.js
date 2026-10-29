@@ -64,7 +64,12 @@ export {
   REPO_ROOT,
 } from './host/runtime.js';
 export { exec, DEFAULT_EXEC_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from './sandbox/exec.js';
-export { Manager, sandboxInput, validateCreate } from './sandbox/manager.js';
+export {
+  Manager,
+  sandboxInput,
+  validateCreate,
+  EVENT_PRUNE_INTERVAL_MS,
+} from './sandbox/manager.js';
 export { SecretProvider, parseRef, assertRef, secretRedactor } from './secrets.js';
 export {
   registerBrokerHandlers,
@@ -83,6 +88,7 @@ export {
   secretList,
   secretResolve,
   eventEmit,
+  RESERVED_EVENT_PREFIXES,
   leaseStatus,
   leaseRenew,
   issueLease,
