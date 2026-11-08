@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { v, validate } from '@workbox/protocol';
 import { E } from '@workbox/core';
 
@@ -102,10 +102,30 @@ export const KEY_CREATE_SCHEMA = v.object(
 );
 
 const LOCAL_HOSTS = Object.freeze(['localhost', '127.0.0.1', '::1']);
+const TOKEN_KDF_PREFIX = 'pbkdf2$sha256$210000$workbox_api_key_v1$';
+
+function legacySha256Hex(token) {
+  return createHash('sha256').update(String(token)).digest('hex');
+}
 
 /** @param {string} token */
 export function hashToken(token) {
-  return createHash('sha256').update(String(token)).digest('hex');
+  const dk = pbkdf2Sync(String(token), 'workbox_api_key_v1', 210000, 32, 'sha256').toString('hex');
+  return `${TOKEN_KDF_PREFIX}${dk}`;
+}
+
+function digestStringOf(tokenSha) {
+  if (typeof tokenSha !== 'string') return null;
+  if (/^[a-f0-9]{64}$/.test(tokenSha)) return tokenSha;
+  if (tokenSha.startsWith(TOKEN_KDF_PREFIX) && /^[a-f0-9]{64}$/.test(tokenSha.slice(TOKEN_KDF_PREFIX.length)))
+    return tokenSha;
+  return null;
+}
+
+function digestMatchesToken(digestString, token) {
+  if (/^[a-f0-9]{64}$/.test(digestString)) return digestString === legacySha256Hex(token);
+  if (digestString.startsWith(TOKEN_KDF_PREFIX)) return digestString === hashToken(token);
+  return false;
 }
 
 /** A fresh stored-key token: `wbk_` and 32 random bytes in base64url. */
@@ -210,9 +230,8 @@ export function createAuth(opts = {}) {
     const scopes = k.scopes ?? [];
     for (const s of scopes)
       if (!SCOPES.includes(s)) throw new Error(`unknown scope ${s} for key ${k.id}`);
-    const digest = k.tokenSha256 ?? (k.token ? hashToken(k.token) : null);
-    if (!digest || !/^[a-f0-9]{64}$/.test(digest))
-      throw new Error(`key ${k.id} has no usable token digest`);
+    const digest = digestStringOf(k.tokenSha256 ?? (k.token ? hashToken(k.token) : null));
+    if (!digest) throw new Error(`key ${k.id} has no usable token digest`);
     const principal = Object.freeze({
       id: k.id,
       scopes: Object.freeze([...scopes]),
@@ -220,7 +239,7 @@ export function createAuth(opts = {}) {
       source: 'config',
       expiresAt: null,
     });
-    return { digest: Buffer.from(digest, 'hex'), principal };
+    return { digest: Buffer.from(digest, 'utf8'), principal };
   });
   const store = opts.store ?? null;
   const clock = opts.clock ?? store?.clock ?? Date.now;
