@@ -46,7 +46,9 @@ async function runnerTarget() {
     target,
     runner,
     cleanup: async () => (
-      peer.close(), await runner.stop(), fs.rmSync(dir, { recursive: true, force: true })
+      peer.close(),
+      await runner.stop(),
+      fs.rmSync(dir, { recursive: true, force: true })
     ),
   };
 }

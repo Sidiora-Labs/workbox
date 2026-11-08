@@ -292,7 +292,7 @@ test('EventFeed: a multi-page replay with live rows during it switches with no g
     await feed.start();
     const after = e.log(e.b, 'bulk.after');
     const expected = [];
-    for (let cursor = start; ; ) {
+    for (let cursor = start; ;) {
       const page = e.store.listFleetEvents({ afterSeq: cursor, types: ['bulk.*'], limit: 1000 });
       expected.push(...page.map((r) => r.seq));
       if (page.length < 1000) break;

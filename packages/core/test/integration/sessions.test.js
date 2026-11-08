@@ -135,7 +135,7 @@ test('sessions in a real sandbox: identity, OOM kill, pid limit, exec, survival 
       name: 'stubborn',
     });
     // Stop only once the trap is in place: a SIGTERM that beats `trap` kills sh outright.
-    for (let armed = false, deadline = Date.now() + 10_000; !armed; ) {
+    for (let armed = false, deadline = Date.now() + 10_000; !armed;) {
       assert.ok(Date.now() < deadline, 'the stubborn session printed armed');
       const { sessions } = await again.request('session.list', {});
       armed = sessions.find((s) => s.sessionId === sleeper.sessionId)?.seq >= 1;

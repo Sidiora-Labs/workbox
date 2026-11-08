@@ -215,7 +215,7 @@ export class Manager extends EventEmitter {
     let known = this.loggedSessions.get(sandboxId);
     if (known) return known;
     known = new Map();
-    for (let after; ; ) {
+    for (let after; ;) {
       const page = this.store.listSessions(sandboxId, { after, limit: 1000 });
       for (const s of page) known.set(s.sessionId, { name: s.name, exited: s.exitedAt !== null });
       if (page.length < 1000) break;

@@ -47,7 +47,7 @@ function openStream(base, target) {
 /** Every stored row after `afterSeq` matching `types`, read page by page. */
 function storedSeqs(store, afterSeq, types) {
   const out = [];
-  for (let cursor = afterSeq; ; ) {
+  for (let cursor = afterSeq; ;) {
     const page = store.listFleetEvents({ afterSeq: cursor, types, limit: 1000 });
     out.push(...page.map((r) => r.seq));
     if (page.length < 1000) return out;
