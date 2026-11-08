@@ -167,8 +167,8 @@ importers:
   .:
     devDependencies:
       '@eslint/js':
-        specifier: 9.39.5
-        version: 9.39.5
+        specifier: 9.18.0
+        version: 9.18.0
       eslint:
         specifier: 10.14.0
         version: 10.14.0(supports-color@7.2.0)
