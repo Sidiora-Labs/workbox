@@ -686,7 +686,7 @@ async function cgroupCheck(config) {
         'cgroup',
         title,
         Status.FAIL,
-        `parent lacks ${missing.join(', ')}`,
+        `${parent.path} lacks ${missing.join(', ')}`,
         'Enable the controllers in the root cgroup.subtree_control.',
       );
     if (!hasKill)
@@ -708,7 +708,7 @@ async function cgroupCheck(config) {
       'cgroup',
       title,
       Status.FAIL,
-      e.message,
+      `${path.join(config.cgroup.root, config.cgroup.parent)}: ${e.message}`,
       'Boot with systemd.unified_cgroup_hierarchy=1 and run as root.',
     );
   }

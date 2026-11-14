@@ -8,6 +8,7 @@ import { agentCommand } from './agent.js';
 import { keyCommand } from './keys.js';
 import { eventsCommand } from './events.js';
 import { webhookCommand } from './webhooks.js';
+import { validateCommand } from './grammar.js';
 import {
   connectionOpts,
   withoutConnection,
@@ -132,7 +133,7 @@ async function buildContext(deps, cmd, rest, io) {
     });
   let engine = deps.engine ?? null;
   let ownEngine = false;
-  const needsEngine = !client && (cmd in COMMANDS || cmd === 'serve');
+  const needsEngine = !client && cmd !== 'doctor' && (cmd in COMMANDS || cmd === 'serve');
   if (needsEngine && !engine) {
     engine = await openLocalEngine({
       reconcile: reconciling(cmd, rest),
@@ -146,7 +147,7 @@ async function buildContext(deps, cmd, rest, io) {
 export async function main(argv, deps = {}) {
   const out = deps.out ?? process.stdout;
   const err = deps.err ?? process.stderr;
-  if (argv.includes('--version') || argv[0] === 'version') {
+  if (argv[0] === '--version' || argv[0] === 'version') {
     out.write(`workbox ${CLI_VERSION}\n`);
     return 0;
   }
@@ -158,6 +159,11 @@ export async function main(argv, deps = {}) {
   let engine = null;
   let ownEngine = false;
   try {
+    const help = validateCommand(argv);
+    if (help) {
+      out.write(`${help}\n`);
+      return 0;
+    }
     const built = await buildContext(deps, cmd, rest, { out, err });
     engine = built.engine;
     ownEngine = built.ownEngine;

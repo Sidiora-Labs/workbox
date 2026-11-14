@@ -41,6 +41,49 @@ test('every error code family maps to its documented exit code', () => {
   assert.equal(exitCodeForError(undefined), 1);
 });
 
+test('help and bad flags return before opening an engine or contacting a server', async () => {
+  for (const args of [
+    ['sandbox', 'create', '--help'],
+    ['serve', '--help'],
+    ['sandbox', '--help'],
+  ]) {
+    const out = capture();
+    const err = capture();
+    assert.equal(await main(args, { out: out.stream, err: err.stream }), 0);
+    assert.match(out.text(), /workbox/);
+    assert.equal(err.text(), '');
+  }
+  for (const args of [
+    ['sandbox', 'create', '--netwrok', 'none'],
+    ['sandbox', 'create', '--network', 'typo'],
+  ]) {
+    const err = capture();
+    assert.equal(await main(args, { out: capture().stream, err: err.stream }), 2);
+    assert.match(err.text(), /E_INVALID_PARAMS/);
+  }
+  const out = capture();
+  const err = capture();
+  assert.equal(
+    await main(
+      [
+        'sandbox',
+        'exec',
+        'sb',
+        '--server',
+        'http://127.0.0.1:1',
+        '--',
+        'printf',
+        '%s',
+        '--version',
+      ],
+      { out: out.stream, err: err.stream },
+    ),
+    4,
+  );
+  assert.equal(out.text(), '');
+  assert.match(err.text(), /E_UNAVAILABLE/);
+});
+
 async function tempEngine() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-cli-main-'));
   const engine = await openLocalEngine({ env: {}, overrides: { root: dir } });
@@ -60,9 +103,9 @@ test('a supplied local engine serves commands and stays open; codeless errors ex
     const e = capture();
     assert.equal(
       await main(['sandbox', 'frobnicate'], { out: o.stream, err: e.stream, engine }),
-      1,
+      2,
     );
-    assert.equal(e.text(), 'workbox: unknown sandbox subcommand frobnicate\n');
+    assert.equal(e.text(), 'workbox: unknown command sandbox frobnicate (E_INVALID_PARAMS)\n');
     assert.equal(o.text(), '');
     const e2 = capture();
     assert.equal(
