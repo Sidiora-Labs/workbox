@@ -145,7 +145,11 @@ Network setup must only ever touch a sandbox's own network namespace, never the 
 - Checkpoint restore verifies the archive's SHA-256 against the stored checkpoint record, then
   lists the archive and refuses any absolute member name, any name containing `..` or a NUL, and
   archives of more than a million entries, before extracting into the target upper directory.
+  A listing larger than 1 MiB is refused rather than validating a truncated list.
   The listing check is by name only; member types (devices, hard links) are not inspected.
+- Checkpoint creation treats requested paths as literal tar members, even when they begin with
+  a dash. With sandbox writers frozen, the host refuses paths that traverse symlinks; a symlink
+  selected as a leaf is archived as a link without following its target.
 
 ### API
 

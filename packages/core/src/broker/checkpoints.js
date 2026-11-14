@@ -10,23 +10,31 @@ import { appendLogged } from './events.js';
 /**
  * Checkpoints: a tar of the sandbox upper layer plus an envelope JSON with its digest.
  * `create`/`list` are broker (wb) surface; `restore` is host-side only (manager/CLI/server).
- * Extraction is guarded: the archive listing is checked first and any absolute, `..` or
- * device entry refuses the restore.
+ * Extraction is guarded: the archive listing is checked first and any absolute or `..`
+ * member name refuses the restore. Member types are not inspected.
  */
 
 async function run(argv, opts = {}) {
-  const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], ...opts });
-  let out = '';
+  const child = spawn(argv[0], argv.slice(1), {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...opts,
+    env: { ...process.env, TAR_OPTIONS: '' },
+  });
+  const out = [];
+  let outputBytes = 0;
   let err = '';
   child.stdout?.on('data', (d) => {
-    if (out.length < 1024 * 1024) out += d;
+    outputBytes += d.length;
+    if (outputBytes <= 1024 * 1024) out.push(d);
   });
   child.stderr?.on('data', (d) => {
-    err += d;
+    err = (err + d).slice(-500);
   });
   const [code] = await once(child, 'close');
   if (code !== 0) throw E.unavailable(`${argv[0]} failed (${code}): ${err.trim().slice(-500)}`);
-  return out;
+  if (outputBytes > 1024 * 1024)
+    throw E.limit(`${argv[0]} output exceeds the 1 MiB validation limit`);
+  return Buffer.concat(out).toString('utf8');
 }
 
 /** @param {string} file */
@@ -52,6 +60,30 @@ export function assertSafeTarNames(names) {
   }
   if (names.length > 1_000_000) throw E.limit('checkpoint archive has too many entries');
   return names;
+}
+
+// The host tar must never traverse a sandbox-created symlink to read host files. Check while
+// writers are frozen; a leaf symlink is safe because tar archives it without dereferencing it.
+function assertNoSymlinkTraversal(upperDir, members) {
+  if (fs.lstatSync(upperDir).isSymbolicLink())
+    throw E.denied('checkpoint upper directory must not be a symlink');
+  for (const member of members) {
+    const parts = member.split('/').filter(Boolean);
+    let current = upperDir;
+    for (let i = 0; i < parts.length; i++) {
+      current = path.join(current, parts[i]);
+      let stat;
+      try {
+        stat = fs.lstatSync(current);
+      } catch (e) {
+        // Keep missing/non-directory path errors on the normal tar failure path.
+        if (e.code === 'ENOENT' || e.code === 'ENOTDIR') break;
+        throw e;
+      }
+      if (stat.isSymbolicLink() && (i < parts.length - 1 || member.endsWith('/')))
+        throw E.denied(`checkpoint path traverses a symlink: ${member}`, { name: member });
+    }
+  }
 }
 
 async function waitFrozen(cgroupPath, want, timeoutMs) {
@@ -97,9 +129,10 @@ export async function checkpointCreate(ctx, params) {
   const members = params.paths?.length ? params.paths.map((p) => p.replace(/^\//, '')) : ['.'];
   assertSafeTarNames(members);
   try {
-    await withQuiesced(ctx.cgroupPath, () =>
-      run(['tar', '-cf', tarFile, '-C', ctx.upperDir, ...members]),
-    );
+    await withQuiesced(ctx.cgroupPath, () => {
+      assertNoSymlinkTraversal(ctx.upperDir, members);
+      return run(['tar', '-cf', tarFile, '-C', ctx.upperDir, '--', ...members]);
+    });
   } catch (e) {
     removeUnder(ctx.checkpointsDir, tarFile);
     throw e;
