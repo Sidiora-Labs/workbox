@@ -45,4 +45,5 @@ The full list is in [the security model](security.md#stated-limits). The main on
 - Hostname allowlists bind only proxy-aware clients.
 - Sandboxes share the host kernel.
 - One engine drives a Workbox root at a time.
-- Events are paged by polling; only session output is streamed.
+- Events support paged polling and WebSocket replay/live streaming; the SDK reconnects from
+  its event cursor. Session output also supports streaming.
