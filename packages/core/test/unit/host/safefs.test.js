@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   removeUnder,
+  removeEmptyDirectory,
   checkUnder,
   SafeFsReason,
   withLockFile,
@@ -24,6 +25,26 @@ function mkfile(p) {
 }
 
 const refused = (reason) => (e) => e.code === 'E_DENIED' && e.data.reason === reason;
+
+test('empty-directory cleanup refuses nonempty directories, symlinks and filesystem root', () => {
+  const { dir, cleanup } = tmpDir('workbox-empty-dir-');
+  try {
+    const empty = path.join(dir, 'empty');
+    fs.mkdirSync(empty);
+    const link = path.join(dir, 'link');
+    fs.symlinkSync(empty, link);
+    assert.throws(() => removeEmptyDirectory(link), { code: 'ENOTDIR' });
+    assert.ok(fs.statSync(empty).isDirectory());
+    removeEmptyDirectory(empty);
+    assert.equal(fs.existsSync(empty), false);
+    mkfile(path.join(dir, 'keep'));
+    assert.throws(() => removeEmptyDirectory(dir), { code: 'ENOTEMPTY' });
+    assert.equal(fs.readFileSync(path.join(dir, 'keep'), 'utf8'), 'x');
+    assert.throws(() => removeEmptyDirectory('/'), refused(SafeFsReason.IS_ROOT));
+  } finally {
+    cleanup();
+  }
+});
 
 function twoDirs(fn) {
   const a = tmpDir('workbox-safefs-root-');

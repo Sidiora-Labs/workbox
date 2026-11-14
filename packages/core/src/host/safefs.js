@@ -123,6 +123,21 @@ export function removeUnder(root, p) {
   return true;
 }
 
+/**
+ * Remove one empty directory, without recursion or following a final symlink. Useful for
+ * privately created staging directories whose parent may be the filesystem root.
+ * @param {string} dir
+ */
+export function removeEmptyDirectory(dir) {
+  const abs = path.resolve(dir);
+  if (abs === path.parse(abs).root)
+    throw E.denied(`safefs: refusing to remove filesystem root ${dir}`, {
+      reason: SafeFsReason.IS_ROOT,
+      path: dir,
+    });
+  fs.rmdirSync(abs);
+}
+
 /** fsync a directory so a rename or create inside it survives a crash. @param {string} dir */
 export function fsyncDir(dir) {
   const fd = fs.openSync(dir, 'r');

@@ -34,6 +34,49 @@ test('fs read/write/list/stat/mkdir/remove round-trip under a root', () => {
 
 const code = (c) => (e) => e.code === c;
 
+test('remove unlinks file, directory and dangling symlinks without following them', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-fs-links-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const api = createFs({ root: dir });
+  const target = path.join(dir, 'target');
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target, 'kept'), 'keep me');
+  for (const [name, to, recursive] of [
+    ['file-link', path.join(target, 'kept'), false],
+    ['dir-link', target, true],
+    ['dangling', path.join(dir, 'absent'), false],
+    ['outside-link', '/etc/hostname', false],
+  ]) {
+    const link = path.join(dir, name);
+    fs.symlinkSync(to, link);
+    api.remove({ path: link, recursive });
+    assert.equal(fs.existsSync(link), false);
+    assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' });
+    assert.equal(fs.readFileSync(path.join(target, 'kept'), 'utf8'), 'keep me');
+  }
+  assert.throws(() => api.remove({ path: dir, recursive: true }), code('E_DENIED'));
+  assert.throws(() => api.remove({ path: path.join(dir, 'absent') }), code('E_NOT_FOUND'));
+  fs.symlinkSync('/etc', path.join(dir, 'escape'));
+  assert.throws(() => api.remove({ path: path.join(dir, 'escape', 'hostname') }), code('E_DENIED'));
+});
+
+test('rename publishes only regular staged files and confines both parents', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-fs-rename-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const api = createFs({ root: dir });
+  const source = path.join(dir, 'staged');
+  const target = path.join(dir, 'target');
+  fs.writeFileSync(source, 'new');
+  fs.writeFileSync(target, 'old');
+  api.rename({ source, target });
+  assert.equal(fs.readFileSync(target, 'utf8'), 'new');
+  assert.equal(fs.existsSync(source), false);
+  fs.symlinkSync(target, source);
+  assert.throws(() => api.rename({ source, target }), code('E_INVALID_PARAMS'));
+  assert.throws(() => api.rename({ source: target, target: '/etc/hostname' }), code('E_DENIED'));
+  assert.throws(() => api.rename({ source: 'relative', target }), code('E_INVALID_PARAMS'));
+});
+
 test('fs entry types, defaults, confinement and error codes', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-fs-'));
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-fs-out-'));

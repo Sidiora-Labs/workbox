@@ -31,6 +31,17 @@ export function createFs(opts = {}) {
     return real;
   }
 
+  // Follow and confine parent directories, but preserve the final directory entry: unlink
+  // and rename must operate on a symlink itself, including a dangling one, not its target.
+  function entry(p) {
+    if (typeof p !== 'string' || !path.isAbsolute(p) || p.includes('\0'))
+      throw new ProtocolError(Codes.INVALID_PARAMS, `path must be absolute: ${String(p)}`);
+    const target = path.resolve(p);
+    if (target === root)
+      throw new ProtocolError(Codes.DENIED, `cannot replace or remove filesystem root: ${p}`);
+    return path.join(resolve(path.dirname(target)), path.basename(target));
+  }
+
   return {
     /** @param {{path: string, offset?: number, length?: number}} p */
     read(p) {
@@ -101,11 +112,32 @@ export function createFs(opts = {}) {
     },
     /** @param {{path: string, recursive?: boolean}} p */
     remove(p) {
-      const real = resolve(p.path);
-      const st = fs.statSync(real);
+      const real = entry(p.path);
+      let st;
+      try {
+        st = fs.lstatSync(real);
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+        throw new ProtocolError(Codes.NOT_FOUND, `path not found: ${p.path}`);
+      }
       if (st.isDirectory() && !p.recursive) fs.rmdirSync(real);
       else fs.rmSync(real, { recursive: Boolean(p.recursive), force: false });
       return { path: p.path, removed: true };
+    },
+    /** Atomically publish a staged file. @param {{source: string, target: string}} p */
+    rename(p) {
+      const source = entry(p.source);
+      const target = entry(p.target);
+      if (!fs.lstatSync(source).isFile())
+        throw new ProtocolError(Codes.INVALID_PARAMS, `not a regular file: ${p.source}`);
+      const fd = fs.openSync(source, 'r');
+      try {
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.renameSync(source, target);
+      return { path: p.target, renamed: true };
     },
   };
 }

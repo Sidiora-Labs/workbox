@@ -239,6 +239,10 @@ export class Runner extends EventEmitter {
       'fs.remove',
       ready((p) => this.fs.remove(p)),
     );
+    guarded(
+      'fs.rename',
+      ready((p) => this.fs.rename(p)),
+    );
     for (const method of methodNames().filter((m) => m.startsWith('broker.'))) {
       guarded(
         method,

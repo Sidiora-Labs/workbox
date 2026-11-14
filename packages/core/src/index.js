@@ -170,4 +170,4 @@ export {
   SANDBOX_PATH,
   ROOT_MODE,
 } from './host/launch.js';
-export { holdLockFile, lockPathFor } from './host/safefs.js';
+export { holdLockFile, lockPathFor, removeUnder, removeEmptyDirectory } from './host/safefs.js';

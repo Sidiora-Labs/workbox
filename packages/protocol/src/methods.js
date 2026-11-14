@@ -174,6 +174,10 @@ export const Methods = Object.freeze({
     doc: 'Remove a file or directory.',
     params: v.object({ path, recursive: v.optional(v.boolean()) }, { required: ['path'] }),
   },
+  'fs.rename': {
+    doc: 'Atomically replace a destination with a staged regular file.',
+    params: v.object({ source: path, target: path }, { required: ['source', 'target'] }),
+  },
 
   // ── wb → runner → host ──
   'broker.status': {

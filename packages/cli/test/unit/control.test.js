@@ -4,7 +4,30 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { downloadFileAtomic } from '../../src/control.js';
 import { WorkboxClient } from '@workbox/sdk';
+
+test('failed downloads preserve the old file; completed downloads replace it atomically', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-download-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const target = path.join(dir, 'target');
+  fs.writeFileSync(target, 'previous bytes', { mode: 0o600 });
+  async function* interrupted() {
+    yield Buffer.from('partial new bytes');
+    yield await fs.promises.readFile(path.join(dir, 'missing-source'));
+  }
+  await assert.rejects(downloadFileAtomic(interrupted(), target), { code: 'ENOENT' });
+  assert.equal(fs.readFileSync(target, 'utf8'), 'previous bytes');
+  assert.deepEqual(fs.readdirSync(dir), ['target']);
+  const absent = path.join(dir, 'absent');
+  await assert.rejects(downloadFileAtomic(interrupted(), absent), { code: 'ENOENT' });
+  assert.equal(fs.existsSync(absent), false);
+  assert.equal(await downloadFileAtomic(Readable.from([Buffer.from('complete')]), target), 8);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'complete');
+  assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(dir), ['target']);
+});
 import {
   CONTROL_COMMANDS,
   CONTROL_USAGE,

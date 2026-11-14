@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { removeUnder, removeEmptyDirectory } from '@workbox/core';
 import {
   MAX_WAIT_MS,
   openSandboxFile,
@@ -212,13 +213,42 @@ async function download(ctx, from, local) {
   const isDir = fs.existsSync(local) && fs.statSync(local).isDirectory();
   const target = isDir ? path.join(local, path.posix.basename(from.path)) : local;
   const source = await sandboxOps(ctx, from.id).download(from.path);
+  const bytes = await downloadFileAtomic(source, target);
+  return { from: `${from.id}:${from.path}`, to: target, bytes };
+}
+
+/**
+ * Publish a complete download by a same-filesystem rename; failures preserve the destination.
+ * @param {AsyncIterable<Uint8Array>} source
+ * @param {string} target
+ * @returns {Promise<number>} downloaded bytes
+ */
+export async function downloadFileAtomic(source, target) {
+  const stagingDir = fs.mkdtempSync(path.join(path.dirname(target), '.workbox-download-'));
+  const staging = path.join(stagingDir, 'file');
   try {
-    await pipeline(source, fs.createWriteStream(target));
-  } catch (e) {
-    if (fs.existsSync(target)) fs.unlinkSync(target);
-    throw e;
+    let mode;
+    try {
+      const st = fs.lstatSync(target);
+      if (st.isFile()) mode = st.mode & 0o777;
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+    await pipeline(source, fs.createWriteStream(staging, { flags: 'wx' }));
+    if (mode !== undefined) fs.chmodSync(staging, mode);
+    const fd = fs.openSync(staging, 'r');
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const bytes = fs.statSync(staging).size;
+    fs.renameSync(staging, target);
+    return bytes;
+  } finally {
+    removeUnder(stagingDir, staging);
+    removeEmptyDirectory(stagingDir);
   }
-  return { from: `${from.id}:${from.path}`, to: target, bytes: fs.statSync(target).size };
 }
 
 /** The commands this module adds to `workbox sandbox`, by subcommand. */

@@ -1049,23 +1049,28 @@ export async function openSandboxFile(manager, id, filePath) {
 
 /**
  * Write a byte source into a sandbox file through `fs.write` calls of at most FILE_CHUNK_BYTES:
- * the first replaces the file (with `mode` and `mkdirs`), the rest append. More than `maxBytes`
- * is a 413 E_LIMIT. On any failure the partly written file is removed.
+ * the first creates a unique staging file (with `mode` and `mkdirs`), the rest append. Only a
+ * complete upload is renamed over the destination. Failures remove the staging file only.
  * @param {object} manager @param {string} id @param {string} filePath
  * @param {AsyncIterable<Uint8Array|string>} source
  * @param {{mode?: number, mkdirs?: boolean, maxBytes?: number}} [opts]
  * @returns {Promise<{path: string, bytes: number}>}
  */
 export async function writeSandboxFile(manager, id, filePath, source, opts = {}) {
+  if (!path.posix.isAbsolute(filePath) || filePath.includes('\0'))
+    throw invalid([{ path: 'query.path', message: 'path must be absolute and contain no NUL' }]);
+  const staging = path.posix.join(path.posix.dirname(filePath), `.wb-upload-${randomUUID()}`);
   const max = opts.maxBytes ?? Infinity;
   let pending = [];
   let pendingBytes = 0;
   let total = 0;
   let written = false;
+  let attempted = false;
   const put = async (buf) => {
     const first = written ? {} : { mode: opts.mode, mkdirs: opts.mkdirs };
+    attempted = true;
     await manager.request(id, 'fs.write', {
-      path: filePath,
+      path: staging,
       data: buf.toString('base64'),
       append: written,
       ...first,
@@ -1088,8 +1093,18 @@ export async function writeSandboxFile(manager, id, filePath, source, opts = {})
       }
     }
     if (pendingBytes > 0 || !written) await put(Buffer.concat(pending));
+    await manager.request(id, 'fs.rename', { source: staging, target: filePath });
   } catch (e) {
-    if (written) await manager.request(id, 'fs.remove', { path: filePath }).catch(() => undefined);
+    if (attempted) {
+      try {
+        await manager.request(id, 'fs.remove', { path: staging });
+      } catch (cleanup) {
+        if (cleanup.code !== 'E_NOT_FOUND')
+          throw new AggregateError([e, cleanup], 'upload failed and staging cleanup failed', {
+            cause: e,
+          });
+      }
+    }
     throw e;
   }
   return { path: filePath, bytes: total };

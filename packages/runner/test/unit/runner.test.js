@@ -9,6 +9,7 @@ import { PROTOCOL_VERSION } from '@workbox/protocol';
 import { Runner, RUNNER_VERSION } from '../../src/runner.js';
 import { createLog } from '../../src/log.js';
 import { bootFixture, connectPeer } from '../helpers/boot.js';
+import { FILE_CHUNK_BYTES, writeSandboxFile } from '../../../server/src/server.js';
 
 const quiet = createLog({ level: 'silent', stream: { write: () => undefined } });
 
@@ -277,6 +278,31 @@ test('ready runner serves session control, fs and broker relay, and resolves sec
       entries: [{ name: 'note.txt', type: 'file' }],
     });
     assert.equal((await local.request('fs.stat', { path: file })).size, 5);
+    // A transport adapter only: every operation goes through the real peer, validation,
+    // runner and filesystem. Failures come from real missing files or the upload limit.
+    const manager = { request: (_id, method, params) => host.request(method, params) };
+    async function* interruptedUpload() {
+      yield Buffer.alloc(FILE_CHUNK_BYTES, 1);
+      yield await fs.promises.readFile(`${box}/missing-source`);
+    }
+    await assert.rejects(writeSandboxFile(manager, 'box', file, interruptedUpload()), {
+      code: 'ENOENT',
+    });
+    assert.equal(fs.readFileSync(file, 'utf8'), 'hello');
+    assert.deepEqual(fs.readdirSync(box), ['note.txt']);
+    await assert.rejects(
+      writeSandboxFile(manager, 'box', file, [Buffer.alloc(FILE_CHUNK_BYTES), Buffer.from('x')], {
+        maxBytes: FILE_CHUNK_BYTES,
+      }),
+      (e) => e.code === 'E_LIMIT',
+    );
+    assert.equal(fs.readFileSync(file, 'utf8'), 'hello');
+    assert.deepEqual(fs.readdirSync(box), ['note.txt']);
+    await writeSandboxFile(manager, 'box', file, [Buffer.from('complete')]);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'complete');
+    await writeSandboxFile(manager, 'box', file, []);
+    assert.equal(fs.statSync(file).size, 0);
+    assert.deepEqual(fs.readdirSync(box), ['note.txt']);
     await assert.rejects(
       local.request('fs.read', { path: os.tmpdir() }),
       (e) => e.code === 'E_DENIED',
