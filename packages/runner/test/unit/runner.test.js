@@ -276,6 +276,8 @@ test('ready runner serves session control, fs and broker relay, and resolves sec
     assert.deepEqual(await local.request('fs.list', { path: box }), {
       path: box,
       entries: [{ name: 'note.txt', type: 'file' }],
+      cursor: null,
+      complete: true,
     });
     assert.equal((await local.request('fs.stat', { path: file })).size, 5);
     // A transport adapter only: every operation goes through the real peer, validation,

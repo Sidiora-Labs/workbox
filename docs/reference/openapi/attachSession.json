@@ -1,0 +1,54 @@
+{
+  "get": {
+    "operationId": "attachSession",
+    "summary": "Attach to a session (WebSocket)",
+    "description": "Attach to a session over a WebSocket: output, input, resize and signal. A plain GET is 426.\n\nServer frames:\n\n- `{\"type\": \"ready\", \"sessionId\"}` first; client frames sent before it are not read.\n- `{\"type\": \"session.output\", \"params\": {sessionId, stream, seq, data}}`: output, `data` base64, `stream` `stdout`, `stderr` or `pty`. The session's retained output is replayed first.\n- `{\"type\": \"session.exit\", \"params\": {sessionId, code, signal, seq, at}}` when the session exits.\n- `{\"type\": \"error\", \"code\", \"message\"}` when a client frame fails; a failed attach also closes the socket with 1011.\n\nClient frames:\n\n- `{\"type\": \"input\", \"data\": \"<base64>\", \"eof\": true}`: write to stdin; `eof` is optional and closes it.\n- `{\"type\": \"resize\", \"rows\", \"cols\"}`: resize a PTY session.\n- `{\"type\": \"signal\", \"signal\": \"SIGINT\"}`: signal the session's process group.\n\nClosing the socket detaches; the session keeps running.\n\nScope: `exec`.",
+    "tags": ["sessions"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "description": "Session id.",
+        "schema": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    ],
+    "responses": {
+      "101": { "description": "Switching Protocols: the WebSocket is open." },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "426": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A plain GET without a WebSocket upgrade (`E_INVALID_PARAMS`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "security": [{ "bearer": [] }, { "queryToken": [] }],
+    "x-workbox-scope": "exec",
+    "x-websocket": true
+  }
+}

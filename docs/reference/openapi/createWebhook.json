@@ -1,0 +1,94 @@
+{
+  "post": {
+    "operationId": "createWebhook",
+    "summary": "Register a webhook",
+    "description": "`url` must be `https:` without credentials and resolve only to public addresses unless the server configuration allows otherwise. `types` holds event types or `prefix.*` patterns; none means every type. `sandboxId` must name a sandbox the key sees. `labels` keeps events of sandboxes that carry every label. The signing `secret` is in this answer only.\n\nScope: `admin`.",
+    "tags": ["webhooks"],
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string", "minLength": 1, "maxLength": 2048 },
+              "types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[a-z][a-z0-9_.-]*(\\.\\*)?$"
+                },
+                "maxItems": 64
+              },
+              "sandboxId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "labels": {
+                "type": "object",
+                "additionalProperties": { "type": "string", "maxLength": 256 },
+                "maxProperties": 32,
+                "propertyNames": { "pattern": "^[\\s\\S]{1,128}$" }
+              },
+              "description": { "type": "string", "maxLength": 1024 }
+            },
+            "required": ["url"],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "201": {
+        "description": "The webhook with its `secret`.",
+        "content": { "application/json": {} }
+      },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin"
+  },
+  "get": {
+    "operationId": "listWebhooks",
+    "summary": "List webhooks",
+    "description": "Webhooks in creation order, without secrets. A bound key sees the ones it created.\n\nScope: `read`.",
+    "tags": ["webhooks"],
+    "responses": {
+      "200": { "description": "`{webhooks}`.", "content": { "application/json": {} } },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  }
+}

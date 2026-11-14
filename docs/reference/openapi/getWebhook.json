@@ -1,0 +1,152 @@
+{
+  "get": {
+    "operationId": "getWebhook",
+    "summary": "Inspect a webhook",
+    "description": "One webhook, without its secret.\n\nScope: `read`.",
+    "tags": ["webhooks"],
+    "parameters": [
+      {
+        "name": "webhookId",
+        "in": "path",
+        "required": true,
+        "description": "Webhook id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "`{id, url, types, sandboxId, labels, description, enabled, disabledReason, ownerKey, binding, lastSeq, createdAt, updatedAt}`.",
+        "content": { "application/json": {} }
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  },
+  "patch": {
+    "operationId": "updateWebhook",
+    "summary": "Change a webhook",
+    "description": "Change `url`, `types`, `description` or `enabled`; enabling clears `disabledReason`.\n\nScope: `admin`.",
+    "tags": ["webhooks"],
+    "parameters": [
+      {
+        "name": "webhookId",
+        "in": "path",
+        "required": true,
+        "description": "Webhook id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "requestBody": {
+      "required": false,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string", "minLength": 1, "maxLength": 2048 },
+              "types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[a-z][a-z0-9_.-]*(\\.\\*)?$"
+                },
+                "maxItems": 64
+              },
+              "description": { "type": ["string", "null"], "maxLength": 1024 },
+              "enabled": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": { "description": "The webhook.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin"
+  },
+  "delete": {
+    "operationId": "deleteWebhook",
+    "summary": "Delete a webhook",
+    "description": "Delete the webhook and its deliveries.\n\nScope: `admin`.",
+    "tags": ["webhooks"],
+    "parameters": [
+      {
+        "name": "webhookId",
+        "in": "path",
+        "required": true,
+        "description": "Webhook id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "responses": {
+      "200": { "description": "The deleted webhook.", "content": { "application/json": {} } },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin"
+  }
+}

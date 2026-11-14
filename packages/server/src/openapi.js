@@ -188,7 +188,17 @@ export const ROUTE_DOCS = Object.freeze({
       'With `list=1`, list the directory at `path`; with `stat=1`, stat it; otherwise read a byte range of the file (at most 4 MiB per call).',
     query: {
       path: needed(text('Absolute path inside the sandbox.', { minLength: 1 })),
-      list: flag('List the directory: `{path, entries: [{name, type}]}`.'),
+      list: flag(
+        'List a filename-ordered page: `{path, entries: [{name, type}], cursor, complete}`.',
+      ),
+      limit: count('Directory entries per page (default and maximum 4096).', {
+        minimum: 1,
+        maximum: 4096,
+      }),
+      cursor: text('Directory cursor: the last filename of the preceding page. Not a snapshot.', {
+        minLength: 1,
+        maxLength: 255,
+      }),
       stat: flag('Stat the path: `{path, size, mode, uid, gid, isFile, isDir, mtimeMs}`.'),
       offset: count('First byte to read (default 0).'),
       length: count('Bytes to read (at most 4194304).', { maximum: 4 * 1024 * 1024 }),
@@ -232,7 +242,7 @@ export const ROUTE_DOCS = Object.freeze({
     operationId: 'uploadFile',
     summary: 'Upload a file',
     description:
-      "Replace the file at `path` with the request body, streamed into the sandbox as it arrives. A body over the server's upload cap (default 1 GiB) is 413 `E_LIMIT`. On any failure the partly written file is removed.",
+      "Stage the request body beside `path` and atomically replace the destination after the complete body arrives. A body over the server's upload cap (default 1 GiB) is 413 `E_LIMIT`. Failures remove only the staging file and preserve an existing destination.",
     query: {
       path: needed(text('Absolute path of the file.', { minLength: 1 })),
       mode: text('Octal file mode, such as `644`.', { pattern: '^0?[0-7]{1,4}$' }),

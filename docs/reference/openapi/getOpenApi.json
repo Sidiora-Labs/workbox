@@ -1,0 +1,21 @@
+{
+  "get": {
+    "operationId": "getOpenApi",
+    "summary": "This document",
+    "description": "The OpenAPI 3.1 document of this server, generated from its route table.\n\nNo authentication.",
+    "tags": ["system"],
+    "responses": {
+      "200": { "description": "The OpenAPI document.", "content": { "application/json": {} } },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A browser-originated request or a Host the server does not serve (`E_DENIED`)."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "security": [],
+    "x-workbox-scope": "none"
+  }
+}

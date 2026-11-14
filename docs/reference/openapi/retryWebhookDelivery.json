@@ -1,0 +1,48 @@
+{
+  "post": {
+    "operationId": "retryWebhookDelivery",
+    "summary": "Retry a delivery",
+    "description": "Send a delivery again now, whatever its state.\n\nScope: `admin`.",
+    "tags": ["webhooks"],
+    "parameters": [
+      {
+        "name": "webhookId",
+        "in": "path",
+        "required": true,
+        "description": "Webhook id.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "deliveryId",
+        "in": "path",
+        "required": true,
+        "description": "Delivery id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "responses": {
+      "202": { "description": "The delivery.", "content": { "application/json": {} } },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin"
+  }
+}

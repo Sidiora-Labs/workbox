@@ -1,0 +1,21 @@
+{
+  "get": {
+    "operationId": "getReadiness",
+    "summary": "Readiness",
+    "description": "Answers 503 `E_UNAVAILABLE` while the server is not ready or shuts down.\n\nNo authentication.",
+    "tags": ["system"],
+    "responses": {
+      "200": { "description": "`{ready: true}`.", "content": { "application/json": {} } },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A browser-originated request or a Host the server does not serve (`E_DENIED`)."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "security": [],
+    "x-workbox-scope": "none"
+  }
+}

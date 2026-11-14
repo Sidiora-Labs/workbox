@@ -1,0 +1,32 @@
+{
+  "post": {
+    "operationId": "reconcile",
+    "summary": "Reconcile with the host",
+    "description": "Compare the recorded sandboxes with what runs on the host.\n\nScope: `admin`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+    "tags": ["sandboxes"],
+    "responses": {
+      "200": {
+        "description": "`{attached, absent, suspect, quarantined}`, each a list of sandbox ids.",
+        "content": { "application/json": {} }
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin",
+    "x-workbox-unbound-key": true
+  }
+}

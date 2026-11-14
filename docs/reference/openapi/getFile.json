@@ -1,0 +1,222 @@
+{
+  "get": {
+    "operationId": "getFile",
+    "summary": "Read, list or stat a path",
+    "description": "With `list=1`, list the directory at `path`; with `stat=1`, stat it; otherwise read a byte range of the file (at most 4 MiB per call).\n\nScope: `read`.",
+    "tags": ["files"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "path",
+        "in": "query",
+        "required": true,
+        "description": "Absolute path inside the sandbox.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "list",
+        "in": "query",
+        "required": false,
+        "description": "List a filename-ordered page: `{path, entries: [{name, type}], cursor, complete}`.",
+        "schema": { "type": "string", "enum": ["1"] }
+      },
+      {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Directory entries per page (default and maximum 4096).",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      },
+      {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Directory cursor: the last filename of the preceding page. Not a snapshot.",
+        "schema": { "type": "string", "minLength": 1, "maxLength": 255 }
+      },
+      {
+        "name": "stat",
+        "in": "query",
+        "required": false,
+        "description": "Stat the path: `{path, size, mode, uid, gid, isFile, isDir, mtimeMs}`.",
+        "schema": { "type": "string", "enum": ["1"] }
+      },
+      {
+        "name": "offset",
+        "in": "query",
+        "required": false,
+        "description": "First byte to read (default 0).",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      {
+        "name": "length",
+        "in": "query",
+        "required": false,
+        "description": "Bytes to read (at most 4194304).",
+        "schema": { "type": "integer", "minimum": 0, "maximum": 4194304 }
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "A read is `{path, size, offset, data, eof}` with `data` base64.",
+        "content": { "application/json": {} }
+      },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  },
+  "put": {
+    "operationId": "writeFile",
+    "summary": "Write a file",
+    "description": "Write base64 `data` to `path`, replacing the file or with `append` adding to it. `mkdirs` creates missing parent directories.\n\nScope: `exec`.",
+    "tags": ["files"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "data": {
+                "type": "string",
+                "maxLength": 6291456,
+                "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+                "contentEncoding": "base64",
+                "description": "Base64-encoded bytes."
+              },
+              "append": { "type": "boolean" },
+              "mode": { "type": "integer", "minimum": 0, "maximum": 4095 },
+              "mkdirs": { "type": "boolean" }
+            },
+            "required": ["path", "data"],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": { "description": "`{path, bytes, size}`.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "exec"
+  },
+  "delete": {
+    "operationId": "removeFile",
+    "summary": "Remove a file or directory",
+    "description": "Remove the file or empty directory at `path`; with `recursive=1`, a whole tree.\n\nScope: `exec`.",
+    "tags": ["files"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "path",
+        "in": "query",
+        "required": true,
+        "description": "Absolute path inside the sandbox.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "recursive",
+        "in": "query",
+        "required": false,
+        "description": "Remove a directory and everything in it.",
+        "schema": { "type": "string", "enum": ["1"] }
+      }
+    ],
+    "responses": {
+      "200": { "description": "`{path, removed: true}`.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "exec"
+  }
+}

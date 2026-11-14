@@ -161,7 +161,17 @@ export const Methods = Object.freeze({
       { required: ['path', 'data'] },
     ),
   },
-  'fs.list': { doc: 'List a directory.', params: v.object({ path }, { required: ['path'] }) },
+  'fs.list': {
+    doc: 'List a directory in filename order, returning a cursor and completeness flag.',
+    params: v.object(
+      {
+        path,
+        limit: v.optional(v.integer({ min: 1, max: 4096 })),
+        cursor: v.optional(v.string({ min: 1, max: 255 })),
+      },
+      { required: ['path'] },
+    ),
+  },
   'fs.stat': { doc: 'Stat a path.', params: v.object({ path }, { required: ['path'] }) },
   'fs.mkdir': {
     doc: 'Create a directory and its parents.',

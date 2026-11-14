@@ -1,0 +1,32 @@
+{
+  "get": {
+    "operationId": "getMetrics",
+    "summary": "Prometheus metrics",
+    "description": "HTTP requests by route, method and status, WebSocket counts and sandboxes by state.\n\nScope: `read`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+    "tags": ["system"],
+    "responses": {
+      "200": {
+        "description": "Prometheus text exposition format 0.0.4.",
+        "content": { "text/plain; version=0.0.4": {} }
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read",
+    "x-workbox-unbound-key": true
+  }
+}

@@ -77,6 +77,32 @@ test('rename publishes only regular staged files and confines both parents', (t)
   assert.throws(() => api.rename({ source: 'relative', target }), code('E_INVALID_PARAMS'));
 });
 
+test('directory pagination reports incomplete pages and retrieves every entry once', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-fs-pages-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const api = createFs({ root: dir });
+  const expected = Array.from({ length: 4100 }, (_, i) => `f-${String(i).padStart(4, '0')}`);
+  for (const name of expected) fs.writeFileSync(path.join(dir, name), '');
+  const first = api.list({ path: dir });
+  assert.equal(first.entries.length, 4096);
+  assert.equal(first.complete, false);
+  const last = api.list({ path: dir, cursor: first.cursor });
+  assert.equal(last.complete, true);
+  assert.equal(last.cursor, null);
+  assert.deepEqual(
+    [...first.entries, ...last.entries].map((e) => e.name),
+    expected,
+  );
+  const small = api.list({ path: dir, limit: 2 });
+  assert.deepEqual(
+    small.entries.map((e) => e.name),
+    expected.slice(0, 2),
+  );
+  const empty = api.list({ path: dir, cursor: expected.at(-1) });
+  assert.deepEqual(empty.entries, []);
+  assert.equal(empty.complete, true);
+});
+
 test('fs entry types, defaults, confinement and error codes', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-fs-'));
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-fs-out-'));

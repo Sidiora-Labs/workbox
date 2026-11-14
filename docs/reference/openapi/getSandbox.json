@@ -1,0 +1,80 @@
+{
+  "get": {
+    "operationId": "getSandbox",
+    "summary": "Inspect a sandbox",
+    "description": "The sandbox row with its state, limits and health.\n\nScope: `read`.",
+    "tags": ["sandboxes"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "responses": {
+      "200": { "description": "The sandbox.", "content": { "application/json": {} } },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  },
+  "delete": {
+    "operationId": "destroySandbox",
+    "summary": "Destroy a sandbox",
+    "description": "Stop every session and remove the sandbox.\n\nScope: `admin`.",
+    "tags": ["sandboxes"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "responses": {
+      "200": { "description": "The destroyed sandbox.", "content": { "application/json": {} } },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin"
+  }
+}

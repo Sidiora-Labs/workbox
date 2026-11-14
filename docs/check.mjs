@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Documentation gate (spec task 4.2): every required page exists, docs/wb.md equals what
- * docs/gen-wb.mjs renders from `wb tools --json`, docs/reference/openapi.json equals what
+ * docs/gen-wb.mjs renders from `wb tools --json`, the OpenAPI entry and path-item files equal what
  * docs/gen-openapi.mjs renders from the server's route table, and every relative link and anchor
  * in README.md and docs/ resolves, and every page under docs/ is reachable from docs/README.md.
  * Before trusting the staleness checks it proves, on a temporary copy, that a deliberately staled
@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WB_DOC, renderWbDoc } from './gen-wb.mjs';
-import { OPENAPI_DOC, renderOpenApiDoc } from './gen-openapi.mjs';
+import { OPENAPI_DOC, OPENAPI_PARTS, renderOpenApiDocs } from './gen-openapi.mjs';
 
 const docs = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(docs, '..');
@@ -99,7 +99,7 @@ export function selfTestOne(name, expected, staleCheck, prefix) {
 }
 
 /**
- * Self-test of both staleness checks: wb.md loses a command row, openapi.json an operationId.
+ * Self-test of both staleness checks: wb.md loses a command row, openapi.json a path reference.
  * @param {string} expected the rendered wb.md
  * @param {string} [openapi] the rendered openapi.json
  * @returns {string[]} problems with the checker itself
@@ -107,7 +107,7 @@ export function selfTestOne(name, expected, staleCheck, prefix) {
 export function selfTest(expected, openapi) {
   const problems = selfTestOne('wb.md', expected, wbStaleness, '| `');
   if (openapi !== undefined)
-    problems.push(...selfTestOne('openapi.json', openapi, openApiStaleness, '"operationId"'));
+    problems.push(...selfTestOne('openapi.json', openapi, openApiStaleness, '"$ref"'));
   return problems;
 }
 
@@ -237,10 +237,22 @@ export async function check() {
   for (const name of REQUIRED)
     if (!fs.existsSync(path.join(docs, name))) problems.push(`missing docs/${name}`);
   const expected = await renderWbDoc();
-  const openapi = await renderOpenApiDoc();
-  problems.push(...selfTest(expected, openapi));
-  for (const stale of [wbStaleness(WB_DOC, expected), openApiStaleness(OPENAPI_DOC, openapi)])
+  const openapi = await renderOpenApiDocs();
+  problems.push(...selfTest(expected, openapi.get(OPENAPI_DOC)));
+  for (const stale of [
+    wbStaleness(WB_DOC, expected),
+    ...[...openapi].map(([file, text]) => openApiStaleness(file, text)),
+  ])
     if (stale) problems.push(stale);
+  for (const [file, text] of openapi)
+    if (file !== OPENAPI_DOC)
+      problems.push(...selfTestOne(path.basename(file), text, openApiStaleness, '"operationId"'));
+  if (fs.existsSync(OPENAPI_PARTS))
+    for (const name of fs.readdirSync(OPENAPI_PARTS)) {
+      const file = path.join(OPENAPI_PARTS, name);
+      if (name.endsWith('.json') && !openapi.has(file))
+        problems.push(`${path.relative(root, file)} is obsolete; run: node docs/gen-openapi.mjs`);
+    }
   const files = collectMd();
   problems.push(...unreachablePages(files));
   for (const file of files) {

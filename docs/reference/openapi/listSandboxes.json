@@ -1,0 +1,116 @@
+{
+  "get": {
+    "operationId": "listSandboxes",
+    "summary": "List sandboxes",
+    "description": "One page of the inventory; pass the returned `cursor` back until `complete` is true. A bound key lists only the sandboxes it sees.\n\nScope: `read`.",
+    "tags": ["sandboxes"],
+    "parameters": [
+      {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "The `cursor` of the previous page.",
+        "schema": { "type": "string" }
+      },
+      {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Rows per page (default 50; more than 1000 counts as 1000).",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      {
+        "name": "includeDeleted",
+        "in": "query",
+        "required": false,
+        "description": "Include destroyed sandboxes.",
+        "schema": { "type": "string", "enum": ["1"] }
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "`{items, cursor, complete}`; each item is a sandbox row.",
+        "content": { "application/json": {} }
+      },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  },
+  "post": {
+    "operationId": "createSandbox",
+    "summary": "Create a sandbox",
+    "description": "Create a sandbox and wait until it is ready. The same `idempotencyKey` returns the sandbox it made before. `fromCheckpoint` restores a checkpoint. A bound key puts its labels on the new sandbox; a body label with another value is 403, and a key bound only by `sandboxIds` cannot create sandboxes.\n\nScope: `admin`.",
+    "tags": ["sandboxes"],
+    "requestBody": {
+      "required": false,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "rootfs": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "runtime": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "profile": { "type": "object", "additionalProperties": {} },
+              "labels": {
+                "type": "object",
+                "additionalProperties": { "type": "string", "maxLength": 256 }
+              },
+              "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "secretRefs": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "maxItems": 64
+              },
+              "fromCheckpoint": { "type": "string", "minLength": 1, "maxLength": 128 }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "201": { "description": "The sandbox row.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin"
+  }
+}

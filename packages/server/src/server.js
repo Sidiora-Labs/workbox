@@ -595,7 +595,13 @@ function routeHandlers(manager, renderMetrics, opts) {
     'GET /v1/sandboxes/:id/files': async ({ params, url }) => {
       const filePath = needQuery(url, 'path');
       if (query(url, 'list') === '1')
-        return { body: await manager.request(params.id, 'fs.list', { path: filePath }) };
+        return {
+          body: await manager.request(params.id, 'fs.list', {
+            path: filePath,
+            limit: num(url, 'limit'),
+            cursor: query(url, 'cursor'),
+          }),
+        };
       if (query(url, 'stat') === '1')
         return { body: await manager.request(params.id, 'fs.stat', { path: filePath }) };
       return {

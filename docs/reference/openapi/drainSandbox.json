@@ -1,0 +1,57 @@
+{
+  "post": {
+    "operationId": "drainSandbox",
+    "summary": "Drain a sandbox",
+    "description": "Stop accepting new work in the sandbox.\n\nScope: `admin`.",
+    "tags": ["sandboxes"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "requestBody": {
+      "required": false,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": { "reason": { "type": "string", "maxLength": 1024 } },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": { "description": "The drained sandbox.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin"
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "get": {
+    "operationId": "listEvents",
+    "summary": "List events",
+    "description": "Events of every sandbox the key sees, after `afterSeq`. With `waitMs`, the request answers as soon as a matching event is logged, or with an empty `events` when the time is up.\n\nScope: `read`.",
+    "tags": ["events"],
+    "parameters": [
+      {
+        "name": "afterSeq",
+        "in": "query",
+        "required": false,
+        "description": "Events with a greater `seq` (default 0).",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "At most this many events (default 100, at most 1000).",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      {
+        "name": "types",
+        "in": "query",
+        "required": false,
+        "description": "Comma-separated event types, each exact or `prefix.*` for every type starting with `prefix.`; at most 32. May repeat.",
+        "schema": { "type": "string" }
+      },
+      {
+        "name": "waitMs",
+        "in": "query",
+        "required": false,
+        "description": "Long-poll: with nothing after `afterSeq` yet, wait this long for a new matching event.",
+        "schema": { "type": "integer", "minimum": 0, "maximum": 60000 }
+      },
+      {
+        "name": "sandboxId",
+        "in": "query",
+        "required": false,
+        "description": "Only the events of this sandbox.",
+        "schema": { "type": "string" }
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "`{events, nextSeq}` in `seq` order. Each event is `{seq, sandboxId, type, source, payload, causation, at}`. Pass `nextSeq` back as `afterSeq` for the next page.",
+        "content": { "application/json": {} }
+      },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  }
+}

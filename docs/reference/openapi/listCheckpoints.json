@@ -1,0 +1,104 @@
+{
+  "get": {
+    "operationId": "listCheckpoints",
+    "summary": "List checkpoints",
+    "description": "The sandbox's checkpoints.\n\nScope: `read`.",
+    "tags": ["sandboxes"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "responses": {
+      "200": { "description": "`{checkpoints}`.", "content": { "application/json": {} } },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  },
+  "post": {
+    "operationId": "createCheckpoint",
+    "summary": "Create a checkpoint",
+    "description": "Checkpoint the sandbox's upper layer, optionally limited to `paths`, with a `name` and `summary`.\n\nScope: `admin`.",
+    "tags": ["sandboxes"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "requestBody": {
+      "required": false,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "maxLength": 128 },
+              "summary": { "type": "string", "maxLength": 65536 },
+              "paths": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "maxItems": 256
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "201": { "description": "The checkpoint.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin"
+  }
+}

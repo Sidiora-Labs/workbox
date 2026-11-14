@@ -28,6 +28,16 @@ test('catalogue is complete, documented and frozen', () => {
 });
 
 test('validateParams enforces each method schema', () => {
+  assert.deepEqual(validateParams('fs.list', { path: '/tmp', limit: 2, cursor: 'a' }), {
+    path: '/tmp',
+    limit: 2,
+    cursor: 'a',
+  });
+  for (const limit of [0, -1, 4097])
+    assert.throws(
+      () => validateParams('fs.list', { path: '/tmp', limit }),
+      (e) => e.code === Codes.INVALID_PARAMS,
+    );
   assert.deepEqual(validateParams('runner.status'), {});
   assert.deepEqual(validateParams('runner.hello', { protocol: 1 }), { protocol: 1 });
   assert.throws(

@@ -1,0 +1,61 @@
+{
+  "get": {
+    "operationId": "streamEvents",
+    "summary": "Stream events (WebSocket)",
+    "description": "Events of every sandbox the key sees over a WebSocket: the stored ones after `afterSeq`, then live ones, each once and in order. A plain GET is 426.\n\nServer frames:\n\n- `{\"type\": \"event\", \"event\": {...}}`, one per event, in `seq` order.\n- `{\"type\": \"live\", \"seq\": N}`, once, when the stream turns live: every matching event up to `N` has been sent and later ones follow as they are logged.\n- `{\"type\": \"error\", \"code\", \"message\"}` before the server closes the stream with 1011.\n\nA client that reads too slowly is dropped once 1 MiB is waiting to be sent to it; shutdown closes the stream with 1001. To resume, reconnect with `afterSeq` set to the last `seq` received, or to the `live` frame's `N` when that is greater.\n\nScope: `read`.",
+    "tags": ["events"],
+    "parameters": [
+      {
+        "name": "afterSeq",
+        "in": "query",
+        "required": false,
+        "description": "Replay the stored events after this `seq` first; without it, only new ones.",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      {
+        "name": "types",
+        "in": "query",
+        "required": false,
+        "description": "Comma-separated event types, each exact or `prefix.*` for every type starting with `prefix.`; at most 32. May repeat.",
+        "schema": { "type": "string" }
+      },
+      {
+        "name": "sandboxId",
+        "in": "query",
+        "required": false,
+        "description": "Only the events of this sandbox.",
+        "schema": { "type": "string" }
+      }
+    ],
+    "responses": {
+      "101": { "description": "Switching Protocols: the WebSocket is open." },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "426": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A plain GET without a WebSocket upgrade (`E_INVALID_PARAMS`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "security": [{ "bearer": [] }, { "queryToken": [] }],
+    "x-workbox-scope": "read",
+    "x-websocket": true
+  }
+}

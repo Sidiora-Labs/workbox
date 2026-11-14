@@ -1,0 +1,121 @@
+{
+  "get": {
+    "operationId": "downloadFile",
+    "summary": "Download a file",
+    "description": "The file's bytes, streamed, with `content-length` from its size. If the file shrinks while it is read, the connection is cut short of that length.\n\nScope: `read`.",
+    "tags": ["files"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "path",
+        "in": "query",
+        "required": true,
+        "description": "Absolute path of the file.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "responses": {
+      "200": { "description": "The file's bytes.", "content": { "application/octet-stream": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  },
+  "put": {
+    "operationId": "uploadFile",
+    "summary": "Upload a file",
+    "description": "Stage the request body beside `path` and atomically replace the destination after the complete body arrives. A body over the server's upload cap (default 1 GiB) is 413 `E_LIMIT`. Failures remove only the staging file and preserve an existing destination.\n\nScope: `exec`.",
+    "tags": ["files"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "path",
+        "in": "query",
+        "required": true,
+        "description": "Absolute path of the file.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "mode",
+        "in": "query",
+        "required": false,
+        "description": "Octal file mode, such as `644`.",
+        "schema": { "type": "string", "pattern": "^0?[0-7]{1,4}$" }
+      },
+      {
+        "name": "mkdirs",
+        "in": "query",
+        "required": false,
+        "description": "Create missing parent directories.",
+        "schema": { "type": "string", "enum": ["1"] }
+      }
+    ],
+    "requestBody": {
+      "required": true,
+      "content": { "application/octet-stream": {} },
+      "description": "The file's bytes."
+    },
+    "responses": {
+      "200": { "description": "`{path, bytes}`.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "exec"
+  }
+}

@@ -38,7 +38,9 @@ await box.writeFile('/tmp/hello.txt', 'hi', { mkdirs: true });
 const { data, eof } = await box.readFile('/tmp/hello.txt'); // data is base64
 ```
 
-`listFiles(dir)` lists a directory. The paths are sandbox paths. `writeFile` also takes `append` and
+`listFiles(dir, { limit, cursor })` lists a filename-ordered page (default and maximum 4096).
+Pass the returned `cursor` until `complete` is true. Pages are not a snapshot if the directory
+changes between calls. The paths are sandbox paths. `writeFile` also takes `append` and
 `mode`; a string is written as UTF-8. `statFile(path)`, `mkdir(dir, { parents, mode })` and
 `removeFile(path, { recursive })` do what their names say.
 

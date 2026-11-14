@@ -1,0 +1,76 @@
+{
+  "get": {
+    "operationId": "readSessionOutput",
+    "summary": "Read session output",
+    "description": "Retained output without attaching. Chunks are whole: they come from `fromSeq` until the next would pass `maxBytes`, and at least one comes when any is retained. Read again from `nextSeq` while `truncated` is true. `gap` is `{requested, available}` when earlier output was dropped from the spool. Once `exited` is set, every byte of output is in the spool. A sandbox whose runner lacks this call answers 501 `E_UNSUPPORTED`.\n\nScope: `read`.",
+    "tags": ["sessions"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "description": "Session id.",
+        "schema": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      {
+        "name": "fromSeq",
+        "in": "query",
+        "required": false,
+        "description": "First chunk sequence number (default 0).",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      {
+        "name": "maxBytes",
+        "in": "query",
+        "required": false,
+        "description": "Most output bytes to return (default 1048576).",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 4194304 }
+      },
+      {
+        "name": "encoding",
+        "in": "query",
+        "required": false,
+        "description": "`base64` (default) or `text` for UTF-8 `data`.",
+        "schema": { "type": "string", "enum": ["base64", "text"] }
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "`{sessionId, chunks: [{seq, stream, data}], nextSeq, gap, truncated, exited}`.",
+        "content": { "application/json": {} }
+      },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  }
+}

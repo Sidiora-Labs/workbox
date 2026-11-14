@@ -1,0 +1,132 @@
+{
+  "get": {
+    "operationId": "listSessions",
+    "summary": "List sessions",
+    "description": "Live and exited sessions: from the runner while its control channel is up (`source: runner`), else from the server's records (`source: store`).\n\nScope: `read`.",
+    "tags": ["sessions"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "responses": {
+      "200": { "description": "`{source, sessions}`.", "content": { "application/json": {} } },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  },
+  "post": {
+    "operationId": "startSession",
+    "summary": "Start a session",
+    "description": "Start a durable session from `argv`. It keeps running whether or not anyone is attached; `pty` gives it a terminal.\n\nScope: `exec`.",
+    "tags": ["sessions"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "argv": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1, "maxLength": 65536 },
+                "minItems": 1,
+                "maxItems": 4096
+              },
+              "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "env": {
+                "type": "object",
+                "additionalProperties": { "type": "string", "maxLength": 32768 },
+                "maxProperties": 512,
+                "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+              },
+              "inheritEnv": { "type": "boolean" },
+              "uid": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "gid": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "pty": { "type": "boolean" },
+              "rows": { "type": "integer", "minimum": 1, "maximum": 1000 },
+              "cols": { "type": "integer", "minimum": 1, "maximum": 1000 },
+              "spoolBytes": { "type": "integer", "minimum": 4096, "maximum": 67108864 },
+              "secretRefs": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "maxItems": 64
+              }
+            },
+            "required": ["argv"],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "201": {
+        "description": "The session, with its `sessionId`.",
+        "content": { "application/json": {} }
+      },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "exec"
+  }
+}

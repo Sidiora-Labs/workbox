@@ -1,0 +1,31 @@
+{
+  "get": {
+    "operationId": "whoami",
+    "summary": "The calling key",
+    "description": "The key this request authenticated with.\n\nScope: any key.",
+    "tags": ["system"],
+    "responses": {
+      "200": {
+        "description": "`{id, scopes, binding, source, expiresAt}`; `source` is `config` or `store`.",
+        "content": { "application/json": {} }
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "any key"
+  }
+}

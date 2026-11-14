@@ -1,0 +1,21 @@
+{
+  "get": {
+    "operationId": "getHealth",
+    "summary": "Liveness",
+    "description": "Answers while the process serves requests.\n\nNo authentication.",
+    "tags": ["system"],
+    "responses": {
+      "200": { "description": "`{ok: true}`.", "content": { "application/json": {} } },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A browser-originated request or a Host the server does not serve (`E_DENIED`)."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "security": [],
+    "x-workbox-scope": "none"
+  }
+}

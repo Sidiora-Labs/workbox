@@ -1,0 +1,51 @@
+{
+  "get": {
+    "operationId": "downloadArtifact",
+    "summary": "Download an artifact",
+    "description": "The artifact's bytes, streamed; 404 unless this sandbox holds that digest.\n\nScope: `read`.",
+    "tags": ["sandboxes"],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Sandbox id.",
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      {
+        "name": "sha256",
+        "in": "path",
+        "required": true,
+        "description": "Artifact digest: 64 lowercase hex characters.",
+        "schema": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "The artifact's bytes.",
+        "content": { "application/octet-stream": {} }
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  }
+}

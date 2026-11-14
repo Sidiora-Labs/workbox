@@ -1,0 +1,96 @@
+{
+  "post": {
+    "operationId": "createKey",
+    "summary": "Mint a stored key",
+    "description": "Mint a key with `scopes`, optionally bound to sandboxes by `labels` or `sandboxIds` and expiring after `ttlSeconds`. The token is in this answer only.\n\nScope: `admin`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+    "tags": ["keys"],
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "scopes": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["read", "exec", "admin", "answer"] },
+                "minItems": 1,
+                "maxItems": 4
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": { "type": "string", "maxLength": 256 },
+                "maxProperties": 32,
+                "propertyNames": { "pattern": "^[\\s\\S]{1,128}$" }
+              },
+              "sandboxIds": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "maxItems": 1000
+              },
+              "ttlSeconds": { "type": "integer", "minimum": 1, "maximum": 315360000 }
+            },
+            "required": ["name", "scopes"],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "201": {
+        "description": "`{id, name, token, scopes, binding, createdAt, expiresAt}`.",
+        "content": { "application/json": {} }
+      },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin",
+    "x-workbox-unbound-key": true
+  },
+  "get": {
+    "operationId": "listKeys",
+    "summary": "List stored keys",
+    "description": "Stored keys with `lastUsedAt` and `revokedAt`; never a token or its digest.\n\nScope: `admin`. Needs a key that is not bound to sandboxes; a bound key is refused with 403.",
+    "tags": ["keys"],
+    "responses": {
+      "200": { "description": "`{keys}`.", "content": { "application/json": {} } },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "admin",
+    "x-workbox-unbound-key": true
+  }
+}

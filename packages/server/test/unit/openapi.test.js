@@ -63,6 +63,28 @@ function kindsOf(schema, out = new Set()) {
 
 const doc = buildOpenApi({ version: SERVER_VERSION });
 
+test('split checked-in OpenAPI preserves every operation and component reference', () => {
+  const entry = new URL('../../../../docs/reference/openapi.json', import.meta.url);
+  const text = fs.readFileSync(entry, 'utf8');
+  assert.ok(Buffer.byteLength(text) < 32 * 1024);
+  const restored = JSON.parse(text);
+  const files = new Set();
+  for (const [route, item] of Object.entries(restored.paths)) {
+    assert.deepEqual(Object.keys(item), ['$ref']);
+    const file = new URL(item.$ref, entry);
+    assert.equal(files.has(file.href), false, 'each path item has its own file');
+    files.add(file.href);
+    const fragment = fs.readFileSync(file, 'utf8');
+    assert.ok(Buffer.byteLength(fragment) < 32 * 1024, route);
+    restored.paths[route] = JSON.parse(fragment, (key, value) =>
+      key === '$ref' && value.startsWith('../openapi.json#')
+        ? value.slice('../openapi.json'.length)
+        : value,
+    );
+  }
+  assert.deepEqual(restored, doc);
+});
+
 test('strings keep their bounds and pattern; the protocol base64 string is marked', () => {
   assert.deepEqual(toJsonSchema(v.string({ min: 1, max: 64 })), {
     type: 'string',

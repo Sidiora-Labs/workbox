@@ -1,0 +1,55 @@
+{
+  "get": {
+    "operationId": "listAsks",
+    "summary": "List asks",
+    "description": "Questions raised with `wb ask` inside sandboxes.\n\nScope: `read`.",
+    "tags": ["asks"],
+    "parameters": [
+      {
+        "name": "status",
+        "in": "query",
+        "required": false,
+        "description": "Which asks (default `all`).",
+        "schema": { "type": "string", "enum": ["open", "answered", "expired", "all"] }
+      },
+      {
+        "name": "sandboxId",
+        "in": "query",
+        "required": false,
+        "description": "Only the asks of this sandbox.",
+        "schema": { "type": "string" }
+      },
+      {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "At most this many (default 100; more than 1000 counts as 1000).",
+        "schema": { "type": "integer", "minimum": 0 }
+      }
+    ],
+    "responses": {
+      "200": { "description": "`{asks}`.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "read"
+  }
+}

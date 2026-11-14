@@ -80,15 +80,18 @@ export function createFs(opts = {}) {
       fs.renameSync(tmp, target);
       return { path: p.path, bytes: data.length, size: data.length };
     },
-    /** @param {{path: string}} p */
+    /** @param {{path: string, limit?: number, cursor?: string}} p */
     list(p) {
       const real = resolve(p.path);
-      const entries = fs
+      const limit = p.limit ?? 4096;
+      const page = fs
         .readdirSync(real, { withFileTypes: true })
+        .filter((e) => p.cursor === undefined || e.name > p.cursor)
         .sort((a, b) => (a.name < b.name ? -1 : 1))
-        .slice(0, 4096)
-        .map((e) => ({ name: e.name, type: entryType(e) }));
-      return { path: p.path, entries };
+        .slice(0, limit + 1);
+      const complete = page.length <= limit;
+      const entries = page.slice(0, limit).map((e) => ({ name: e.name, type: entryType(e) }));
+      return { path: p.path, entries, cursor: complete ? null : entries.at(-1).name, complete };
     },
     /** @param {{path: string}} p */
     stat(p) {

@@ -1,0 +1,58 @@
+{
+  "post": {
+    "operationId": "answerAsk",
+    "summary": "Answer an ask",
+    "description": "Answer a pending ask; `answer` is any JSON value.\n\nScope: `answer`.",
+    "tags": ["asks"],
+    "parameters": [
+      {
+        "name": "askId",
+        "in": "path",
+        "required": true,
+        "description": "Ask id.",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    ],
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": { "answer": {} },
+            "required": ["answer"],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": { "description": "The answered ask.", "content": { "application/json": {} } },
+      "400": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "An invalid body or query (`E_INVALID_PARAMS`) naming the first path."
+      },
+      "401": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "A missing or invalid bearer token (`E_DENIED`)."
+      },
+      "403": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "The key lacks the scope, or a browser-originated request or foreign Host (`E_DENIED`)."
+      },
+      "404": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "No such resource, or one the key does not see."
+      },
+      "429": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Too many failed authentications from this address (`E_LIMIT`); see `Retry-After`."
+      },
+      "default": {
+        "$ref": "../openapi.json#/components/responses/Error",
+        "description": "Any other failure; see the error codes."
+      }
+    },
+    "x-workbox-scope": "answer"
+  }
+}

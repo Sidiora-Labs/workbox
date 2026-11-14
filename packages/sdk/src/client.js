@@ -476,11 +476,13 @@ export class Sandbox {
   }
 
   /**
-   * @param {string} dir @param {CallOptions} [opts]
-   * @returns {Promise<{entries: {name: string, type: string}[]}>}
+   * List one filename-ordered page. Pass its cursor to the next call until complete is true.
+   * Directory changes between calls are not a snapshot.
+   * @param {string} dir @param {CallOptions & {limit?: number, cursor?: string}} [opts]
+   * @returns {Promise<{path: string, entries: {name: string, type: string}[], cursor: string|null, complete: boolean}>}
    */
   listFiles(dir, opts = {}) {
-    const query = { path: dir, list: '1' };
+    const query = { path: dir, list: '1', limit: opts.limit, cursor: opts.cursor };
     return this.client.request('GET', `${this.path}/files`, { query, signal: opts.signal });
   }
 

@@ -102,7 +102,8 @@ Give the agent, through its environment or its secret store rather than a chat m
 
 Then point it at the description of the API and at this guide. The server describes every route,
 its scope and its request body at `GET /v1/openapi.json`, which needs no key; the same OpenAPI
-3.1 document is kept in the repository as [openapi.json](../reference/openapi.json), and the
+3.1 document is kept in the repository as [openapi.json](../reference/openapi.json) with referenced
+path-item files in `docs/reference/openapi/`, and the
 [REST API reference](../reference/rest-api.md#openapi-document) explains its extensions. A short
 instruction is enough:
 
