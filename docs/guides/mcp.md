@@ -48,15 +48,25 @@ the box with `wb tools` and `--help`; see the [wb reference](../wb.md).
 a sandbox built from the `agents` rootfs. See [Run coding agents in a sandbox](agents.md) for the
 rootfs and credentials.
 
-| Tool           | Arguments                                                                                                                                                                          | Result                                  |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| `agent_run`    | `agent` (`claude` or `codex`), `prompt`, `sandboxId` (reuse a sandbox), `name`, `networkMode` (default `allowlist`), `allow`, `secretRefs` (up to 8), `timeoutMs` (at most 240000) | The run, as below                       |
-| `agent_output` | `sandboxId`, `sessionId`, `timeoutMs` (default 0, at most 240000)                                                                                                                  | The same run, read again from the start |
+| Tool           | Arguments                                                                                                                                                                          | Result                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `agent_run`    | `agent` (`claude` or `codex`), `prompt`, `sandboxId` (reuse a sandbox), `name`, `networkMode` (default `allowlist`), `allow`, `secretRefs` (up to 8), `timeoutMs` (at most 240000) | The run, as below                               |
+| `agent_output` | `sandboxId`, `sessionId`, `timeoutMs` (default 0, at most 240000), `fromSeq` (optional, nonnegative integer)                                                                       | The same run, or one page starting at `fromSeq` |
 
-Both return `{sandboxId, sessionId, running, exitCode, signal, output, truncated}`. `output` is the
+Both return `{sandboxId, sessionId, running, exitCode, signal, output, truncated, nextSeq}`. `output` is the
 last 64 KiB of the combined stdout and stderr. If the agent is still working when `timeoutMs`
 passes, `running` is true and the session keeps going; call `agent_output` to wait for it.
 `exitCode` and `signal` are set once it exits.
+
+For incremental reads, pass the last response's `nextSeq` as `agent_output.fromSeq`. Pass
+`fromSeq: 0` to page through retained output from the beginning instead of requesting the tail.
+Cursor mode reads one page over HTTP after an optional wait for exit; it returns `gap` (null or
+`{requested, available}`) when the spool has evicted older chunks. Continue from `nextSeq` even
+when `running` is false, until no further output remains. `truncated` reports more retained pages,
+spool loss, or a chunk too large for the 64 KiB response cap. An oversized individual chunk is
+returned as a capped tail and its omitted prefix cannot be recovered through MCP; use the SDK's
+session output API for the original retained chunks. Cursors count chunks, not bytes. Omitting
+`fromSeq` preserves the existing tail behavior.
 
 Without `secretRefs`, `agent_run` grants the agent's default credential: `ANTHROPIC_API_KEY` for
 Claude Code, and `OPENAI_API_KEY` passed as `CODEX_API_KEY` for Codex. Pass `secretRefs: []` to

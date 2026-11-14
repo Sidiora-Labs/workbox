@@ -1,4 +1,6 @@
 import { test } from 'node:test';
+import { once } from 'node:events';
+import { SessionManager } from '../../../runner/src/sessions.js';
 import assert from 'node:assert/strict';
 import { AGENTS, WorkboxClient, agentSandboxInput, agentSessionParams } from '@workbox/sdk';
 import { bootServer, TOKENS } from '../../../server/test/helpers/real-server.js';
@@ -14,6 +16,7 @@ import {
   callTool,
   checkArguments,
   formatExec,
+  formatAgentPage,
 } from '../../src/tools.js';
 
 const ID = { type: 'string', minLength: 1, maxLength: 128 };
@@ -110,14 +113,15 @@ const EXPECTED = [
   {
     name: 'agent_output',
     description:
-      "Read an agent session's output from the start, waiting up to timeoutMs for it to exit. " +
-      'Returns the same shape as agent_run.',
+      'Read agent output, optionally from a sequence cursor. Wait up to timeoutMs for exit. ' +
+      'Returns nextSeq for resuming and reports gaps or truncation.',
     inputSchema: {
       type: 'object',
       properties: {
         sandboxId: ID,
         sessionId: ID,
         timeoutMs: { type: 'integer', minimum: 0, maximum: 240_000 },
+        fromSeq: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
       },
       required: ['sandboxId', 'sessionId'],
       additionalProperties: false,
@@ -303,6 +307,59 @@ test('OutputTail keeps the last 64 KiB on a character boundary and reports every
   const evicted = new OutputTail();
   evicted.push(7, Buffer.from('later'));
   assert.deepEqual(evicted.result(), { output: 'later', truncated: true });
+});
+
+test('cursor pages resume real process output without repeating it and expose spool loss', async (t) => {
+  const sm = new SessionManager({ defaultSpoolBytes: 8 });
+  t.after(() => sm.stopAll());
+  const { sessionId } = await sm.start({ argv: ['cat'] });
+  const readNext = async (text, fromSeq) => {
+    const output = once(sm, 'output');
+    await sm.input(sessionId, { data: Buffer.from(text).toString('base64') });
+    await output;
+    return formatAgentPage('sb', sessionId, sm.read(sessionId, { fromSeq }));
+  };
+  const first = await readNext('hello\n', 0);
+  assert.equal(first.output, 'hello\n');
+  assert.equal(first.running, true);
+  assert.equal(first.truncated, false);
+  assert.equal(first.gap, null);
+  const second = await readNext('world\n', first.nextSeq);
+  assert.equal(second.output, 'world\n');
+  assert.equal(second.truncated, false);
+  assert.ok(second.nextSeq > first.nextSeq);
+  const evicted = formatAgentPage('sb', sessionId, sm.read(sessionId, { fromSeq: 0 }));
+  assert.deepEqual(evicted.gap, { requested: 0, available: first.nextSeq });
+  assert.equal(evicted.truncated, true);
+  const exited = once(sm, 'exit');
+  await sm.input(sessionId, { eof: true });
+  await exited;
+  const done = formatAgentPage('sb', sessionId, sm.read(sessionId, { fromSeq: second.nextSeq }));
+  assert.equal(done.output, '');
+  assert.equal(done.nextSeq, second.nextSeq);
+  assert.equal(done.running, false);
+  assert.equal(done.exitCode, 0);
+
+  const largeExit = once(sm, 'exit');
+  const large = await sm.start({
+    argv: [process.execPath, '-e', `process.stdout.write('é'.repeat(${MAX_OUTPUT_BYTES * 2}))`],
+    spoolBytes: MAX_OUTPUT_BYTES + 100,
+  });
+  await largeExit;
+  const raw = sm.read(large.sessionId, { maxBytes: MAX_OUTPUT_BYTES * 2 });
+  const cut = formatAgentPage('sb', large.sessionId, raw);
+  assert.equal(cut.truncated, true);
+  assert.ok(Buffer.byteLength(cut.output) <= MAX_OUTPUT_BYTES);
+  assert.match(cut.output, /^é+$/);
+  assert.equal(cut.nextSeq, raw.nextSeq);
+  assert.deepEqual(cut.gap, raw.gap);
+});
+
+test('agent output cursors accept zero and reject invalid sequence numbers', () => {
+  const ids = { sandboxId: 'sb', sessionId: 's' };
+  assert.deepEqual(checkArguments('agent_output', { ...ids, fromSeq: 0 }), { ...ids, fromSeq: 0 });
+  for (const fromSeq of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '0'])
+    assert.throws(() => checkArguments('agent_output', { ...ids, fromSeq }), ToolCallError);
 });
 
 test('checkArguments holds every call to its input schema', () => {

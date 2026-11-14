@@ -121,14 +121,15 @@ export const TOOLS = deepFreeze([
   {
     name: 'agent_output',
     description:
-      "Read an agent session's output from the start, waiting up to timeoutMs for it to exit. " +
-      'Returns the same shape as agent_run.',
+      'Read agent output, optionally from a sequence cursor. Wait up to timeoutMs for exit. ' +
+      'Returns nextSeq for resuming and reports gaps or truncation.',
     inputSchema: {
       type: 'object',
       properties: {
         sandboxId: SANDBOX_ID,
         sessionId: { type: 'string', minLength: 1, maxLength: 128 },
         timeoutMs: { type: 'integer', minimum: 0, maximum: MAX_AGENT_TIMEOUT_MS },
+        fromSeq: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
       },
       required: ['sandboxId', 'sessionId'],
       additionalProperties: false,
@@ -313,7 +314,7 @@ export class OutputTail {
  * running either way. `seen` is the session as listed when the call began: past the deadline the
  * replay still runs up to the chunk it had reached (at most CATCH_UP_MS longer), so a 0 ms read
  * returns everything that already existed, and an exited session is read to its exit.
- * @returns {Promise<{exit: {code: number|null, signal: string|null}|null, output: string, truncated: boolean}>}
+ * @returns {Promise<{exit: {code: number|null, signal: string|null}|null, output: string, truncated: boolean, nextSeq: number}>}
  */
 async function follow(box, sessionId, timeoutMs, seen = { seq: 0, exited: false }) {
   const stream = box.attach(sessionId);
@@ -338,10 +339,10 @@ async function follow(box, sessionId, timeoutMs, seen = { seq: 0, exited: false 
     clearTimeout(timer);
     clearTimeout(cap);
   }
-  return { exit, ...tail.result() };
+  return { exit, ...tail.result(), nextSeq: tail.lastSeq + 1 };
 }
 
-function agentResult(sandboxId, sessionId, { exit, output, truncated }) {
+function agentResult(sandboxId, sessionId, { exit, output, truncated, nextSeq }) {
   return {
     sandboxId,
     sessionId,
@@ -349,6 +350,31 @@ function agentResult(sandboxId, sessionId, { exit, output, truncated }) {
     ...(exit ? { exitCode: exit.code, signal: exit.signal } : {}),
     output,
     truncated,
+    nextSeq,
+  };
+}
+
+/**
+ * Format a retained-output page for MCP, keeping the response bounded even if a single chunk
+ * exceeds the requested page size. `gap` reports evicted history; `truncated` reports either
+ * more pages or a cut, so a cursor never silently skips output.
+ * @param {string} sandboxId @param {string} sessionId
+ * @param {{chunks: {seq: number, data: string}[], nextSeq: number, gap: object|null, truncated: boolean, exited: object|null}} page
+ */
+export function formatAgentPage(sandboxId, sessionId, page) {
+  const tail = new OutputTail();
+  // A nonzero starting cursor is deliberate; the HTTP page carries any actual replay gap.
+  tail.lastSeq = (page.chunks[0]?.seq ?? 0) - 1;
+  for (const chunk of page.chunks) tail.push(chunk.seq, Buffer.from(chunk.data, 'base64'));
+  const result = tail.result();
+  return {
+    ...agentResult(sandboxId, sessionId, {
+      exit: page.exited,
+      ...result,
+      truncated: result.truncated || page.truncated || Boolean(page.gap),
+      nextSeq: page.nextSeq,
+    }),
+    gap: page.gap,
   };
 }
 
@@ -394,6 +420,12 @@ const RUN = {
   },
   async agent_output(client, args) {
     const box = client.sandbox(args.sandboxId);
+    if (args.fromSeq !== undefined) {
+      const session = box.session(args.sessionId);
+      if (args.timeoutMs > 0) await session.wait({ timeoutMs: args.timeoutMs });
+      const page = await session.output({ fromSeq: args.fromSeq, maxBytes: MAX_OUTPUT_BYTES });
+      return formatAgentPage(args.sandboxId, args.sessionId, page);
+    }
     const { sessions } = await box.listSessions();
     const s = sessions.find((row) => row.sessionId === args.sessionId);
     if (!s)

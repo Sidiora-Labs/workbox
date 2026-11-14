@@ -266,6 +266,30 @@ test(
         assert.equal(out.truncated, true);
         assert.equal(Buffer.byteLength(out.output), MAX_OUTPUT_BYTES);
         assert.match(out.output, /^x+\nEND\n$/);
+        let fromSeq = 0;
+        let complete = '';
+        for (;;) {
+          const page = await callJson(mcp, 'agent_output', {
+            sandboxId: claude.sandboxId,
+            sessionId,
+            fromSeq,
+          });
+          assert.equal(page.gap, null);
+          complete += page.output;
+          assert.ok(page.nextSeq > fromSeq || page.output === '');
+          fromSeq = page.nextSeq;
+          if (!page.truncated) break;
+        }
+        assert.equal(complete, `${'x'.repeat(MAX_OUTPUT_BYTES + 5000)}\nEND\n`);
+        const empty = await callJson(mcp, 'agent_output', {
+          sandboxId: claude.sandboxId,
+          sessionId,
+          fromSeq,
+          timeoutMs: 10,
+        });
+        assert.equal(empty.output, '');
+        assert.equal(empty.running, false);
+        assert.equal(empty.nextSeq, fromSeq);
       });
 
       const missing = await mcp.request('tools/call', {
